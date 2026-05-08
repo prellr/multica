@@ -13,6 +13,12 @@ export {
 } from "./mutations";
 export { useProjectDraftStore } from "./draft-store";
 export {
+  useProjectViewStore,
+  PROJECT_SORT_OPTIONS,
+  type ProjectSortField,
+  type SortDirection as ProjectSortDirection,
+} from "./view-store";
+export {
   projectResourceKeys,
   projectResourcesOptions,
   useCreateProjectResource,

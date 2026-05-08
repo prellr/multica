@@ -59,6 +59,7 @@
     "./projects/queries": "./projects/queries.ts",
     "./projects/mutations": "./projects/mutations.ts",
     "./projects/config": "./projects/config.ts",
+    "./projects/view-store": "./projects/view-store.ts",
     "./memory": "./memory/index.ts",
     "./memory/queries": "./memory/queries.ts",
     "./memory/mutations": "./memory/mutations.ts",

@@ -14,6 +14,16 @@
     "lead": "负责人",
     "created": "创建时间"
   },
+  "display": {
+    "tooltip": "显示设置",
+    "ordering_section": "排序",
+    "sort_created": "创建时间",
+    "sort_title": "标题",
+    "sort_priority": "优先级",
+    "sort_status": "状态",
+    "ascending_title": "升序",
+    "descending_title": "降序"
+  },
   "status": {
     "planned": "计划中",
     "in_progress": "进行中",

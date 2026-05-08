@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Plus, FolderKanban, UserMinus, Check, Pencil } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, Plus, FolderKanban, UserMinus, Check, Pencil, SlidersHorizontal } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { projectListOptions, archivedProjectListOptions } from "@multica/core/projects/queries";
 import { useUpdateProject } from "@multica/core/projects/mutations";
+import { useProjectViewStore, PROJECT_SORT_OPTIONS } from "@multica/core/projects/view-store";
+import { sortProjects } from "../utils/sort";
 import {
   PROJECT_STATUS_CONFIG,
   PROJECT_STATUS_ORDER,
@@ -339,11 +341,25 @@ export function ProjectsPage() {
     ...archivedProjectListOptions(wsId),
     enabled: showArchived,
   });
-  const projects = showArchived
+  const unsortedProjects = showArchived
     ? (archivedQuery.data ?? []).filter((p) => !!p.archived_at)
     : activeQuery.data ?? [];
   const isLoading = showArchived ? archivedQuery.isLoading : activeQuery.isLoading;
   const openCreateProject = () => useModalStore.getState().open("create-project");
+
+  const sortBy = useProjectViewStore((s) => s.sortBy);
+  const sortDirection = useProjectViewStore((s) => s.sortDirection);
+  const setSortBy = useProjectViewStore((s) => s.setSortBy);
+  const setSortDirection = useProjectViewStore((s) => s.setSortDirection);
+  const projects = sortProjects(unsortedProjects, sortBy, sortDirection);
+
+  const SORT_LABEL_KEY: Record<typeof PROJECT_SORT_OPTIONS[number]["value"], "sort_created" | "sort_title" | "sort_priority" | "sort_status"> = {
+    created_at: "sort_created",
+    title: "sort_title",
+    priority: "sort_priority",
+    status: "sort_status",
+  };
+  const sortLabel = t(($) => $.display[SORT_LABEL_KEY[sortBy]]);
 
   return (
     <div className="flex h-full flex-col">
@@ -370,6 +386,68 @@ export function ProjectsPage() {
           >
             {showArchived ? "Show active" : "Show archived"}
           </button>
+          {/* Sort controls */}
+          <Popover>
+            <Tooltip>
+              <PopoverTrigger
+                render={
+                  <TooltipTrigger
+                    render={
+                      <Button variant="outline" size="icon-sm" className="text-muted-foreground">
+                        <SlidersHorizontal className="size-4" />
+                      </Button>
+                    }
+                  />
+                }
+              />
+              <TooltipContent side="bottom">{t(($) => $.display.tooltip)}</TooltipContent>
+            </Tooltip>
+            <PopoverContent align="end" className="w-56 p-0">
+              <div className="px-3 py-2.5">
+                <span className="text-xs font-medium text-muted-foreground">
+                  {t(($) => $.display.ordering_section)}
+                </span>
+                <div className="mt-2 flex items-center gap-1.5">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 justify-between text-xs"
+                        >
+                          {sortLabel}
+                          <ChevronDown className="size-3 text-muted-foreground" />
+                        </Button>
+                      }
+                    />
+                    <DropdownMenuContent align="start" className="w-auto">
+                      {PROJECT_SORT_OPTIONS.map((opt) => (
+                        <DropdownMenuItem
+                          key={opt.value}
+                          onClick={() => setSortBy(opt.value)}
+                        >
+                          {t(($) => $.display[SORT_LABEL_KEY[opt.value]])}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={() => setSortDirection(sortDirection === "asc" ? "desc" : "asc")}
+                    title={sortDirection === "asc" ? t(($) => $.display.ascending_title) : t(($) => $.display.descending_title)}
+                  >
+                    {sortDirection === "asc" ? (
+                      <ArrowUp className="size-3.5" />
+                    ) : (
+                      <ArrowDown className="size-3.5" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
           <Button size="sm" variant="outline" onClick={openCreateProject}>
             <Plus className="h-3.5 w-3.5 mr-1" />
             {t(($) => $.page.new_project)}

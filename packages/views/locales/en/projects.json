@@ -14,6 +14,16 @@
     "lead": "Lead",
     "created": "Created"
   },
+  "display": {
+    "tooltip": "Display settings",
+    "ordering_section": "Ordering",
+    "sort_created": "Created date",
+    "sort_title": "Title",
+    "sort_priority": "Priority",
+    "sort_status": "Status",
+    "ascending_title": "Ascending",
+    "descending_title": "Descending"
+  },
   "status": {
     "planned": "Planned",
     "in_progress": "In Progress",

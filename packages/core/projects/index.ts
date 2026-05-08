@@ -12,6 +12,8 @@ export {
   useRestoreProject,
 } from "./mutations";
 export { useProjectDraftStore } from "./draft-store";
+export { useProjectViewStore } from "./view-store";
+export type { ProjectSortField, ProjectSortDirection } from "./view-store";
 export {
   projectResourceKeys,
   projectResourcesOptions,

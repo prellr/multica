@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Plus, FolderKanban, UserMinus, Check, Pencil } from "lucide-react";
+import { Plus, FolderKanban, UserMinus, Check, Pencil, ArrowUp, ArrowDown } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { projectListOptions, archivedProjectListOptions } from "@multica/core/projects/queries";
 import { useUpdateProject } from "@multica/core/projects/mutations";
+import { useProjectViewStore } from "@multica/core/projects/view-store";
+import { sortProjects } from "../utils/sort";
 import {
   PROJECT_STATUS_CONFIG,
   PROJECT_STATUS_ORDER,
@@ -339,10 +341,14 @@ export function ProjectsPage() {
     ...archivedProjectListOptions(wsId),
     enabled: showArchived,
   });
-  const projects = showArchived
+  const rawProjects = showArchived
     ? (archivedQuery.data ?? []).filter((p) => !!p.archived_at)
     : activeQuery.data ?? [];
   const isLoading = showArchived ? archivedQuery.isLoading : activeQuery.isLoading;
+  const sortBy = useProjectViewStore((s) => s.sortBy);
+  const sortDirection = useProjectViewStore((s) => s.sortDirection);
+  const toggleSort = useProjectViewStore((s) => s.toggleSort);
+  const projects = sortProjects(rawProjects, sortBy, sortDirection);
   const openCreateProject = () => useModalStore.getState().open("create-project");
 
   return (
@@ -419,7 +425,20 @@ export function ProjectsPage() {
               <span className="w-28 text-center shrink-0">{t(($) => $.table.status)}</span>
               <span className="w-24 text-center shrink-0">{t(($) => $.table.progress)}</span>
               <span className="w-10 text-center shrink-0">{t(($) => $.table.lead)}</span>
-              <span className="w-20 text-right shrink-0">{t(($) => $.table.created)}</span>
+              <button
+                type="button"
+                onClick={() => toggleSort("created_at")}
+                className="inline-flex w-20 items-center justify-end gap-0.5 shrink-0 hover:text-foreground transition-colors"
+              >
+                {t(($) => $.table.created)}
+                {sortBy === "created_at" ? (
+                  sortDirection === "asc" ? (
+                    <ArrowUp className="h-3 w-3" />
+                  ) : (
+                    <ArrowDown className="h-3 w-3" />
+                  )
+                ) : null}
+              </button>
             </div>
             {/* Rows */}
             {projects.map((project) => (

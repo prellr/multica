@@ -172,7 +172,13 @@ func newRequest(method, path string, body any) *http.Request {
 }
 
 func withURLParam(req *http.Request, key, value string) *http.Request {
-	rctx := chi.NewRouteContext()
+	// Reuse the existing chi route context if a prior withURLParam call
+	// already attached one — otherwise calls compose destructively
+	// (second key wipes the first).
+	rctx, ok := req.Context().Value(chi.RouteCtxKey).(*chi.Context)
+	if !ok || rctx == nil {
+		rctx = chi.NewRouteContext()
+	}
 	rctx.URLParams.Add(key, value)
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }

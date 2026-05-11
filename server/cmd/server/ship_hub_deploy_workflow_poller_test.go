@@ -99,9 +99,12 @@ func seedPollerFixture(t *testing.T, repoURL string, stagingWf, prodWf string) p
 
 	// Project + github_repo resource. The poller reads the URL out of
 	// the resource_ref JSONB blob to discover what repo to query.
+	// project.status check constraint admits the planning-style values
+	// (see migrations/034); 'in_progress' is the closest analogue to
+	// "this project is being worked on right now".
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO project (workspace_id, title, status)
-		VALUES ($1, 'Poller Project', 'active')
+		VALUES ($1, 'Poller Project', 'in_progress')
 		RETURNING id`, wsID).Scan(&projID); err != nil {
 		t.Fatalf("insert project: %v", err)
 	}

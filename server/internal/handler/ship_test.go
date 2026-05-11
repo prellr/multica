@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -392,8 +393,15 @@ func TestShip_ListDeploys_NewestFirst(t *testing.T) {
 
 // mustSeedPR inserts a row directly into pull_request. Used by tests that
 // don't want to depend on the GitHub-talking sync path.
+//
+// PG 17 won't reuse a single parameter as both INT (for pr_number) and TEXT
+// (for url/interval string concatenation) — explicit ::text casts aren't
+// enough, so the URL + age offset are formatted in Go and passed as their
+// own parameters.
 func mustSeedPR(t *testing.T, projectID, repoURL string, number int, state string) {
 	t.Helper()
+	url := fmt.Sprintf("https://example.com/%d", number)
+	age := fmt.Sprintf("%d seconds", number)
 	if _, err := testPool.Exec(context.Background(), `
 		INSERT INTO pull_request (
 			workspace_id, project_id, repo_url, pr_number, title, state,
@@ -401,10 +409,10 @@ func mustSeedPR(t *testing.T, projectID, repoURL string, number int, state strin
 			pr_created_at, pr_updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6::pull_request_state,
-			'alice', 'main', 'feat/x', 'sha', 'https://example.com/' || $4::text,
-			now(), now() + ($4::text || ' seconds')::interval
+			'alice', 'main', 'feat/x', 'sha', $7,
+			now(), now() + ($8)::interval
 		)
-	`, testWorkspaceID, projectID, repoURL, number, "PR "+state, state); err != nil {
+	`, testWorkspaceID, projectID, repoURL, number, "PR "+state, state, url, age); err != nil {
 		t.Fatalf("seed PR %d: %v", number, err)
 	}
 }

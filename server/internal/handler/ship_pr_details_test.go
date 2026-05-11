@@ -235,7 +235,7 @@ func TestShipPRDetails_StackChildren(t *testing.T) {
 			pr_created_at, pr_updated_at, source, stack_parent_pr_id
 		) VALUES (
 			$1, $2, 'https://github.com/foo/bar', $3, 'child', 'open',
-			'alice', 'feat/root', $4, 'sha', 'https://example.com/' || $3,
+			'alice', 'feat/root', $4, 'sha', 'https://example.com/' || $3::text,
 			now(), now(), 'multica_human', $5
 		) RETURNING id
 	`

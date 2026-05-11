@@ -476,8 +476,8 @@ func mustSeedPRWithSHA(t *testing.T, projectID, repoURL string, number int, stat
 			pr_created_at, pr_updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6::pull_request_state,
-			'alice', 'main', 'feat/x', $7, 'https://example.com/' || $4,
-			now(), now() + ($4 || ' seconds')::interval
+			'alice', 'main', 'feat/x', $7, 'https://example.com/' || $4::text,
+			now(), now() + ($4::text || ' seconds')::interval
 		)
 	`, testWorkspaceID, projectID, repoURL, number, "PR "+state, state, headSHA); err != nil {
 		t.Fatalf("seed PR %d: %v", number, err)

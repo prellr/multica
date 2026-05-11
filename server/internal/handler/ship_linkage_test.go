@@ -28,7 +28,7 @@ func mustSeedPRWithLinkage(t *testing.T, projectID, repoURL string, number int, 
 			auto_close_issue_on_merge, source
 		) VALUES (
 			$1, $2, $3, $4, $5, $6::pull_request_state,
-			'alice', 'main', 'feat/x', 'sha', 'https://example.com/' || $4,
+			'alice', 'main', 'feat/x', 'sha', 'https://example.com/' || $4::text,
 			now(), now(),
 			NULLIF($7, '')::uuid, NULLIF($8, '')::uuid,
 			$9, $10
@@ -222,7 +222,7 @@ func TestShipPhase4_PullRequestStacks_TwoLevel(t *testing.T) {
 			pr_created_at, pr_updated_at, source
 		) VALUES (
 			$1, $2, 'https://github.com/foo/bar', $3, 'PR open', 'open',
-			'alice', 'main', $4, 'sha', 'https://example.com/' || $3,
+			'alice', 'main', $4, 'sha', 'https://example.com/' || $3::text,
 			now(), now(), 'multica_human'
 		) RETURNING id
 	`
@@ -238,7 +238,7 @@ func TestShipPhase4_PullRequestStacks_TwoLevel(t *testing.T) {
 			pr_created_at, pr_updated_at, source, stack_parent_pr_id
 		) VALUES (
 			$1, $2, 'https://github.com/foo/bar', $3, 'PR open child', 'open',
-			'alice', $4, $5, 'sha', 'https://example.com/' || $3,
+			'alice', $4, $5, 'sha', 'https://example.com/' || $3::text,
 			now(), now(), 'multica_human', $6
 		) RETURNING id
 	`

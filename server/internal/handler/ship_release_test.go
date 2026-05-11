@@ -79,9 +79,9 @@ func seedReleasePR(t *testing.T, projectID, repoURL string, number int) string {
 			pr_created_at, pr_updated_at, risk_level
 		) VALUES (
 			$1, $2, $3, $4, $5, 'open',
-			FALSE, 'alice', 'main', 'feat/x', 'sha-' || $4, 'https://example.com/' || $4,
+			FALSE, 'alice', 'main', 'feat/x', 'sha-' || $4::text, 'https://example.com/' || $4::text,
 			'success', 'APPROVED', 'MERGEABLE',
-			NOW(), NOW() + ($4 || ' seconds')::interval, 'medium'
+			NOW(), NOW() + ($4::text || ' seconds')::interval, 'medium'
 		)
 		RETURNING id
 	`, testWorkspaceID, projectID, repoURL, number, "Release PR "+repoURL).Scan(&id); err != nil {

@@ -110,6 +110,32 @@ jobs:
               auto_inactive: false,
             });
 
+      - name: Stop orphaned containers from prior builds
+        # `docker compose up` only manages containers under its OWN
+        # project name (here: `multica`, set via `name:` in
+        # docker-compose.selfhost.yml). Containers left over from a
+        # prior local build that didn't use the same project name
+        # still hold the host ports we're about to bind, and the up
+        # command fails with "Bind for 0.0.0.0:PORT failed: port is
+        # already allocated".
+        #
+        # Sweep any leftover containers whose name starts with
+        # `multica-` (from a no-project-name compose) OR matches
+        # known service names. Idempotent — silently no-ops on a
+        # clean host. Force-rm because we'll recreate them in the
+        # next step.
+        run: |
+          export PATH="${DOCKER_PATH_EXTRAS}:${PATH}"
+          set -e
+          # Tear down anything still labeled with this project first.
+          docker compose ${COMPOSE_FILES} down --remove-orphans || true
+          # Then catch loose containers from outside the project name
+          # (old `docker compose up` runs that didn't use `name:`).
+          for n in $(docker ps -aq --filter "name=multica-"); do
+            echo "Removing orphan container $n"
+            docker rm -f "$n" || true
+          done
+
       - name: Build + restart containers
         # `up -d --build` is idempotent: rebuilds images that changed,
         # recreates only containers whose image hash moved, leaves

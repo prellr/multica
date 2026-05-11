@@ -117,10 +117,16 @@ func seedPollerFixture(t *testing.T, repoURL string, stagingWf, prodWf string) p
 
 	// Release channel — required because the service-layer post path
 	// derefs ChannelID; we use a real channels row to keep the pgx
-	// scan happy.
+	// scan happy. The channel table requires kind, visibility, and
+	// the created_by_* polymorphic columns; we use 'channel' / 'public'
+	// and a synthetic UUID for created_by_id because no real user/agent
+	// row needs to exist for the FK (the column is just a UUID).
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO channel (workspace_id, name)
-		VALUES ($1, $2)
+		INSERT INTO channel (
+			workspace_id, name, kind, visibility,
+			created_by_type, created_by_id
+		)
+		VALUES ($1, $2, 'channel', 'public', 'system', gen_random_uuid())
 		RETURNING id`, wsID, "release-poller-"+t.Name()).Scan(&channelID); err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}

@@ -155,7 +155,18 @@ jobs:
         #   - backend:  ${PORT:-8080}
         #   - frontend: ${FRONTEND_PORT:-3000}
         # (postgres no longer publishes a host port — see PR #26.)
+        #
+        # Source the operator's .env first so the values here line up
+        # with what docker compose will actually use — otherwise the
+        # preflight checks the defaults (3000/8080) even when .env
+        # retargets the frontend onto a different host port.
         run: |
+          if [ -f .env ]; then
+            set -o allexport
+            # shellcheck disable=SC1091
+            . ./.env
+            set +o allexport
+          fi
           BACKEND_PORT="${PORT:-8080}"
           FRONTEND_HOST_PORT="${FRONTEND_PORT:-3000}"
           fail=0

@@ -16,6 +16,7 @@ import { ShipProjectSection } from "./ship-project-section";
 import { ShipActiveReleasesRail } from "./ship-active-releases-rail";
 import { ShipSelectionBar } from "./ship-selection-bar";
 import { ShipPrDetailDrawer } from "./ship-pr-detail-drawer";
+import { ShipConciergePanel } from "./ship-concierge-panel";
 import type { PullRequest } from "@multica/core/types";
 
 /**
@@ -82,6 +83,13 @@ export function ShipPage() {
       <PageHeader className="px-5">
         <Rocket className="size-4 text-muted-foreground" />
         <h1 className="ml-2 text-sm font-medium">{t(($) => $.page.title)}</h1>
+        {/* Concierge button — opens a slide-in drawer with the
+            workspace's designated Concierge channel inside. The
+            drawer self-renders an empty-state setup recipe when no
+            channel is configured. ROA-178. */}
+        <div className="ml-auto">
+          <ShipConciergePanel />
+        </div>
       </PageHeader>
 
       <div className="flex-1 overflow-y-auto">

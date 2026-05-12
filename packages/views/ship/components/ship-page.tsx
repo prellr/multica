@@ -17,6 +17,7 @@ import { ShipActiveReleasesRail } from "./ship-active-releases-rail";
 import { ShipSelectionBar } from "./ship-selection-bar";
 import { ShipPrDetailDrawer } from "./ship-pr-detail-drawer";
 import { ShipConciergePanel } from "./ship-concierge-panel";
+import { ShipConciergeInline } from "./ship-concierge-inline";
 import type { PullRequest } from "@multica/core/types";
 
 /**
@@ -108,6 +109,13 @@ export function ShipPage() {
             <p className="text-xs text-muted-foreground">
               {t(($) => $.page.subtitle)}
             </p>
+            {/* ROA-178 — inline Concierge panel at the top for
+                ambient visibility. Self-hides when no Concierge
+                channel is configured (the header drawer carries
+                the empty-state setup recipe). Expandable for
+                more chat history; the drawer is the alternative
+                for fully-focused conversation. */}
+            <ShipConciergeInline />
             {/* Phase 7a — active releases rail above the per-project
                 Kanban sections. Hidden when no active releases exist. */}
             <ShipActiveReleasesRail />

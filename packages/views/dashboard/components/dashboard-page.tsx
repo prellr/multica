@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { LayoutDashboard, BarChart3 } from "lucide-react";
+import { BarChart3, FolderKanban } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import {
@@ -23,6 +23,7 @@ import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-sto
 import { PageHeader } from "../../layout/page-header";
 import { KpiCard } from "../../runtimes/components/shared";
 import { DailyCostChart } from "../../runtimes/components/charts";
+import { ProjectIcon } from "../../projects/components/project-icon";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { formatTokens } from "../../runtimes/utils";
 import { useT } from "../../i18n";
@@ -104,7 +105,7 @@ function Segmented<T extends string | number>({
  * and the runtime page using one pricing table.
  */
 export function DashboardPage() {
-  const { t } = useT("dashboard");
+  const { t } = useT("usage");
   const wsId = useWorkspaceId();
   const [days, setDays] = useState<TimeRange>(30);
   const [projectValue, setProjectValue] = useState<string>(ALL_PROJECTS);
@@ -177,7 +178,7 @@ export function DashboardPage() {
     <div className="flex h-full flex-col">
       <PageHeader className="justify-between px-5">
         <div className="flex items-center gap-2">
-          <LayoutDashboard className="h-4 w-4 text-muted-foreground" />
+          <BarChart3 className="h-4 w-4 text-muted-foreground" />
           <h1 className="text-sm font-medium">{t(($) => $.title)}</h1>
         </div>
         <div className="flex items-center gap-2">
@@ -244,8 +245,9 @@ export function DashboardPage() {
               {/* Daily cost chart — reuses the runtime DailyCostChart. */}
               <DailyCostBlock dailyCost={dailyCost} />
 
-              {/* By-agent combined list. */}
-              <AgentList
+              {/* Per-agent leaderboard — user picks the ranking metric;
+                  the progress bar and column emphasis follow the metric. */}
+              <Leaderboard
                 rows={agentRows}
                 agents={agents}
                 lessThanMinuteLabel={t(($) => $.duration.less_than_minute)}
@@ -263,16 +265,15 @@ function ProjectFilter({
   value,
   onChange,
 }: {
-  projects: { id: string; title: string }[];
+  projects: { id: string; title: string; icon: string | null }[];
   value: string;
   onChange: (v: string) => void;
 }) {
-  const { t } = useT("dashboard");
+  const { t } = useT("usage");
+  const allLabel = t(($) => $.filter.all_projects);
+  const selected = projects.find((p) => p.id === value);
   const selectedTitle =
-    value === ALL_PROJECTS
-      ? t(($) => $.filter.all_projects)
-      : projects.find((p) => p.id === value)?.title ??
-        t(($) => $.filter.all_projects);
+    value === ALL_PROJECTS ? allLabel : selected?.title ?? allLabel;
 
   return (
     <Select
@@ -280,13 +281,35 @@ function ProjectFilter({
       onValueChange={(v) => onChange(v ?? ALL_PROJECTS)}
     >
       <SelectTrigger size="sm" className="min-w-[180px]">
-        <SelectValue>{() => selectedTitle}</SelectValue>
+        <SelectValue>
+          {() => (
+            <>
+              {selected ? (
+                <ProjectIcon project={selected} size="sm" />
+              ) : (
+                <FolderKanban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              )}
+              <span className="truncate">{selectedTitle}</span>
+            </>
+          )}
+        </SelectValue>
       </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ALL_PROJECTS}>{t(($) => $.filter.all_projects)}</SelectItem>
+      {/* alignItemWithTrigger=false: the default aligns the *selected* item
+          to the trigger, which pushes "All projects" above the trigger and
+          clips it off-screen when the usage header sits at the top of the
+          viewport. Anchor the dropdown to the bottom of the trigger so
+          every entry stays reachable.
+          max-h-72: cap the dropdown so a long project list scrolls instead
+          of stretching to the bottom of the window. */}
+      <SelectContent align="start" alignItemWithTrigger={false} className="max-h-72">
+        <SelectItem value={ALL_PROJECTS}>
+          <FolderKanban className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate">{allLabel}</span>
+        </SelectItem>
         {projects.map((p) => (
           <SelectItem key={p.id} value={p.id}>
-            {p.title}
+            <ProjectIcon project={p} size="sm" />
+            <span className="truncate">{p.title}</span>
           </SelectItem>
         ))}
       </SelectContent>
@@ -299,7 +322,7 @@ function DailyCostBlock({
 }: {
   dailyCost: ReturnType<typeof aggregateDailyCost>;
 }) {
-  const { t } = useT("dashboard");
+  const { t } = useT("usage");
   const total = dailyCost.reduce((sum, d) => sum + d.total, 0);
   return (
     <div className="rounded-lg border bg-card p-4">
@@ -322,7 +345,19 @@ function DailyCostBlock({
   );
 }
 
-function AgentList({
+// Which metric ranks the leaderboard. Drives row order, progress bar
+// width, and which column header is emphasised — keeping the three in
+// lockstep so the user always sees what the ranking actually measures.
+type LeaderboardSort = "tokens" | "cost" | "time" | "tasks";
+
+const SORT_METRIC: Record<LeaderboardSort, (r: AgentDashboardRow) => number> = {
+  tokens: (r) => r.tokens,
+  cost: (r) => r.cost,
+  time: (r) => r.seconds,
+  tasks: (r) => r.taskCount,
+};
+
+function Leaderboard({
   rows,
   agents,
   lessThanMinuteLabel,
@@ -331,35 +366,67 @@ function AgentList({
   agents: { id: string; name: string }[];
   lessThanMinuteLabel: string;
 }) {
-  const { t } = useT("dashboard");
-  const maxCost = rows.reduce((m, r) => Math.max(m, r.cost), 0);
+  const { t } = useT("usage");
+  const [sortBy, setSortBy] = useState<LeaderboardSort>("tokens");
+
+  const sortOptions = useMemo(
+    () => [
+      { value: "tokens" as const, label: t(($) => $.leaderboard.header_tokens) },
+      { value: "cost" as const, label: t(($) => $.leaderboard.header_cost) },
+      { value: "time" as const, label: t(($) => $.leaderboard.header_time) },
+      { value: "tasks" as const, label: t(($) => $.leaderboard.header_tasks) },
+    ],
+    [t],
+  );
+
+  // Re-rank when the metric changes; keep the merged input untouched so
+  // upstream `mergeAgentDashboardRows`'s tiebreaker (run time desc) still
+  // applies inside an equal-bucket.
+  const sortedRows = useMemo(() => {
+    const metric = SORT_METRIC[sortBy];
+    return [...rows].sort((a, b) => metric(b) - metric(a));
+  }, [rows, sortBy]);
+
+  const maxValue = useMemo(() => {
+    const metric = SORT_METRIC[sortBy];
+    return sortedRows.reduce((m, r) => Math.max(m, metric(r)), 0);
+  }, [sortedRows, sortBy]);
+
+  // Active column gets foreground text; others stay muted. Helps the user
+  // see "this is what the bar is measuring" at a glance.
+  const colClass = (key: LeaderboardSort) =>
+    `text-right ${sortBy === key ? "text-foreground" : "text-muted-foreground"}`;
 
   return (
     <div className="rounded-lg border bg-card">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 pt-4 pb-3">
-        <h4 className="text-sm font-semibold">{t(($) => $.by_agent.title)}</h4>
-        <span className="text-xs text-muted-foreground">
-          {t(($) => $.by_agent.caption, { count: rows.length })}
-        </span>
+        <h4 className="text-sm font-semibold">{t(($) => $.leaderboard.title)}</h4>
+        <div className="flex items-center gap-3">
+          <Segmented value={sortBy} onChange={setSortBy} options={sortOptions} />
+          <span className="text-xs text-muted-foreground">
+            {t(($) => $.leaderboard.caption, { count: rows.length })}
+          </span>
+        </div>
       </div>
-      {rows.length === 0 ? (
+      {sortedRows.length === 0 ? (
         <p className="px-4 py-8 text-center text-xs text-muted-foreground">
-          {t(($) => $.by_agent.no_data)}
+          {t(($) => $.leaderboard.no_data)}
         </p>
       ) : (
         <>
           <div className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_5rem_5rem_5rem_4rem] items-center gap-3 border-b px-4 py-2 text-xs font-medium text-muted-foreground">
-            <span>{t(($) => $.by_agent.header_agent)}</span>
+            <span>{t(($) => $.leaderboard.header_agent)}</span>
             <span />
-            <span className="text-right">{t(($) => $.by_agent.header_tokens)}</span>
-            <span className="text-right">{t(($) => $.by_agent.header_cost)}</span>
-            <span className="text-right">{t(($) => $.by_agent.header_time)}</span>
-            <span className="text-right">{t(($) => $.by_agent.header_tasks)}</span>
+            <span className={colClass("tokens")}>{t(($) => $.leaderboard.header_tokens)}</span>
+            <span className={colClass("cost")}>{t(($) => $.leaderboard.header_cost)}</span>
+            <span className={colClass("time")}>{t(($) => $.leaderboard.header_time)}</span>
+            <span className={colClass("tasks")}>{t(($) => $.leaderboard.header_tasks)}</span>
           </div>
           <div className="divide-y">
-            {rows.map((row) => {
+            {sortedRows.map((row) => {
               const agent = agents.find((a) => a.id === row.agentId);
-              const pct = maxCost > 0 ? (row.cost / maxCost) * 100 : 0;
+              const value = SORT_METRIC[sortBy](row);
+              const pct = maxValue > 0 ? (value / maxValue) * 100 : 0;
               return (
                 <div
                   key={row.agentId}
@@ -378,20 +445,28 @@ function AgentList({
                   </div>
                   <div className="relative h-2 overflow-hidden rounded-full bg-muted">
                     <div
-                      className="h-full rounded-full bg-chart-1"
+                      className="h-full rounded-full bg-chart-1 transition-[width] duration-300 ease-out"
                       style={{ width: `${pct}%` }}
                     />
                   </div>
-                  <div className="text-right text-xs tabular-nums text-muted-foreground">
+                  <div
+                    className={`text-right text-xs tabular-nums ${sortBy === "tokens" ? "font-medium text-foreground" : "text-muted-foreground"}`}
+                  >
                     {formatTokens(row.tokens)}
                   </div>
-                  <div className="text-right text-sm font-medium tabular-nums">
+                  <div
+                    className={`text-right tabular-nums ${sortBy === "cost" ? "text-sm font-medium" : "text-xs text-muted-foreground"}`}
+                  >
                     ${row.cost.toFixed(2)}
                   </div>
-                  <div className="text-right text-xs tabular-nums text-muted-foreground">
+                  <div
+                    className={`text-right text-xs tabular-nums ${sortBy === "time" ? "font-medium text-foreground" : "text-muted-foreground"}`}
+                  >
                     {formatDuration(row.seconds, lessThanMinuteLabel)}
                   </div>
-                  <div className="text-right text-xs tabular-nums text-muted-foreground">
+                  <div
+                    className={`text-right text-xs tabular-nums ${sortBy === "tasks" ? "font-medium text-foreground" : "text-muted-foreground"}`}
+                  >
                     {row.taskCount}
                   </div>
                 </div>
@@ -415,7 +490,7 @@ function DashboardSkeleton() {
 }
 
 function DashboardEmpty() {
-  const { t } = useT("dashboard");
+  const { t } = useT("usage");
   return (
     <div className="flex flex-col items-center rounded-lg border border-dashed py-12 text-center">
       <BarChart3 className="h-6 w-6 text-muted-foreground/40" />

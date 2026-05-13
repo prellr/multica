@@ -184,9 +184,9 @@ export const appRoutes: RouteObject[] = [
           },
           { path: "inbox", element: <InboxPage />, handle: { title: "Inbox" } },
           {
-            path: "dashboard",
+            path: "usage",
             element: <DashboardPage />,
-            handle: { title: "Dashboard" },
+            handle: { title: "Usage" },
           },
           {
             path: "settings",

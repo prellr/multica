@@ -1,5 +1,5 @@
 {
-  "title": "Dashboard",
+  "title": "Usage",
   "subtitle": "Token spend and agent activity across this workspace.",
   "filter": {
     "project_label": "Project",
@@ -19,8 +19,8 @@
     "title": "Daily cost",
     "no_data": "No usage in this window."
   },
-  "by_agent": {
-    "title": "Cost & run time by agent",
+  "leaderboard": {
+    "title": "Leaderboard",
     "caption": "{{count}} agents",
     "header_agent": "Agent",
     "header_tokens": "Tokens",
@@ -31,7 +31,7 @@
   },
   "empty": {
     "title": "No usage yet",
-    "body": "Once agents start running tasks here, their token spend and run time will appear in this dashboard."
+    "body": "Once agents start running tasks here, their token spend and run time will appear in this view."
   },
   "duration": {
     "less_than_minute": "<1m"

@@ -24,7 +24,7 @@ import enChannels from "./en/channels.json";
 import enMemory from "./en/memory.json";
 import enShip from "./en/ship.json";
 import enUi from "./en/ui.json";
-import enDashboard from "./en/dashboard.json";
+import enUsage from "./en/usage.json";
 import zhHansCommon from "./zh-Hans/common.json";
 import zhHansAuth from "./zh-Hans/auth.json";
 import zhHansSettings from "./zh-Hans/settings.json";
@@ -50,7 +50,7 @@ import zhHansChannels from "./zh-Hans/channels.json";
 import zhHansMemory from "./zh-Hans/memory.json";
 import zhHansShip from "./zh-Hans/ship.json";
 import zhHansUi from "./zh-Hans/ui.json";
-import zhHansDashboard from "./zh-Hans/dashboard.json";
+import zhHansUsage from "./zh-Hans/usage.json";
 
 // Single source of truth for the resource bundle. Both apps (web layout +
 // desktop App.tsx) import from here so adding a locale or namespace happens
@@ -82,7 +82,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     memory: enMemory,
     ship: enShip,
     ui: enUi,
-    dashboard: enDashboard,
+    usage: enUsage,
   },
   "zh-Hans": {
     common: zhHansCommon,
@@ -110,6 +110,6 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     memory: zhHansMemory,
     ship: zhHansShip,
     ui: zhHansUi,
-    dashboard: zhHansDashboard,
+    usage: zhHansUsage,
   },
 };

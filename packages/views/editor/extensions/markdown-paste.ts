@@ -39,6 +39,7 @@ interface PasteClassificationInput {
   html: string;
   hasFiles: boolean;
   isInsideCodeBlock: boolean;
+  canParseMentions: boolean;
 }
 
 function isJsonDocumentText(text: string): boolean {
@@ -62,16 +63,26 @@ function isStructuredPlainText(text: string): boolean {
   return isJsonDocumentText(text);
 }
 
+function hasMentionProtocol(text: string): boolean {
+  return text.includes("mention://");
+}
+
 function classifyPaste({
   text,
   html,
   hasFiles,
   isInsideCodeBlock,
+  canParseMentions,
 }: PasteClassificationInput): PasteMode {
   if (hasFiles) return "native";
   if (!text) return "native";
   if (isInsideCodeBlock) return "literal";
-  if (html && html.includes("data-pm-slice")) return "native";
+  if (html && html.includes("data-pm-slice")) {
+    // Instructions disable mention nodes. If the source slice contains one,
+    // parse the Markdown text/plain channel instead of ProseMirror HTML.
+    if (!canParseMentions && hasMentionProtocol(text)) return "markdown";
+    return "native";
+  }
   if (text.length > LARGE_PASTE_TEXT_THRESHOLD) return "literal";
   if (isStructuredPlainText(text)) return "literal";
   return "markdown";
@@ -99,6 +110,7 @@ export function createMarkdownPasteExtension() {
                 html,
                 hasFiles: Boolean(clipboard.files?.length),
                 isInsideCodeBlock: $from.parent.type.name === "codeBlock",
+                canParseMentions: Boolean(editor.schema.nodes.mention),
               });
 
               if (mode === "native") return false;

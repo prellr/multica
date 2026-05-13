@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
+import Link from "@tiptap/extension-link";
 import { Markdown } from "@tiptap/markdown";
 import { createMarkdownPasteExtension } from "./markdown-paste";
 
@@ -190,5 +191,59 @@ describe("markdownPaste — code block context", () => {
 
     expectLiteralPaste(editor, text);
     expect(parseJsonSpy).not.toHaveBeenCalled();
+  });
+
+  it("preserves markdown mention links when the mention extension is disabled", () => {
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    editor = new Editor({
+      element,
+      extensions: [
+        StarterKit.configure({ link: false }),
+        Link.configure({
+          openOnClick: false,
+          autolink: true,
+          linkOnPaste: true,
+        }),
+        Markdown,
+        createMarkdownPasteExtension(),
+      ],
+      content: { type: "doc", content: [{ type: "paragraph" }] },
+    });
+
+    const text =
+      "[@copilot-test](mention://agent/e542a1b9-3c88-4f12-a7d1-123456789abc)";
+    const handled = paste(editor, text);
+
+    expect(handled).toBe(true);
+    expect(editor.getMarkdown()).toBe(text);
+  });
+
+  it("uses markdown text for copied editor mentions when the mention extension is disabled", () => {
+    const element = document.createElement("div");
+    document.body.appendChild(element);
+    editor = new Editor({
+      element,
+      extensions: [
+        StarterKit.configure({ link: false }),
+        Link.configure({
+          openOnClick: false,
+          autolink: true,
+          linkOnPaste: true,
+        }),
+        Markdown,
+        createMarkdownPasteExtension(),
+      ],
+      content: { type: "doc", content: [{ type: "paragraph" }] },
+    });
+
+    const text =
+      "[@copilot-test](mention://agent/e542a1b9-3c88-4f12-a7d1-123456789abc)";
+    const html =
+      '<p data-pm-slice="1 1 []"><span data-type="mention" data-mention-type="agent" data-mention-id="e542a1b9-3c88-4f12-a7d1-123456789abc">@copilot-test</span></p>';
+    const handled = paste(editor, text, html);
+
+    expect(handled).toBe(true);
+    expect(editor.getMarkdown()).toBe(text);
   });
 });

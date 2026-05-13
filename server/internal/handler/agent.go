@@ -247,18 +247,6 @@ type ChatAttachmentMeta struct {
 	ContentType string `json:"content_type,omitempty"`
 }
 
-// ChatAttachmentMeta is the structured attachment metadata embedded in
-// claim responses for chat tasks. The agent uses these to run
-// `multica attachment download <id>` rather than guessing from the
-// markdown URL (which is signed and 30-min expiring on private CDN).
-// The mirror struct on the daemon side lives in internal/daemon/types.go
-// and uses the same JSON field names.
-type ChatAttachmentMeta struct {
-	ID          string `json:"id"`
-	Filename    string `json:"filename"`
-	ContentType string `json:"content_type,omitempty"`
-}
-
 // TaskAgentData holds agent info included in claim responses so the daemon
 // can set up the execution environment (branch naming, skill files, instructions).
 type TaskAgentData struct {

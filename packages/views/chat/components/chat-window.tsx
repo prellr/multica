@@ -1043,11 +1043,16 @@ function SessionDropdown({
 /**
  * Inline editor for a session title. Mounts focused with the existing
  * title pre-selected so the user can either replace it outright or arrow
- * into the existing text. Enter commits, Escape / blur cancels.
+ * into the existing text. Enter commits, Escape cancels, a real click
+ * outside the input also commits.
  *
- * Lives inside a DropdownMenuItem; we stop propagation on keys and clicks
- * so Base UI's menu doesn't intercept arrow / space / enter for navigation
- * while the user is typing.
+ * We do NOT commit on the input's `blur` event: Base UI's Menu uses
+ * focus-follows-cursor (hovering a sibling row drags DOM focus there),
+ * so a blur handler would fire on every mouse-move and "save" the user's
+ * half-typed title without them clicking anywhere. Instead a document-
+ * level `pointerdown` listener — registered in capture phase so it runs
+ * before Base UI's outside-click close handler — commits when the user
+ * actually clicks outside the input.
  */
 function SessionRenameInput({
   initialValue,
@@ -1061,10 +1066,32 @@ function SessionRenameInput({
   const { t } = useT("chat");
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Hold the latest value + callback in refs so the mount-only effect's
+  // listener always sees fresh state without re-subscribing on every
+  // keystroke (which would briefly leave a window where pointerdown isn't
+  // observed).
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const onSubmitRef = useRef(onSubmit);
+  onSubmitRef.current = onSubmit;
 
   useEffect(() => {
     inputRef.current?.focus();
     inputRef.current?.select();
+
+    const handlePointerDown = (e: PointerEvent) => {
+      const input = inputRef.current;
+      if (!input) return;
+      if (input.contains(e.target as Node)) return;
+      onSubmitRef.current(valueRef.current);
+    };
+    // Capture phase — Base UI registers its own outside-click handler in
+    // bubble; running first lets us commit before the menu starts to
+    // close (and unmount this component).
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+    };
   }, []);
 
   return (
@@ -1088,7 +1115,6 @@ function SessionRenameInput({
           onCancel();
         }
       }}
-      onBlur={() => onSubmit(value)}
       className="w-full rounded-sm bg-background px-1 py-0.5 text-sm outline-none ring-1 ring-border focus-visible:ring-brand"
     />
   );

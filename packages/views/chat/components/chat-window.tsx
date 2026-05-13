@@ -212,6 +212,12 @@ export function ChatWindow() {
   // session-dropdown's existing localized `window.untitled` fallback kicks
   // in. A follow-up task may back-fill the real title from the first user
   // message — until then this keeps the session list scannable across locales.
+  //
+  // NOTE: ensureSession does NOT flip `activeSessionId` itself. Callers must
+  // seed `chatKeys.messages(sessionId)` in the Query cache BEFORE calling
+  // `setActiveSession(sessionId)`, otherwise the first useQuery subscription
+  // for the new key reports `isLoading: true` and renders ChatMessageSkeleton
+  // for one frame (the "new-chat first-message" white flash).
   const sessionPromiseRef = useRef<Promise<string | null> | null>(null);
   const ensureSession = useCallback(
     async (titleSeed: string): Promise<string | null> => {
@@ -225,7 +231,6 @@ export function ChatWindow() {
             agent_id: activeAgent.id,
             title: titleSeed.slice(0, 50),
           });
-          setActiveSession(session.id);
           return session.id;
         } finally {
           sessionPromiseRef.current = null;
@@ -234,16 +239,25 @@ export function ChatWindow() {
       sessionPromiseRef.current = promise;
       return promise;
     },
-    [activeSessionId, activeAgent, createSession, setActiveSession],
+    [activeSessionId, activeAgent, createSession],
   );
 
   const handleUploadFile = useCallback(
     async (file: File) => {
       const sessionId = await ensureSession("");
       if (!sessionId) return null;
+      // Prime the messages cache as empty before flipping activeSessionId so
+      // ChatMessageList mounts directly (no Skeleton frame). Skip the write
+      // when an entry already exists — a concurrent handleSend may have
+      // seeded an optimistic message we must not clobber.
+      qc.setQueryData<ChatMessage[]>(
+        chatKeys.messages(sessionId),
+        (old) => old ?? [],
+      );
+      setActiveSession(sessionId);
       return uploadWithToast(file, { chatSessionId: sessionId });
     },
-    [ensureSession, uploadWithToast],
+    [ensureSession, uploadWithToast, qc, setActiveSession],
   );
 
   const handleSend = useCallback(
@@ -289,6 +303,12 @@ export function ChatWindow() {
         task_id: null,
         created_at: sentAt,
       };
+      // Seed cache BEFORE flipping activeSessionId. If we set the active
+      // session first, useQuery's first subscription to the new key sees no
+      // cached data and renders ChatMessageSkeleton for one frame — the
+      // "new-chat first-message" white flash. Priming the cache first means
+      // the very first read after activeSessionId flips hits data
+      // synchronously and ChatMessageList mounts directly.
       qc.setQueryData<ChatMessage[]>(
         chatKeys.messages(sessionId),
         (old) => (old ? [...old, optimistic] : [optimistic]),
@@ -303,6 +323,9 @@ export function ChatWindow() {
         status: "queued",
         created_at: sentAt,
       });
+      // Cache primed → safe to publish the new active session. Idempotent
+      // when the session was already active (existing-conversation send).
+      setActiveSession(sessionId);
       apiLogger.debug("sendChatMessage.optimistic", { sessionId, optimisticId: optimistic.id });
 
       const result = await api.sendChatMessage(sessionId, finalContent, attachmentIds);
@@ -327,6 +350,7 @@ export function ChatWindow() {
       anchorCandidate,
       ensureSession,
       qc,
+      setActiveSession,
     ],
   );
 

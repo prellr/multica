@@ -35,6 +35,10 @@ type fakeGithub struct {
 	// empty PR so the reconciler leaves MergedSha unset; tests that care
 	// wire a canned PR (typically with a distinct MergeCommitSHA).
 	getPRFn func(ctx context.Context, owner, repo string, prNumber int) (*gh.PullRequest, error)
+	// ROA-274 — CI rollup for the merge-train gate. Default returns
+	// "success" so existing sync tests (which don't care about CI)
+	// keep their PRs eligible.
+	getCIStatusFn func(ctx context.Context, owner, repo, sha string) (string, error)
 }
 
 type ghResponse struct {
@@ -119,6 +123,13 @@ func (f *fakeGithub) GetPullRequest(ctx context.Context, owner, repo string, prN
 		return f.getPRFn(ctx, owner, repo, prNumber)
 	}
 	return &gh.PullRequest{}, nil
+}
+
+func (f *fakeGithub) GetCIStatus(ctx context.Context, owner, repo, sha string) (string, error) {
+	if f.getCIStatusFn != nil {
+		return f.getCIStatusFn(ctx, owner, repo, sha)
+	}
+	return "success", nil
 }
 
 func TestMapPRState(t *testing.T) {

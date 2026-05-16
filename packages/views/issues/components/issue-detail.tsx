@@ -57,7 +57,7 @@ import { useAuthStore } from "@multica/core/auth";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { issueListOptions, issueDetailOptions, childIssuesOptions, issueUsageOptions, issueAttachmentsOptions } from "@multica/core/issues/queries";
+import { issueListOptions, issueDetailOptions, childIssuesOptions, issueUsageOptions, issueAttachmentsOptions, referencingIssuesOptions } from "@multica/core/issues/queries";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
 import { useRecentIssuesStore } from "@multica/core/issues/stores";
 import { useIssueSelectionStore } from "@multica/core/issues/stores/selection-store";
@@ -635,6 +635,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   });
   const { data: childIssues = [] } = useQuery({
     ...childIssuesOptions(wsId, id),
+    enabled: !!issue,
+  });
+  const { data: referencingIssues = [] } = useQuery({
+    ...referencingIssuesOptions(wsId, id),
     enabled: !!issue,
   });
   // Parent's children — used to render the "x/y" progress next to the
@@ -1313,6 +1317,30 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               </div>
             );
           })()}
+
+          {referencingIssues.length > 0 && (
+            <div className="mt-6">
+              <h3 className="mb-2 flex items-center gap-1.5 text-sm font-medium text-foreground">
+                <span>{t(($) => $.detail.referenced_by_label)}</span>
+                <span className="text-xs text-muted-foreground tabular-nums font-normal">
+                  {referencingIssues.length}
+                </span>
+              </h3>
+              <div className="overflow-hidden rounded-lg border bg-card/30 divide-y divide-border/60">
+                {referencingIssues.map((ref) => (
+                  <AppLink
+                    key={ref.id}
+                    href={paths.issueDetail(ref.id)}
+                    className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent transition-colors"
+                  >
+                    <StatusIcon status={ref.status} className="h-3.5 w-3.5 shrink-0" />
+                    <span className="text-xs text-muted-foreground tabular-nums shrink-0">{ref.identifier}</span>
+                    <span className="truncate">{ref.title}</span>
+                  </AppLink>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="my-8 border-t" />
 

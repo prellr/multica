@@ -57,6 +57,16 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# Git SHA of this build, surfaced at runtime by the /build_info route
+# handler so the deploy workflow can verify the running frontend
+# container serves the SHA it just built (mirrors the backend's
+# -ldflags commit injection). Re-declared here because ARGs don't
+# cross build stages; the compose build passes BUILD_COMMIT from
+# MULTICA_BUILD_COMMIT. Defaults to "unknown" for local builds — the
+# deploy verifier treats "unknown" as a hard failure.
+ARG BUILD_COMMIT=unknown
+ENV BUILD_COMMIT=$BUILD_COMMIT
+
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 

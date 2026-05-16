@@ -430,6 +430,44 @@ jobs:
           fi
           echo "Verified: running container serves ${running_commit} (matches deploy target)"
 
+      - name: Verify frontend build SHA matches the running container
+        # Frontend mirror of the backend SHA verifier above. Without
+        # this, a frontend-only PR (e.g. ROA-264) had NO deploy-time
+        # correctness gate — the backend /build_info check passes
+        # trivially when the backend didn't change, so a stale frontend
+        # image could ride through a green deploy unnoticed. The
+        # frontend now exposes /build_info (apps/web/app/build_info)
+        # carrying the BUILD_COMMIT baked at image build time.
+        run: |
+          if [ -f .env ]; then
+            set -o allexport
+            # shellcheck disable=SC1091
+            . ./.env
+            set +o allexport
+          fi
+          FRONTEND_HOST_PORT="${FRONTEND_PORT:-3000}"
+          for i in $(seq 1 10); do
+            running_commit=$(curl -s "http://localhost:${FRONTEND_HOST_PORT}/build_info" \
+                              | grep -o '"commit":"[^"]*"' \
+                              | cut -d'"' -f4 || true)
+            if [ -n "$running_commit" ]; then break; fi
+            sleep 1
+          done
+          if [ -z "$running_commit" ]; then
+            echo "::error::Could not read /build_info from running frontend after 10s"
+            exit 1
+          fi
+          if [ "$running_commit" = "unknown" ]; then
+            echo "::error::Frontend reports commit='unknown' — image was built without BUILD_COMMIT injection. Refusing to mark deploy successful."
+            exit 1
+          fi
+          if [ "$running_commit" != "$MULTICA_BUILD_COMMIT" ]; then
+            echo "::error::Frontend build SHA mismatch! Workflow deployed ${MULTICA_BUILD_COMMIT} but frontend serves ${running_commit}"
+            echo "Stale frontend image — the frontend-only-deploy failure mode. Refusing to mark deploy successful."
+            exit 1
+          fi
+          echo "Verified: running frontend serves ${running_commit} (matches deploy target)"
+
       - name: Mark deployment success
         if: success() && steps.deployment.outputs.deployment_id
         uses: actions/github-script@v7

@@ -25,3 +25,8 @@ services:
         REMOTE_API_URL: http://backend:8080
         NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-}
         NEXT_PUBLIC_APP_VERSION: dev
+        # Mirrors the backend's COMMIT arg — injected into the frontend
+        # so /build_info reports the running SHA and the deploy workflow
+        # can verify it (closes the frontend-only-deploy verification
+        # gap). Empty/local builds fall back to "unknown".
+        BUILD_COMMIT: ${MULTICA_BUILD_COMMIT:-unknown}

@@ -80,6 +80,7 @@ import { useDeletePin, useReorderPins } from "@multica/core/pins/mutations";
 import { issueDetailOptions } from "@multica/core/issues/queries";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import { shipProjectsOptions, shipHubSummaryOptions } from "@multica/core/ship";
+import { channelsListOptions } from "@multica/core/channels";
 import type { PinnedItem } from "@multica/core/types";
 import { useLogout } from "../auth";
 import { ProjectIcon } from "../projects/components/project-icon";
@@ -487,6 +488,14 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   const { data: shipSummary } = useQuery({
     ...shipHubSummaryOptions(wsId ?? "", shipEnabled && !!wsId),
   });
+  const channelsEnabled = !!workspace?.channels_enabled;
+  const { data: channelsList } = useQuery({
+    ...channelsListOptions(wsId ?? "", channelsEnabled && !!wsId),
+  });
+  const channelsUnreadCount = React.useMemo(
+    () => (channelsList ?? []).reduce((acc, c) => acc + (c.unread_count ?? 0), 0),
+    [channelsList],
+  );
   const { data: pinnedItems = EMPTY_PINS } = useQuery({
     ...pinListOptions(wsId ?? "", userId ?? ""),
     enabled: !!wsId && !!userId,
@@ -835,6 +844,12 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                               }
                               fallbackCount={shipOpenPrCount}
                             />
+                          )}
+                          {item.key === "channels" && channelsUnreadCount > 0 && (
+                            <span className="ml-auto inline-flex items-center gap-0.5 text-[11px] tabular-nums">
+                              <span aria-hidden className="size-1.5 rounded-full bg-amber-500" />
+                              {channelsUnreadCount > 99 ? "99+" : channelsUnreadCount}
+                            </span>
                           )}
                         </SidebarMenuButton>
                       </SidebarMenuItem>

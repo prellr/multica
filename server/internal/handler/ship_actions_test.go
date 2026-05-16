@@ -28,6 +28,7 @@ type fakeShipGithub struct {
 	dispatchFn      func(ctx context.Context, owner, repo, workflowFile, ref string, inputs map[string]string) error
 	submitReviewFn  func(ctx context.Context, owner, repo string, prNumber int, event gh.ReviewEvent, body string) (*gh.Review, error)
 	getPRFn         func(ctx context.Context, owner, repo string, prNumber int) (*gh.PullRequest, error)
+	getCIStatusFn   func(ctx context.Context, owner, repo, sha string) (string, error)
 }
 
 func (f *fakeShipGithub) ListPullRequests(ctx context.Context, owner, repo string, opts gh.ListOptions) ([]gh.PullRequest, error) {
@@ -88,6 +89,14 @@ func (f *fakeShipGithub) GetPullRequest(ctx context.Context, owner, repo string,
 		return f.getPRFn(ctx, owner, repo, prNumber)
 	}
 	return &gh.PullRequest{}, nil
+}
+func (f *fakeShipGithub) GetCIStatus(ctx context.Context, owner, repo, sha string) (string, error) {
+	if f.getCIStatusFn != nil {
+		return f.getCIStatusFn(ctx, owner, repo, sha)
+	}
+	// ROA-274 — default to green so merge-train tests that don't
+	// exercise CI gating keep their PRs eligible.
+	return "success", nil
 }
 
 // fakeShipTaskEnqueuer captures spawn calls so tests can assert on the

@@ -32,6 +32,11 @@ type GithubClient interface {
 	// merge_commit_sha — the merge-train reconciler needs the true
 	// merged SHA (not the head SHA) after a missed webhook.
 	GetPullRequest(ctx context.Context, owner, repo string, prNumber int) (*gh.PullRequest, error)
+	// GetCIStatus returns the combined CI rollup ("success" |
+	// "failure" | "pending" | "") for a SHA — merges legacy commit
+	// status + check-runs so the merge-train can gate on Actions
+	// (ROA-274). Called per open PR during sync.
+	GetCIStatus(ctx context.Context, owner, repo string, sha string) (string, error)
 	MergePullRequest(ctx context.Context, owner, repo string, prNumber int, method, sha string) (*gh.MergeResult, error)
 	UpdatePullRequestBranch(ctx context.Context, owner, repo string, prNumber int, expectedSHA string) error
 	CreatePullRequestComment(ctx context.Context, owner, repo string, prNumber int, body string) (*gh.Comment, error)
@@ -196,6 +201,30 @@ func (s *Service) upsertPR(
 ) error {
 	state := mapPRState(pr)
 
+	// Resolve CI status for OPEN PRs only — the merge-train gate
+	// (releaseEligibilityReason) only consults open PRs, and a
+	// closed/merged PR's head SHA is no longer interesting. Best-effort:
+	// a fetch failure leaves ci_status empty and the next sync corrects
+	// it; we never fail the whole sync over one PR's CI lookup
+	// (ROA-274).
+	ciStatus := ""
+	if state == db.PullRequestStateOpen {
+		owner, repo, perr := gh.ParseRepoURL(repoURL)
+		if perr != nil {
+			slog.Warn("ship: upsertPR could not fetch ci_status; leaving empty",
+				"workspace_id", uuidString(workspaceID),
+				"pr_number", pr.Number,
+				"error", perr)
+		} else if cs, cerr := s.Github.GetCIStatus(ctx, owner, repo, pr.Head.SHA); cerr != nil {
+			slog.Warn("ship: upsertPR could not fetch ci_status; leaving empty",
+				"workspace_id", uuidString(workspaceID),
+				"pr_number", pr.Number,
+				"error", cerr)
+		} else {
+			ciStatus = cs
+		}
+	}
+
 	labelsJSON, err := json.Marshal(pr.Labels)
 	if err != nil {
 		// Should never happen (Labels is plain JSON), but if it did the
@@ -218,10 +247,10 @@ func (s *Service) upsertPR(
 		HeadSha:         pr.Head.SHA,
 		HtmlUrl:         pr.HTMLURL,
 		Body:            textOrEmpty(pr.Body),
-		// CI status is a separate API call; Phase 1 leaves it blank to
-		// keep the rate-limit budget under control. The frontend renders
-		// "unknown" for empty strings.
-		CiStatus:       pgtype.Text{String: "", Valid: true},
+		// CI status resolved above (open PRs only; "" for closed/merged
+		// or on fetch failure). The frontend renders "unknown" for
+		// empty strings.
+		CiStatus:       pgtype.Text{String: ciStatus, Valid: true},
 		ReviewDecision: pgtype.Text{String: "", Valid: true},
 		Mergeable:      mapMergeable(pr.Mergeable),
 		Additions:      int32(pr.Additions),

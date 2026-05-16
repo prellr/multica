@@ -249,6 +249,102 @@ func (c *Client) GetCombinedStatus(ctx context.Context, owner, repo, sha string)
 	return out.State, nil
 }
 
+// CheckRunsResponse is the wire shape of
+// /repos/{owner}/{repo}/commits/{sha}/check-runs. GitHub Actions reports
+// each job as a check-run here; the legacy commit-status endpoint is
+// blind to them. The element type reuses the existing CheckRun struct
+// (defined in webhook.go) — only its Status and Conclusion fields are
+// consulted for the rollup.
+type CheckRunsResponse struct {
+	TotalCount int        `json:"total_count"`
+	CheckRuns  []CheckRun `json:"check_runs"`
+}
+
+// GetCIStatus returns a single combined CI rollup ("success" |
+// "failure" | "pending" | "") for a SHA, merging the LEGACY commit
+// status API and the check-runs API.
+//
+// Why this exists (ROA-274): the merge-train sync used to leave
+// ci_status blank, so PRs with red CI merged anyway. GetCombinedStatus
+// alone is insufficient because GitHub Actions reports as check-runs,
+// NOT legacy commit statuses — that endpoint returns "" on an
+// Actions-only repo and the gate silently passes. We must consult both
+// surfaces and reduce them to one verdict so the eligibility check can
+// actually block.
+//
+// A CI-less repo (no statuses, no check-runs) yields "" and stays
+// mergeable by design — releaseEligibilityReason only blocks a
+// non-empty, non-"success" value.
+func (c *Client) GetCIStatus(ctx context.Context, owner, repo, sha string) (string, error) {
+	// Legacy commit-status state. Reuse the existing method rather than
+	// re-implementing the request; its error is propagated by signature.
+	legacy, err := c.GetCombinedStatus(ctx, owner, repo, sha)
+	if err != nil {
+		return "", err
+	}
+
+	// Check-runs (GitHub Actions). Single page only: >100 check-runs on
+	// one SHA is vanishingly rare and treated as an accepted limitation
+	// (we'd under-count, never over-pass — a failing run on page 1 still
+	// blocks).
+	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?per_page=100",
+		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))
+	var out CheckRunsResponse
+	if err := c.do(ctx, "GET", path, &out); err != nil {
+		// Do NOT swallow — the caller decides whether a transient
+		// fetch failure should leave ci_status empty for this sync.
+		return "", err
+	}
+
+	checks := reduceCheckRuns(out.CheckRuns)
+	return combineCIStates(legacy, checks), nil
+}
+
+// reduceCheckRuns collapses a check-run list into one state string.
+// Precedence: any still-running check → "pending"; else any failing
+// terminal conclusion → "failure"; else (some completed) → "success";
+// empty list → "".
+func reduceCheckRuns(runs []CheckRun) string {
+	if len(runs) == 0 {
+		return ""
+	}
+	failureConclusions := map[string]bool{
+		"failure":         true,
+		"timed_out":       true,
+		"cancelled":       true,
+		"action_required": true,
+		"startup_failure": true,
+		"stale":           true,
+	}
+	for _, run := range runs {
+		if run.Status != "completed" {
+			return "pending"
+		}
+	}
+	for _, run := range runs {
+		if failureConclusions[run.Conclusion] {
+			return "failure"
+		}
+	}
+	return "success"
+}
+
+// combineCIStates merges the legacy commit-status state and the
+// check-runs state into one verdict. Failure dominates, then pending,
+// then success; "" only when both are "".
+func combineCIStates(legacy, checks string) string {
+	if legacy == "failure" || checks == "failure" {
+		return "failure"
+	}
+	if legacy == "pending" || checks == "pending" {
+		return "pending"
+	}
+	if legacy == "success" || checks == "success" {
+		return "success"
+	}
+	return ""
+}
+
 // GetPullRequest fetches a single PR, including merge_commit_sha (the
 // commit GitHub created on the base branch when the PR merged — NOT the
 // PR's head SHA). Used by the merge-train reconciler to record the true

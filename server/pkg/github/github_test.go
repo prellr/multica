@@ -139,6 +139,75 @@ func TestListPullRequests_ErrorMapping(t *testing.T) {
 	}
 }
 
+// TestGetCIStatus_CombinesLegacyAndCheckRuns — ROA-274. The legacy
+// /status endpoint is blind to GitHub Actions (check-runs), so a
+// red Actions run must still surface as "failure" via the check-runs
+// rollup. Also covers the CI-less ("" + "" → "") and pending cases.
+func TestGetCIStatus_CombinesLegacyAndCheckRuns(t *testing.T) {
+	cases := []struct {
+		name        string
+		legacyState string
+		checkRuns   string // JSON body for the check-runs endpoint
+		want        string
+	}{
+		{
+			name:        "actions failure with empty legacy → failure",
+			legacyState: "",
+			checkRuns:   `{"total_count":2,"check_runs":[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"failure"}]}`,
+			want:        "failure",
+		},
+		{
+			name:        "actions all green, no legacy → success",
+			legacyState: "",
+			checkRuns:   `{"total_count":1,"check_runs":[{"status":"completed","conclusion":"success"}]}`,
+			want:        "success",
+		},
+		{
+			name:        "actions still running → pending",
+			legacyState: "",
+			checkRuns:   `{"total_count":1,"check_runs":[{"status":"in_progress","conclusion":""}]}`,
+			want:        "pending",
+		},
+		{
+			name:        "CI-less repo (no legacy, no checks) → empty",
+			legacyState: "",
+			checkRuns:   `{"total_count":0,"check_runs":[]}`,
+			want:        "",
+		},
+		{
+			name:        "legacy failure dominates green checks → failure",
+			legacyState: "failure",
+			checkRuns:   `{"total_count":1,"check_runs":[{"status":"completed","conclusion":"success"}]}`,
+			want:        "failure",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/commits/abc/status"):
+					w.Write([]byte(`{"state":"` + tc.legacyState + `"}`))
+				case strings.HasSuffix(r.URL.Path, "/commits/abc/check-runs"):
+					w.Write([]byte(tc.checkRuns))
+				default:
+					t.Errorf("unexpected path: %s", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+
+			c := NewClient("")
+			c.BaseURL = srv.URL
+			got, err := c.GetCIStatus(context.Background(), "o", "r", "abc")
+			if err != nil {
+				t.Fatalf("GetCIStatus: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("GetCIStatus: got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestGetCombinedStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/commits/abc/status") {

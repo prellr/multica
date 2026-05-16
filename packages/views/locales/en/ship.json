@@ -81,6 +81,7 @@
       "ready_to_land": "Ready to Land",
       "merged_pre_staging": "Merged · Pre-Staging",
       "in_staging": "In Staging",
+      "verifying": "Verifying",
       "promoting": "Promoting",
       "in_production": "In Production",
       "done": "Done"

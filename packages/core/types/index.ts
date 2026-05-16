@@ -89,6 +89,7 @@ export type {
   Project,
   ProjectStatus,
   ProjectPriority,
+  ProjectPipelineKind,
   CreateProjectRequest,
   UpdateProjectRequest,
   ListProjectsResponse,

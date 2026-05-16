@@ -261,14 +261,16 @@ describe("deriveShipKanbanColumn — merged PRs through deploy lanes", () => {
       );
     });
 
-    it("active_release.stage = verifying → in_staging", () => {
+    it("active_release.stage = verifying → verifying (own column)", () => {
+      // ROA-264 rebuild: `verifying` is now its own Kanban column rather
+      // than folded into in_staging. Regression guard for the split.
       const pr = makePR({
         state: "merged",
         pr_merged_at: "2026-05-09T11:00:00Z",
         active_release: { id: "r-1", title: "x", stage: "verifying" },
       });
       expect(deriveShipKanbanColumn(pr, EMPTY_DEPLOY_SNAPSHOT, NOW)).toBe(
-        "in_staging",
+        "verifying",
       );
     });
 

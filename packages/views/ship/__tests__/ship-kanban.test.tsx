@@ -52,53 +52,63 @@ function env(kind: "staging" | "production"): DeployEnvironment {
   };
 }
 
-function renderKanban() {
+function renderKanban(
+  pipelineKind?: "staged" | "direct_to_prod",
+) {
   return render(
-    <ShipKanban pullRequests={[]} isLoading={false} projectId="p-1" />,
+    <ShipKanban
+      pullRequests={[]}
+      isLoading={false}
+      projectId="p-1"
+      pipelineKind={pipelineKind}
+    />,
     { wrapper: I18nWrapper },
   );
 }
 
-describe("ShipKanban column visibility", () => {
+// ROA-264 rebuild: column visibility is now derived from the project's
+// pipeline_kind, NOT from the presence of deploy environment rows. The
+// deploy snapshot is still fetched (for bucketing merged PRs) but no
+// longer gates which columns render. `env()` is retained as a fixture
+// helper for the snapshot mock.
+void env;
+
+describe("ShipKanban column visibility (pipeline-driven)", () => {
   beforeEach(() => {
     mockEnvironments.current = [];
   });
 
-  it("shows only review columns and done when no deploy environments are configured", () => {
-    renderKanban();
-
-    expect(screen.queryByText("Drafted")).toBeInTheDocument();
-    expect(screen.queryByText("In Review")).toBeInTheDocument();
-    expect(screen.queryByText("Ready to Land")).toBeInTheDocument();
-    expect(screen.queryByText("Merged · Pre-Staging")).toBeInTheDocument();
-    expect(screen.queryByText("Done")).toBeInTheDocument();
-    expect(screen.queryByText("In Staging")).not.toBeInTheDocument();
-    expect(screen.queryByText("Promoting")).not.toBeInTheDocument();
-    expect(screen.queryByText("In Production")).not.toBeInTheDocument();
-  });
-
-  it("shows the staging column when only staging is configured", () => {
-    mockEnvironments.current = [env("staging")];
-
-    renderKanban();
-
-    expect(screen.queryByText("In Staging")).toBeInTheDocument();
-    expect(screen.queryByText("Promoting")).not.toBeInTheDocument();
-    expect(screen.queryByText("In Production")).not.toBeInTheDocument();
-  });
-
-  it("shows all columns when staging and production are configured", () => {
-    mockEnvironments.current = [env("staging"), env("production")];
-
-    renderKanban();
+  it("staged → full superset including In Staging then Verifying", () => {
+    renderKanban("staged");
 
     expect(screen.queryByText("Drafted")).toBeInTheDocument();
     expect(screen.queryByText("In Review")).toBeInTheDocument();
     expect(screen.queryByText("Ready to Land")).toBeInTheDocument();
     expect(screen.queryByText("Merged · Pre-Staging")).toBeInTheDocument();
     expect(screen.queryByText("In Staging")).toBeInTheDocument();
+    expect(screen.queryByText("Verifying")).toBeInTheDocument();
     expect(screen.queryByText("Promoting")).toBeInTheDocument();
     expect(screen.queryByText("In Production")).toBeInTheDocument();
     expect(screen.queryByText("Done")).toBeInTheDocument();
+  });
+
+  it("direct_to_prod → no In Staging, no Verifying, keeps Promoting", () => {
+    renderKanban("direct_to_prod");
+
+    expect(screen.queryByText("Drafted")).toBeInTheDocument();
+    expect(screen.queryByText("Merged · Pre-Staging")).toBeInTheDocument();
+    expect(screen.queryByText("In Staging")).not.toBeInTheDocument();
+    expect(screen.queryByText("Verifying")).not.toBeInTheDocument();
+    expect(screen.queryByText("Promoting")).toBeInTheDocument();
+    expect(screen.queryByText("In Production")).toBeInTheDocument();
+    expect(screen.queryByText("Done")).toBeInTheDocument();
+  });
+
+  it("undefined pipeline_kind → defaults to the staged superset", () => {
+    renderKanban(undefined);
+
+    expect(screen.queryByText("In Staging")).toBeInTheDocument();
+    expect(screen.queryByText("Verifying")).toBeInTheDocument();
+    expect(screen.queryByText("Promoting")).toBeInTheDocument();
   });
 });

@@ -43,7 +43,7 @@ export function ShipRepoSection({
   }, [prs]);
 
   return (
-    <section className="space-y-2 rounded-md border bg-muted/10 p-3">
+    <section className="flex w-[280px] shrink-0 flex-col rounded-md border bg-muted/10 p-3">
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
@@ -84,7 +84,7 @@ export function ShipRepoSection({
       {!collapsed && (
         <div
           id={sectionId}
-          className="max-h-[400px] space-y-2 overflow-y-auto pr-1"
+          className="flex-1 min-h-[120px] max-h-[480px] space-y-2 overflow-y-auto pr-1"
         >
           {prs.length === 0 && !isLoading ? (
             <p className="py-3 text-center text-xs text-muted-foreground">

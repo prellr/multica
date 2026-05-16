@@ -297,7 +297,7 @@ export function ShipProjectSection({ project }: ShipProjectSectionProps) {
         <div id={sectionId} className="space-y-3">
           <ShipDeploySwimlanes projectId={project.id} />
 
-          <div className="space-y-3">
+          <div className="flex gap-3 overflow-x-auto pb-2">
             {repoGroups.map(([repoUrl, repoPrs]) => (
               <ShipRepoSection
                 key={repoUrl}

@@ -3,11 +3,12 @@
 import { useMemo } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useDeployEnvironments, useRecentDeploys } from "@multica/core/ship";
-import type { PullRequest } from "@multica/core/types";
+import type { ProjectPipelineKind, PullRequest } from "@multica/core/types";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { useT } from "../../i18n";
 import {
   bucketPullRequests,
+  columnsForPipeline,
   type ShipDeploySnapshot,
   type ShipKanbanColumn,
 } from "../hooks/use-pr-state";
@@ -25,6 +26,10 @@ interface ShipKanbanProps {
    *  staging → promoting → in production columns. Phase 1 didn't need this
    *  because there were only review-state columns. */
   projectId: string;
+  /** The project's pipeline topology. Drives which stage columns are
+   *  visible — `direct_to_prod` projects hide In Staging + Verifying.
+   *  Undefined falls back to the full `staged` superset. */
+  pipelineKind?: ProjectPipelineKind;
 }
 
 const COLUMN_ACCENT: Record<ShipKanbanColumn, string> = {
@@ -38,6 +43,7 @@ const COLUMN_ACCENT: Record<ShipKanbanColumn, string> = {
   ready_to_land: "bg-emerald-500/40",
   merged_pre_staging: "bg-amber-500/40",
   in_staging: "bg-orange-500/40",
+  verifying: "bg-yellow-500/40",
   promoting: "bg-rose-500/40",
   in_production: "bg-teal-500/40",
   done: "bg-zinc-500/40",
@@ -112,25 +118,22 @@ function useDeploySnapshot(projectId: string): ShipDeploySnapshot {
   );
 }
 
-export function ShipKanban({ pullRequests, isLoading, projectId }: ShipKanbanProps) {
+export function ShipKanban({
+  pullRequests,
+  isLoading,
+  projectId,
+  pipelineKind,
+}: ShipKanbanProps) {
   const { t } = useT("ship");
   const isMobile = useIsMobile();
+  // Snapshot is still required for *bucketing* merged PRs into the
+  // in_staging / promoting / in_production columns via SHA matching.
+  // Only the column *visibility* derivation moved to pipelineKind.
   const snapshot = useDeploySnapshot(projectId);
-  const visibleColumns = useMemo<ShipKanbanColumn[]>(() => {
-    const cols: ShipKanbanColumn[] = [
-      "drafted",
-      "in_review",
-      "ready_to_land",
-      "merged_pre_staging",
-    ];
-    if (snapshot.staging) cols.push("in_staging");
-    if (snapshot.production) {
-      cols.push("promoting");
-      cols.push("in_production");
-    }
-    cols.push("done");
-    return cols;
-  }, [snapshot.staging, snapshot.production]);
+  const visibleColumns = useMemo<ShipKanbanColumn[]>(
+    () => columnsForPipeline(pipelineKind),
+    [pipelineKind],
+  );
   const buckets = useMemo(
     () => bucketPullRequests(pullRequests, snapshot),
     [pullRequests, snapshot],
@@ -174,7 +177,7 @@ export function ShipKanban({ pullRequests, isLoading, projectId }: ShipKanbanPro
               <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
                 <ColumnHeader column={col} count={buckets[col].length} />
               </summary>
-              <div className="flex flex-col gap-2 p-2 pt-0">
+              <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto p-2 pt-0">
                 {buckets[col].length === 0 ? (
                   <div className="px-2 py-3 text-center text-xs text-muted-foreground">
                     {isLoading ? "" : t(($) => $.kanban.empty_column)}
@@ -197,7 +200,7 @@ export function ShipKanban({ pullRequests, isLoading, projectId }: ShipKanbanPro
                 className="flex w-64 shrink-0 flex-col rounded-md border bg-muted/20"
               >
                 <ColumnHeader column={col} count={buckets[col].length} />
-                <div className="flex flex-col gap-2 p-2 pt-0">
+                <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto p-2 pt-0">
                   {buckets[col].length === 0 ? (
                     <div className="px-2 py-4 text-center text-xs text-muted-foreground">
                       {isLoading ? "" : t(($) => $.kanban.empty_column)}

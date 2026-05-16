@@ -81,6 +81,7 @@
       "ready_to_land": "可合并",
       "merged_pre_staging": "已合并 · 待预发",
       "in_staging": "已上预发",
+      "verifying": "验证中",
       "promoting": "正在升生产",
       "in_production": "已上生产",
       "done": "完成"

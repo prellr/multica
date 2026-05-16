@@ -7,7 +7,6 @@ import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import {
   useCollapsedProjects,
-  useDeployEnvironments,
   useProjectPullRequests,
   useSyncProject,
 } from "@multica/core/ship";
@@ -60,14 +59,6 @@ export function ShipProjectSection({ project }: ShipProjectSectionProps) {
     () => data?.pull_requests ?? [],
     [data],
   );
-  // Staging env — needed so PR card chips can surface smoke-test actions.
-  // TQ deduplicates this with the same call in ShipDeploySwimlanes.
-  const { data: envData } = useDeployEnvironments(project.id);
-  const stagingEnv = useMemo(() => {
-    const envs = envData?.environments ?? [];
-    return envs.find((e) => e.kind === "staging") ?? null;
-  }, [envData]);
-
   // Group PRs by repo URL. Sort repos alphabetically by name.
   const repoGroups = useMemo(() => {
     const map = new Map<string, PullRequest[]>();
@@ -304,7 +295,8 @@ export function ShipProjectSection({ project }: ShipProjectSectionProps) {
                 repoUrl={repoUrl}
                 prs={repoPrs}
                 isLoading={isLoading}
-                stagingEnv={stagingEnv}
+                projectId={project.id}
+                pipelineKind={fullProject?.pipeline_kind}
               />
             ))}
           </div>

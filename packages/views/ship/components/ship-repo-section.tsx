@@ -4,22 +4,24 @@ import { useMemo } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useCollapsedRepos } from "@multica/core/ship";
-import type { PullRequest } from "@multica/core/types";
-import { ShipPRCard } from "./ship-pr-card";
+import type { ProjectPipelineKind, PullRequest } from "@multica/core/types";
+import { ShipKanban } from "./ship-kanban";
 import { useT } from "../../i18n";
 
 interface ShipRepoSectionProps {
   repoUrl: string;
   prs: PullRequest[];
   isLoading?: boolean;
-  stagingEnv?: { id: string; current_sha: string | null } | null;
+  projectId: string;
+  pipelineKind?: ProjectPipelineKind;
 }
 
 export function ShipRepoSection({
   repoUrl,
   prs,
   isLoading,
-  stagingEnv,
+  projectId,
+  pipelineKind,
 }: ShipRepoSectionProps) {
   const { t } = useT("ship");
   const repoName = repoUrl.split("/").at(-1) ?? repoUrl;
@@ -88,19 +90,13 @@ export function ShipRepoSection({
       </div>
 
       {!collapsed && (
-        <div
-          id={sectionId}
-          className="max-h-[400px] space-y-2 overflow-y-auto pr-1"
-        >
-          {prs.length === 0 && !isLoading ? (
-            <p className="py-3 text-center text-xs text-muted-foreground">
-              {t(($) => $.project_summary.no_prs)}
-            </p>
-          ) : (
-            prs.map((pr) => (
-              <ShipPRCard key={pr.id} pr={pr} stagingEnv={stagingEnv} />
-            ))
-          )}
+        <div id={sectionId}>
+          <ShipKanban
+            pullRequests={prs}
+            isLoading={isLoading}
+            projectId={projectId}
+            pipelineKind={pipelineKind}
+          />
         </div>
       )}
     </section>

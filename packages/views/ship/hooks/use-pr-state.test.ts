@@ -11,7 +11,11 @@
 
 import { describe, it, expect } from "vitest";
 import type { PullRequest } from "@multica/core/types";
-import { deriveRiskHint } from "./use-pr-state";
+import {
+  bucketPullRequests,
+  columnsForPipeline,
+  deriveRiskHint,
+} from "./use-pr-state";
 
 function makePR(overrides: Partial<PullRequest>): PullRequest {
   return {
@@ -102,5 +106,72 @@ describe("deriveRiskHint", () => {
     });
     const result = deriveRiskHint(pr);
     expect(result?.level).toBe("medium");
+  });
+});
+
+describe("columnsForPipeline", () => {
+  it("staged → full superset with in_staging then verifying then promoting", () => {
+    const cols = columnsForPipeline("staged");
+    expect(cols).toHaveLength(9);
+    const inStaging = cols.indexOf("in_staging");
+    const verifying = cols.indexOf("verifying");
+    const promoting = cols.indexOf("promoting");
+    expect(inStaging).toBeGreaterThanOrEqual(0);
+    expect(inStaging).toBeLessThan(verifying);
+    expect(verifying).toBeLessThan(promoting);
+    expect(cols).toEqual([
+      "drafted",
+      "in_review",
+      "ready_to_land",
+      "merged_pre_staging",
+      "in_staging",
+      "verifying",
+      "promoting",
+      "in_production",
+      "done",
+    ]);
+  });
+
+  it("direct_to_prod → excludes in_staging + verifying, keeps promoting", () => {
+    const cols = columnsForPipeline("direct_to_prod");
+    expect(cols).toHaveLength(7);
+    expect(cols).not.toContain("in_staging");
+    expect(cols).not.toContain("verifying");
+    expect(cols).toContain("promoting");
+  });
+
+  it("undefined → defaults to the staged superset (never hide a stage)", () => {
+    expect(columnsForPipeline(undefined)).toEqual(columnsForPipeline("staged"));
+  });
+});
+
+describe("verifying release stage bucketing", () => {
+  // releaseStageToColumn is module-private; exercise it through the public
+  // bucketPullRequests surface. A merged PR whose head SHA matches nothing
+  // in the (empty) snapshot falls through to the release-stage fallback.
+  it("a merged PR with release stage 'verifying' lands in the verifying bucket", () => {
+    const pr = makePR({
+      id: "pr-verifying",
+      state: "merged",
+      head_sha: "abc123",
+      pr_merged_at: new Date().toISOString(),
+      active_release: { id: "rel-1", title: "R", stage: "verifying" },
+    });
+    const buckets = bucketPullRequests([pr]);
+    expect(buckets.verifying.map((p) => p.id)).toEqual(["pr-verifying"]);
+    expect(buckets.in_staging).toHaveLength(0);
+  });
+
+  it("a merged PR with release stage 'in_staging' still lands in in_staging", () => {
+    const pr = makePR({
+      id: "pr-staging",
+      state: "merged",
+      head_sha: "def456",
+      pr_merged_at: new Date().toISOString(),
+      active_release: { id: "rel-2", title: "R", stage: "in_staging" },
+    });
+    const buckets = bucketPullRequests([pr]);
+    expect(buckets.in_staging.map((p) => p.id)).toEqual(["pr-staging"]);
+    expect(buckets.verifying).toHaveLength(0);
   });
 });

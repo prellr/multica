@@ -1,4 +1,8 @@
-import type { DeployEnvironment, PullRequest } from "@multica/core/types";
+import type {
+  DeployEnvironment,
+  ProjectPipelineKind,
+  PullRequest,
+} from "@multica/core/types";
 
 // Phase 2 Kanban columns. Naming matches the i18n keys in ship.json so the
 // derivation result can be used directly as a translation key:
@@ -14,9 +18,43 @@ export type ShipKanbanColumn =
   | "ready_to_land"
   | "merged_pre_staging"
   | "in_staging"
+  | "verifying"
   | "promoting"
   | "in_production"
   | "done";
+
+/** Derive the visible Kanban columns for a project from its pipeline
+ *  topology. `direct_to_prod` projects have no staging environment, so
+ *  the In Staging + Verifying columns are dropped. Any unknown/undefined
+ *  kind falls back to the full `staged` superset — per CLAUDE.md "enum
+ *  drift downgrades, not crashes": never hide a real stage. */
+export function columnsForPipeline(
+  kind: ProjectPipelineKind | undefined,
+): ShipKanbanColumn[] {
+  if (kind === "direct_to_prod") {
+    return [
+      "drafted",
+      "in_review",
+      "ready_to_land",
+      "merged_pre_staging",
+      "promoting",
+      "in_production",
+      "done",
+    ];
+  }
+  // "staged" and any unknown/undefined → full superset (never hide a stage)
+  return [
+    "drafted",
+    "in_review",
+    "ready_to_land",
+    "merged_pre_staging",
+    "in_staging",
+    "verifying",
+    "promoting",
+    "in_production",
+    "done",
+  ];
+}
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -200,8 +238,9 @@ function releaseStageToColumn(
 ): ShipKanbanColumn | null {
   switch (stage) {
     case "in_staging":
-    case "verifying":
       return "in_staging";
+    case "verifying":
+      return "verifying";
     case "promoting":
       return "promoting";
     case "in_production":
@@ -290,6 +329,7 @@ export interface KanbanBuckets {
   ready_to_land: PullRequest[];
   merged_pre_staging: PullRequest[];
   in_staging: PullRequest[];
+  verifying: PullRequest[];
   promoting: PullRequest[];
   in_production: PullRequest[];
   done: PullRequest[];
@@ -318,6 +358,7 @@ export function bucketPullRequests(
     ready_to_land: [],
     merged_pre_staging: [],
     in_staging: [],
+    verifying: [],
     promoting: [],
     in_production: [],
     done: [],

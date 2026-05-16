@@ -63,7 +63,8 @@
     "blocked_pill": "{{count}} blocked",
     "blocked_title": "{{count}} blocked (failing CI or conflicts)",
     "draft_pill": "{{count}} draft",
-    "draft_title": "{{count}} draft"
+    "draft_title": "{{count}} draft",
+    "no_prs": "No pull requests"
   },
   "kanban": {
     "drafted": "Drafted",

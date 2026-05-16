@@ -55,7 +55,11 @@ export function ShipRepoSection({
           className="flex size-5 shrink-0 items-center justify-center rounded hover:bg-muted"
           aria-expanded={!collapsed}
           aria-controls={sectionId}
-          aria-label={collapsed ? "Expand repo" : "Collapse repo"}
+          aria-label={
+            collapsed
+              ? t(($) => $.repo_section.expand)
+              : t(($) => $.repo_section.collapse)
+          }
         >
           <ChevronRight
             className={cn(

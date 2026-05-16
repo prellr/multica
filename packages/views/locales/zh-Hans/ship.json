@@ -66,6 +66,11 @@
     "draft_title": "{{count}} 个草稿",
     "no_prs": "暂无 PR"
   },
+  "repo_section": {
+    "expand": "展开仓库",
+    "collapse": "折叠仓库",
+    "empty": "没有拉取请求"
+  },
   "kanban": {
     "drafted": "草稿",
     "in_review": "审查中",

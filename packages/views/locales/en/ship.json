@@ -66,6 +66,11 @@
     "draft_title": "{{count}} draft",
     "no_prs": "No pull requests"
   },
+  "repo_section": {
+    "expand": "Expand repo",
+    "collapse": "Collapse repo",
+    "empty": "No pull requests"
+  },
   "kanban": {
     "drafted": "Drafted",
     "in_review": "In Review",

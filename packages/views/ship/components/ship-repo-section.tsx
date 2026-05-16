@@ -6,6 +6,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { useCollapsedRepos } from "@multica/core/ship";
 import type { PullRequest } from "@multica/core/types";
 import { ShipPRCard } from "./ship-pr-card";
+import { useT } from "../../i18n";
 
 interface ShipRepoSectionProps {
   repoUrl: string;
@@ -20,6 +21,7 @@ export function ShipRepoSection({
   isLoading,
   stagingEnv,
 }: ShipRepoSectionProps) {
+  const { t } = useT("ship");
   const repoName = repoUrl.split("/").at(-1) ?? repoUrl;
   const sectionId = `ship-repo-${encodeURIComponent(repoUrl)}`;
 
@@ -66,17 +68,21 @@ export function ShipRepoSection({
         </span>
         {summary.readyToMerge > 0 && (
           <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 tabular-nums dark:text-emerald-300">
-            {summary.readyToMerge} ready
+            {t(($) => $.project_summary.ready_pill, {
+              count: summary.readyToMerge,
+            })}
           </span>
         )}
         {summary.blocked > 0 && (
           <span className="rounded border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive tabular-nums">
-            {summary.blocked} blocked
+            {t(($) => $.project_summary.blocked_pill, {
+              count: summary.blocked,
+            })}
           </span>
         )}
         {summary.draft > 0 && (
           <span className="rounded border border-muted-foreground/30 bg-muted/30 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground tabular-nums">
-            {summary.draft} draft
+            {t(($) => $.project_summary.draft_pill, { count: summary.draft })}
           </span>
         )}
       </div>
@@ -88,7 +94,7 @@ export function ShipRepoSection({
         >
           {prs.length === 0 && !isLoading ? (
             <p className="py-3 text-center text-xs text-muted-foreground">
-              No pull requests
+              {t(($) => $.project_summary.no_prs)}
             </p>
           ) : (
             prs.map((pr) => (

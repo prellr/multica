@@ -63,7 +63,8 @@
     "blocked_pill": "{{count}} 阻塞",
     "blocked_title": "{{count}} 个阻塞（CI 失败或冲突）",
     "draft_pill": "{{count}} 草稿",
-    "draft_title": "{{count}} 个草稿"
+    "draft_title": "{{count}} 个草稿",
+    "no_prs": "暂无 PR"
   },
   "kanban": {
     "drafted": "草稿",

@@ -177,7 +177,7 @@ export function ShipKanban({
               <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
                 <ColumnHeader column={col} count={buckets[col].length} />
               </summary>
-              <div className="flex flex-col gap-2 p-2 pt-0">
+              <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto p-2 pt-0">
                 {buckets[col].length === 0 ? (
                   <div className="px-2 py-3 text-center text-xs text-muted-foreground">
                     {isLoading ? "" : t(($) => $.kanban.empty_column)}
@@ -200,7 +200,7 @@ export function ShipKanban({
                 className="flex w-64 shrink-0 flex-col rounded-md border bg-muted/20"
               >
                 <ColumnHeader column={col} count={buckets[col].length} />
-                <div className="flex flex-col gap-2 p-2 pt-0">
+                <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto p-2 pt-0">
                   {buckets[col].length === 0 ? (
                     <div className="px-2 py-4 text-center text-xs text-muted-foreground">
                       {isLoading ? "" : t(($) => $.kanban.empty_column)}

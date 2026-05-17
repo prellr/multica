@@ -169,7 +169,7 @@ export function ChannelMessageList({
     );
   }
   return (
-    <div className="relative flex-1">
+    <div className="relative min-h-0 flex-1">
       <div ref={containerRef} className="h-full overflow-y-auto py-1" onScroll={handleScroll}>
         {messages.map((m, i) => {
           const prev = i > 0 ? messages[i - 1] : null;

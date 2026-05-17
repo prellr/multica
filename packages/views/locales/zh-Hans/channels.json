@@ -122,6 +122,7 @@
     "empty": "还没有消息。来打个招呼吧。",
     "new_messages": "新消息",
     "new_messages_aria": "新消息",
+    "new_messages_below": "新消息 ↓",
     "deleted_placeholder": "[消息已删除]",
     "agent_label": "智能体",
     "edited": "（已编辑）",

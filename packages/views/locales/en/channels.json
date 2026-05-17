@@ -122,6 +122,7 @@
     "empty": "No messages yet. Be the first to say hello.",
     "new_messages": "New messages",
     "new_messages_aria": "New messages",
+    "new_messages_below": "New messages ↓",
     "deleted_placeholder": "[message deleted]",
     "agent_label": "agent",
     "edited": "(edited)",

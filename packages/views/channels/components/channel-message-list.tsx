@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
@@ -8,6 +8,7 @@ import {
   memberListOptions,
 } from "@multica/core/workspace/queries";
 import { channelMessagesOptions } from "@multica/core/channels";
+import { ChevronDown } from "lucide-react";
 import { MessageRow } from "./message-row";
 import { useT } from "../../i18n";
 
@@ -92,13 +93,31 @@ export function ChannelMessageList({
   const dividerRef = useRef<HTMLDivElement | null>(null);
   const initialScrollDoneRef = useRef<{ channelId: string | null }>({ channelId: null });
   const prevCountRef = useRef(messages.length);
+  const isAtBottomRef = useRef(true);
+  const [hasNewMessages, setHasNewMessages] = useState(false);
 
   // Channel switch resets initial-scroll bookkeeping so the new channel
   // gets its own anchor decision (divider into view OR scroll to bottom).
   useEffect(() => {
     initialScrollDoneRef.current = { channelId: null };
     prevCountRef.current = 0;
+    isAtBottomRef.current = true;
+    setHasNewMessages(false);
   }, [channelId]);
+
+  const handleScroll = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+    isAtBottomRef.current = atBottom;
+    if (atBottom) setHasNewMessages(false);
+  };
+
+  const scrollToBottom = () => {
+    const el = containerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    setHasNewMessages(false);
+  };
 
   // First render with messages: anchor to divider if we have one, else
   // scroll to bottom. Subsequent message arrivals fall through to the
@@ -118,14 +137,19 @@ export function ChannelMessageList({
     prevCountRef.current = messages.length;
   }, [channelId, messages.length, dividerBeforeIndex]);
 
-  // Tail behavior: on new messages after initial scroll, jump to bottom.
-  // (Phase 2 polish would gate this on "user was already at bottom" so a
-  // user reading older history isn't yanked down. Keeping it simple now.)
+  // Tail behavior: on new messages after initial scroll, preserve scroll
+  // position unless the user is already following the bottom.
   useEffect(() => {
     if (initialScrollDoneRef.current.channelId !== channelId) return;
     if (messages.length > prevCountRef.current) {
       const el = containerRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      if (el) {
+        if (isAtBottomRef.current) {
+          el.scrollTop = el.scrollHeight;
+        } else {
+          setHasNewMessages(true);
+        }
+      }
     }
     prevCountRef.current = messages.length;
   }, [channelId, messages.length]);
@@ -145,40 +169,53 @@ export function ChannelMessageList({
     );
   }
   return (
-    <div ref={containerRef} className="flex-1 overflow-y-auto py-1">
-      {messages.map((m, i) => {
-        const prev = i > 0 ? messages[i - 1] : null;
-        // The unread divider visually breaks a group, so a continuation
-        // immediately after the divider should re-introduce the avatar
-        // header — feels weird otherwise. Hence the `dividerBeforeIndex`
-        // check inside the predicate.
-        const isContinuation =
-          !!prev &&
-          dividerBeforeIndex !== i &&
-          prev.author_type === m.author_type &&
-          prev.author_id === m.author_id &&
-          new Date(m.created_at).getTime() - new Date(prev.created_at).getTime() <
-            GROUP_CONTINUATION_MS;
-        return (
-          <Fragment key={m.id}>
-            {dividerBeforeIndex === i ? (
-              <UnreadDivider
-                ref={dividerRef}
-                ariaLabel={t(($) => $.messages.new_messages_aria)}
-                label={t(($) => $.messages.new_messages)}
+    <div className="relative flex-1">
+      <div ref={containerRef} className="h-full overflow-y-auto py-1" onScroll={handleScroll}>
+        {messages.map((m, i) => {
+          const prev = i > 0 ? messages[i - 1] : null;
+          // The unread divider visually breaks a group, so a continuation
+          // immediately after the divider should re-introduce the avatar
+          // header — feels weird otherwise. Hence the `dividerBeforeIndex`
+          // check inside the predicate.
+          const isContinuation =
+            !!prev &&
+            dividerBeforeIndex !== i &&
+            prev.author_type === m.author_type &&
+            prev.author_id === m.author_id &&
+            new Date(m.created_at).getTime() - new Date(prev.created_at).getTime() <
+              GROUP_CONTINUATION_MS;
+          return (
+            <Fragment key={m.id}>
+              {dividerBeforeIndex === i ? (
+                <UnreadDivider
+                  ref={dividerRef}
+                  ariaLabel={t(($) => $.messages.new_messages_aria)}
+                  label={t(($) => $.messages.new_messages)}
+                />
+              ) : null}
+              <MessageRow
+                message={m}
+                channelId={channelId}
+                member={m.author_type === "member" ? memberById.get(m.author_id) : undefined}
+                agent={m.author_type === "agent" ? agentById.get(m.author_id) : undefined}
+                onOpenThread={onOpenThread}
+                isGroupContinuation={isContinuation}
               />
-            ) : null}
-            <MessageRow
-              message={m}
-              channelId={channelId}
-              member={m.author_type === "member" ? memberById.get(m.author_id) : undefined}
-              agent={m.author_type === "agent" ? agentById.get(m.author_id) : undefined}
-              onOpenThread={onOpenThread}
-              isGroupContinuation={isContinuation}
-            />
-          </Fragment>
-        );
-      })}
+            </Fragment>
+          );
+        })}
+      </div>
+      {hasNewMessages && (
+        <div className="pointer-events-none absolute bottom-2 left-0 right-0 flex justify-center">
+          <button
+            onClick={scrollToBottom}
+            className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-md hover:bg-primary/90"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+            {t(($) => $.messages.new_messages_below)}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

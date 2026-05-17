@@ -107,6 +107,21 @@ SELECT * FROM issue
 WHERE parent_issue_id = $1
 ORDER BY position ASC, created_at DESC;
 
+-- name: ListReferencingIssues :many
+-- Returns issues that mention the given issue ID in their description
+-- or in any of their comments, ordered by creation date.
+SELECT i.* FROM issue i
+WHERE i.workspace_id = $1
+  AND i.id != $2
+  AND (
+    i.description ILIKE concat('%mention://issue/', $2::text, '%')
+    OR i.id IN (
+      SELECT DISTINCT c.issue_id FROM comment c
+      WHERE c.content ILIKE concat('%mention://issue/', $2::text, '%')
+    )
+  )
+ORDER BY i.created_at DESC;
+
 -- name: GetIssueByOrigin :one
 -- Finds the issue stamped with a specific (origin_type, origin_id) pair.
 -- Used by quick-create completion to deterministically locate the issue

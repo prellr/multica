@@ -19,6 +19,8 @@ export const issueKeys = {
     [...issueKeys.all(wsId), "detail", id] as const,
   children: (wsId: string, id: string) =>
     [...issueKeys.all(wsId), "children", id] as const,
+  references: (wsId: string, id: string) =>
+    [...issueKeys.all(wsId), "references", id] as const,
   childProgress: (wsId: string) =>
     [...issueKeys.all(wsId), "child-progress"] as const,
   /** Full-issue timeline (single TanStack Query, no cursor). */
@@ -133,6 +135,13 @@ export function childIssuesOptions(wsId: string, id: string) {
   return queryOptions({
     queryKey: issueKeys.children(wsId, id),
     queryFn: () => api.listChildIssues(id).then((r) => r.issues),
+  });
+}
+
+export function referencingIssuesOptions(wsId: string, id: string) {
+  return queryOptions({
+    queryKey: issueKeys.references(wsId, id),
+    queryFn: () => api.listReferencingIssues(id).then((r) => r.issues),
   });
 }
 

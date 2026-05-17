@@ -664,6 +664,13 @@ export class ApiClient {
     });
   }
 
+  async listReferencingIssues(id: string): Promise<{ issues: Issue[] }> {
+    const raw = await this.fetch<unknown>(`/api/issues/${id}/references`);
+    return parseWithFallback(raw, ChildIssuesResponseSchema, { issues: [] }, {
+      endpoint: "GET /api/issues/:id/references",
+    });
+  }
+
   async getChildIssueProgress(): Promise<{ progress: { parent_issue_id: string; total: number; done: number }[] }> {
     return this.fetch("/api/issues/child-progress");
   }

@@ -686,6 +686,70 @@ func (q *Queries) ListOpenIssues(ctx context.Context, arg ListOpenIssuesParams) 
 	return items, nil
 }
 
+const listReferencingIssues = `-- name: ListReferencingIssues :many
+SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at FROM issue i
+WHERE i.workspace_id = $1
+  AND i.id != $2
+  AND (
+    i.description ILIKE concat('%mention://issue/', $2::text, '%')
+    OR i.id IN (
+      SELECT DISTINCT c.issue_id FROM comment c
+      WHERE c.content ILIKE concat('%mention://issue/', $2::text, '%')
+    )
+  )
+ORDER BY i.created_at DESC
+`
+
+type ListReferencingIssuesParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+// Returns issues that mention the given issue ID in their description
+// or in any of their comments, ordered by creation date.
+func (q *Queries) ListReferencingIssues(ctx context.Context, arg ListReferencingIssuesParams) ([]Issue, error) {
+	rows, err := q.db.Query(ctx, listReferencingIssues, arg.WorkspaceID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Issue{}
+	for rows.Next() {
+		var i Issue
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.Priority,
+			&i.AssigneeType,
+			&i.AssigneeID,
+			&i.CreatorType,
+			&i.CreatorID,
+			&i.ParentIssueID,
+			&i.AcceptanceCriteria,
+			&i.ContextRefs,
+			&i.Position,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Number,
+			&i.ProjectID,
+			&i.OriginType,
+			&i.OriginID,
+			&i.FirstExecutedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markIssueFirstExecuted = `-- name: MarkIssueFirstExecuted :one
 
 UPDATE issue

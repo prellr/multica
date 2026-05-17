@@ -8,7 +8,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { toast } from "sonner";
 import type { Issue, UpdateIssueRequest } from "@multica/core/types";
 import type { AgentTask } from "@multica/core/types/agent";
-import { CalendarDays } from "lucide-react";
+import { CalendarClock, CalendarDays } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { WorkingBadge } from "./working-badge";
@@ -18,7 +18,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { PriorityIcon } from "./priority-icon";
-import { PriorityPicker, AssigneePicker, DueDatePicker } from "./pickers";
+import { PriorityPicker, AssigneePicker, StartDatePicker, DueDatePicker } from "./pickers";
 import { PRIORITY_CONFIG } from "@multica/core/issues/config";
 import { useViewStore } from "@multica/core/issues/stores/view-store-context";
 import { ProgressRing } from "./progress-ring";
@@ -83,6 +83,7 @@ export const BoardCardContent = memo(function BoardCardContent({
   const showPriority = storeProperties.priority;
   const showDescription = storeProperties.description && issue.description;
   const showAssignee = storeProperties.assignee && issue.assignee_type && issue.assignee_id;
+  const showStartDate = storeProperties.startDate && issue.start_date;
   const showDueDate = storeProperties.dueDate && issue.due_date;
   const showProject = storeProperties.project && project;
   const showChildProgress = storeProperties.childProgress && childProgress;
@@ -131,8 +132,8 @@ export const BoardCardContent = memo(function BoardCardContent({
         </p>
       )}
 
-      {/* Row 3: Assignee, priority badge, due date */}
-      {(showAssignee || showPriority || showDueDate) && (
+      {/* Row 3: Assignee, priority badge, start date, due date */}
+      {(showAssignee || showPriority || showStartDate || showDueDate) && (
         <div className="mt-3 flex items-center gap-2">
           {showAssignee &&
             (editable ? (
@@ -179,6 +180,29 @@ export const BoardCardContent = memo(function BoardCardContent({
                 {priorityCfg.label}
               </span>
             ))}
+          {showStartDate && (
+            <div className={showDueDate ? undefined : "ml-auto"}>
+              {editable ? (
+                <PickerWrapper>
+                  <StartDatePicker
+                    startDate={issue.start_date}
+                    onUpdate={handleUpdate}
+                    trigger={
+                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <CalendarClock className="size-3" />
+                        {formatDate(issue.start_date!)}
+                      </span>
+                    }
+                  />
+                </PickerWrapper>
+              ) : (
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <CalendarClock className="size-3" />
+                  {formatDate(issue.start_date!)}
+                </span>
+              )}
+            </div>
+          )}
           {showDueDate && (
             <div className="ml-auto">
               {editable ? (

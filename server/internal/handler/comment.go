@@ -321,8 +321,8 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 			isSelfLoop := uuidToString(orchID) == authorID
 			isAssignee := issue.AssigneeID.Valid && uuidToString(issue.AssigneeID) == uuidToString(orchID)
 			if !isSelfLoop && !isAssignee {
-				const loopWindowSecs = 300.0
-				const loopThreshold = int32(5)
+				const loopWindowSecs = 600.0
+				const loopThreshold = int32(1)
 				orchCount, cbErr := h.Queries.CountRecentAgentTriggeredTasksForIssue(r.Context(),
 					db.CountRecentAgentTriggeredTasksForIssueParams{
 						IssueID:    issue.ID,

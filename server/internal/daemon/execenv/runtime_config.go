@@ -177,6 +177,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	}
 
 	b.WriteString("## Available Commands\n\n")
+	b.WriteString("**These are CLI commands. Run them via your `terminal` / shell tool — do NOT call them as MCP tool names.** MCP tool names use underscores (e.g. `multica_issue_assign`); CLI subcommands use spaces (e.g. `multica issue assign`). They are different interfaces to the same API; use whichever your runtime provides, but never confuse the syntax.\n\n")
 	b.WriteString("**Use `--output json` for structured data.** Human table output now prints routable issue keys (for example `MUL-123`) and short UUID prefixes for workspace resources; use `--full-id` on list commands when you need canonical UUIDs.\n\n")
 	b.WriteString("### Read\n")
 	b.WriteString("- `multica issue get <id> --output json` — Get full issue details (title, description, status, priority, assignee)\n")

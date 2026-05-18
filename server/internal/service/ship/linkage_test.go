@@ -103,19 +103,44 @@ func TestAgentTaskRefRegex(t *testing.T) {
 // pattern is constructed correctly: a workspace whose prefix is "ROA"
 // matches "ROA-42" but not "MUL-42".
 func TestPrefixIssueRegex_BuildsPerWorkspace(t *testing.T) {
-	combined := "Closes ROA-42 (and references MUL-7 from the other workspace)"
-
-	roaMatch := matchPrefix(t, "ROA", combined)
-	if roaMatch != "42" {
-		t.Errorf("expected ROA-42 to match, got %q", roaMatch)
+	cases := []struct {
+		name   string
+		prefix string
+		input  string
+		want   string
+	}{
+		{
+			name:   "workspace prefix matches",
+			prefix: "ROA",
+			input:  "Closes ROA-42 (and references MUL-7 from the other workspace)",
+			want:   "42",
+		},
+		{
+			name:   "other workspace prefix matches",
+			prefix: "MUL",
+			input:  "Closes ROA-42 (and references MUL-7 from the other workspace)",
+			want:   "7",
+		},
+		{
+			name:   "unreferenced prefix does not match",
+			prefix: "ZZZ",
+			input:  "Closes ROA-42 (and references MUL-7 from the other workspace)",
+			want:   "",
+		},
+		{
+			name:   "branch name with hyphenated slug",
+			prefix: "ROA",
+			input:  "task/ROA-280-guided-tour-reload",
+			want:   "280",
+		},
 	}
-	mulMatch := matchPrefix(t, "MUL", combined)
-	if mulMatch != "7" {
-		t.Errorf("expected MUL-7 to match, got %q", mulMatch)
-	}
-	zzzMatch := matchPrefix(t, "ZZZ", combined)
-	if zzzMatch != "" {
-		t.Errorf("expected ZZZ to NOT match, got %q", zzzMatch)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := matchPrefix(t, tc.prefix, tc.input)
+			if got != tc.want {
+				t.Errorf("matchPrefix(%q, %q) = %q, want %q", tc.prefix, tc.input, got, tc.want)
+			}
+		})
 	}
 }
 

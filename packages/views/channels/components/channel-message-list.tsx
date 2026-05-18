@@ -18,6 +18,22 @@ import { useT } from "../../i18n";
 // looser starts merging unrelated bursts. 5 minutes is the right knob.
 const GROUP_CONTINUATION_MS = 5 * 60 * 1000;
 
+function formatDateLabel(iso: string, todayStr: string, yesterdayStr: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === now.toDateString()) return todayStr;
+  if (d.toDateString() === yesterday.toDateString()) return yesterdayStr;
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+}
+
 interface ChannelMessageListProps {
   channelId: string;
   enabled: boolean;
@@ -56,6 +72,8 @@ export function ChannelMessageList({
   );
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const todayLabel = t(($) => $.messages.date_today);
+  const yesterdayLabel = t(($) => $.messages.date_yesterday);
 
   const memberById = new Map(members.map((m) => [m.user_id, m]));
   const agentById = new Map(agents.map((a) => [a.id, a]));
@@ -184,8 +202,17 @@ export function ChannelMessageList({
             prev.author_id === m.author_id &&
             new Date(m.created_at).getTime() - new Date(prev.created_at).getTime() <
               GROUP_CONTINUATION_MS;
+
+          // Show a date divider when the calendar day changes between messages.
+          const showDateDivider =
+            !prev ||
+            new Date(m.created_at).toDateString() !== new Date(prev.created_at).toDateString();
+
           return (
             <Fragment key={m.id}>
+              {showDateDivider ? (
+                <DateDivider label={formatDateLabel(m.created_at, todayLabel, yesterdayLabel)} />
+              ) : null}
               {dividerBeforeIndex === i ? (
                 <UnreadDivider
                   ref={dividerRef}
@@ -219,6 +246,18 @@ export function ChannelMessageList({
     </div>
   );
 }
+
+const DateDivider = ({ label }: { label: string }) => (
+  <div
+    className="my-2 flex items-center gap-3 px-4 text-[11px] font-semibold text-muted-foreground"
+    role="separator"
+    aria-label={label}
+  >
+    <span className="h-px flex-1 bg-border" />
+    <span>{label}</span>
+    <span className="h-px flex-1 bg-border" />
+  </div>
+);
 
 const UnreadDivider = ({
   ref,

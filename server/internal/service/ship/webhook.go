@@ -148,6 +148,13 @@ func (s *Service) processPullRequest(ctx context.Context, ev WebhookEvent) (Webh
 		if applyErr == nil {
 			row = updated
 		}
+		// Bridge: when an issue link is detected, also write into
+		// github_pull_request + issue_pull_request so the issue detail
+		// Pull Requests panel surfaces this PR. Best-effort; failure
+		// never blocks the webhook outcome.
+		if linkage.IssueID.Valid {
+			s.bridgeToIssuePanel(ctx, ev.WorkspaceID, repoURL, pr, linkage.IssueID)
+		}
 	}
 
 	// Phase 4 — recompute stack parent. Always runs because base_ref
@@ -756,6 +763,69 @@ func mapDeploymentStatusState(s string) db.DeployStatus {
 	default:
 		return db.DeployStatusPending
 	}
+}
+
+// bridgeToIssuePanel mirrors a Ship Hub PR into the github_pull_request +
+// issue_pull_request tables so the issue detail Pull Requests panel shows
+// the link. Called only when DetectMultiicaReferences found an issue.
+// Best-effort: any error is logged and the webhook outcome is unaffected.
+func (s *Service) bridgeToIssuePanel(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+	repoURL string,
+	pr gh.PullRequest,
+	issueID pgtype.UUID,
+) {
+	owner, repo, err := gh.ParseRepoURL(repoURL)
+	if err != nil {
+		slog.Warn("ship: bridge to issue panel: bad repo url",
+			"url", repoURL, "error", err)
+		return
+	}
+	gpr, err := s.Q.UpsertGitHubPullRequestFromShipHub(ctx, db.UpsertGitHubPullRequestFromShipHubParams{
+		WorkspaceID:     workspaceID,
+		RepoOwner:       owner,
+		RepoName:        repo,
+		PrNumber:        int32(pr.Number),
+		Title:           pr.Title,
+		State:           mapPRStateToGitHubPanel(pr),
+		HtmlUrl:         pr.HTMLURL,
+		Branch:          pgtype.Text{String: pr.Head.Ref, Valid: pr.Head.Ref != ""},
+		AuthorLogin:     pgtype.Text{String: pr.User.Login, Valid: pr.User.Login != ""},
+		AuthorAvatarUrl: pgtype.Text{String: pr.User.AvatarURL, Valid: pr.User.AvatarURL != ""},
+		MergedAt:        pgTimePtr(pr.MergedAt),
+		ClosedAt:        pgTimePtr(pr.ClosedAt),
+		PrCreatedAt:     pgTime(pr.CreatedAt),
+		PrUpdatedAt:     pgTime(pr.UpdatedAt),
+	})
+	if err != nil {
+		slog.Warn("ship: bridge to issue panel: upsert failed", "error", err)
+		return
+	}
+	if err := s.Q.LinkIssueToPullRequest(ctx, db.LinkIssueToPullRequestParams{
+		IssueID:       issueID,
+		PullRequestID: gpr.ID,
+		LinkedByType:  pgtype.Text{String: "system", Valid: true},
+		LinkedByID:    pgtype.UUID{},
+	}); err != nil {
+		slog.Warn("ship: bridge to issue panel: link failed",
+			"issue_id", uuidString(issueID), "pr_id", uuidString(gpr.ID), "error", err)
+	}
+}
+
+// mapPRStateToGitHubPanel maps gh.PullRequest fields to the string state
+// values used in github_pull_request.state CHECK ('open','closed','merged','draft').
+func mapPRStateToGitHubPanel(pr gh.PullRequest) string {
+	if pr.MergedAt != nil {
+		return "merged"
+	}
+	if pr.State == "closed" {
+		return "closed"
+	}
+	if pr.Draft {
+		return "draft"
+	}
+	return "open"
 }
 
 // processPush triggers a SyncProject for the repo so any branch protection

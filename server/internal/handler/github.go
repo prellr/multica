@@ -181,7 +181,10 @@ func (h *Handler) GitHubConnect(w http.ResponseWriter, r *http.Request) {
 // sends after a user installs (or re-authorizes) the App. We expect
 // ?installation_id=<id>&state=<signed token>. We persist the installation
 // row (workspace ↔ installation_id mapping), then bounce the user back to
-// the Settings → Integrations page in the web app.
+// the new Settings → GitHub tab in the web app (RFC MUL-2414 §4.1). The
+// previous destination was the catch-all Settings page, which after the
+// GitHub-tab split would land users on the default profile tab instead of
+// the place that shows the connection they just completed.
 func (h *Handler) GitHubSetupCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	installationIDStr := q.Get("installation_id")
@@ -190,25 +193,25 @@ func (h *Handler) GitHubSetupCallback(w http.ResponseWriter, r *http.Request) {
 	if frontend == "" {
 		frontend = "http://localhost:3000"
 	}
-	settingsURL := strings.TrimRight(frontend, "/") + "/settings"
+	settingsURL := strings.TrimRight(frontend, "/") + "/settings?tab=github"
 
 	if installationIDStr == "" || state == "" {
-		http.Redirect(w, r, settingsURL+"?github_error=missing_params", http.StatusFound)
+		http.Redirect(w, r, settingsURL+"&github_error=missing_params", http.StatusFound)
 		return
 	}
 	workspaceID, ok := verifyState(state)
 	if !ok {
-		http.Redirect(w, r, settingsURL+"?github_error=invalid_state", http.StatusFound)
+		http.Redirect(w, r, settingsURL+"&github_error=invalid_state", http.StatusFound)
 		return
 	}
 	installationID, err := strconv.ParseInt(installationIDStr, 10, 64)
 	if err != nil {
-		http.Redirect(w, r, settingsURL+"?github_error=bad_installation_id", http.StatusFound)
+		http.Redirect(w, r, settingsURL+"&github_error=bad_installation_id", http.StatusFound)
 		return
 	}
 	wsUUID, err := parseStrictUUID(workspaceID)
 	if err != nil {
-		http.Redirect(w, r, settingsURL+"?github_error=bad_workspace", http.StatusFound)
+		http.Redirect(w, r, settingsURL+"&github_error=bad_workspace", http.StatusFound)
 		return
 	}
 	// Resolve the installation against GitHub's API to capture display info.
@@ -237,13 +240,13 @@ func (h *Handler) GitHubSetupCallback(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		slog.Error("github: failed to persist installation", "err", err, "installation_id", installationID)
-		http.Redirect(w, r, settingsURL+"?github_error=persist_failed", http.StatusFound)
+		http.Redirect(w, r, settingsURL+"&github_error=persist_failed", http.StatusFound)
 		return
 	}
 	h.publish(protocol.EventGitHubInstallationCreated, workspaceID, "system", "", map[string]any{
 		"installation": githubInstallationToResponse(inst),
 	})
-	http.Redirect(w, r, settingsURL+"?github_connected=1", http.StatusFound)
+	http.Redirect(w, r, settingsURL+"&github_connected=1", http.StatusFound)
 }
 
 // fetchInstallationAccount tries to enrich the installation row with the
@@ -559,46 +562,54 @@ func (h *Handler) handlePullRequestEvent(ctx context.Context, body []byte) {
 	// Auto-link: scan title/body/branch for issue identifiers, look them
 	// up in this workspace, attach the link rows. Idempotent (ON CONFLICT
 	// DO NOTHING) so re-firing the webhook doesn't duplicate.
-	idents := extractIdentifiers(p.PullRequest.Title, p.PullRequest.Body, p.PullRequest.Head.Ref)
-	prefix := h.getIssuePrefix(ctx, inst.WorkspaceID)
-	linkedIssueIDs := make([]string, 0, len(idents))
-	for _, id := range idents {
-		issue, ok := h.lookupIssueByIdentifier(ctx, inst.WorkspaceID, prefix, id)
-		if !ok {
-			continue
-		}
-		if err := h.Queries.LinkIssueToPullRequest(ctx, db.LinkIssueToPullRequestParams{
-			IssueID:       issue.ID,
-			PullRequestID: pr.ID,
-			LinkedByType:  strToText("system"),
-			LinkedByID:    pgtype.UUID{},
-		}); err != nil {
-			slog.Warn("github: link failed", "err", err)
-			continue
-		}
-		linkedIssueIDs = append(linkedIssueIDs, uuidToString(issue.ID))
-
-		// A terminal PR event (`merged` or `closed`) may be the moment the
-		// last in-flight sibling resolves, so we re-evaluate the issue on
-		// both. We advance the issue to done when:
-		//   1. the issue isn't already terminal (`done` / `cancelled`);
-		//   2. no sibling PR is still `open` / `draft`;
-		//   3. at least one linked PR (this one or a sibling) is `merged`.
-		// Rule (3) prevents an "all closed-without-merge" sequence from
-		// silently auto-closing the issue — if nothing was ever delivered,
-		// the user should decide what to do manually.
-		if (state == "merged" || state == "closed") && issue.Status != "done" && issue.Status != "cancelled" {
-			counts, err := h.Queries.GetSiblingPullRequestStateCountsForIssue(ctx, db.GetSiblingPullRequestStateCountsForIssueParams{
-				IssueID: issue.ID,
-				ID:      pr.ID,
-			})
-			if err != nil {
-				slog.Warn("github: count sibling pr states failed", "err", err, "issue_id", uuidToString(issue.ID))
+	//
+	// RFC MUL-2414 §4.8: the PR mirror upsert above always runs (so re-enabling
+	// GitHub features restores history without backfill), but the link rows
+	// are a "new side-effect" and must be gated by the workspace's auto-link
+	// flag (which itself short-circuits when the master `github_enabled`
+	// switch is off).
+	linkedIssueIDs := make([]string, 0)
+	if h.workspaceAutoLinkPRsEnabled(ctx, inst.WorkspaceID) {
+		idents := extractIdentifiers(p.PullRequest.Title, p.PullRequest.Body, p.PullRequest.Head.Ref)
+		prefix := h.getIssuePrefix(ctx, inst.WorkspaceID)
+		for _, id := range idents {
+			issue, ok := h.lookupIssueByIdentifier(ctx, inst.WorkspaceID, prefix, id)
+			if !ok {
 				continue
 			}
-			anyMerged := state == "merged" || counts.MergedCount > 0
-			if counts.OpenCount == 0 && anyMerged {
-				h.advanceIssueToDone(ctx, issue, workspaceID)
+			if err := h.Queries.LinkIssueToPullRequest(ctx, db.LinkIssueToPullRequestParams{
+				IssueID:       issue.ID,
+				PullRequestID: pr.ID,
+				LinkedByType:  strToText("system"),
+				LinkedByID:    pgtype.UUID{},
+			}); err != nil {
+				slog.Warn("github: link failed", "err", err)
+				continue
+			}
+			linkedIssueIDs = append(linkedIssueIDs, uuidToString(issue.ID))
+
+			// A terminal PR event (`merged` or `closed`) may be the moment the
+			// last in-flight sibling resolves, so we re-evaluate the issue on
+			// both. We advance the issue to done when:
+			//   1. the issue isn't already terminal (`done` / `cancelled`);
+			//   2. no sibling PR is still `open` / `draft`;
+			//   3. at least one linked PR (this one or a sibling) is `merged`.
+			// Rule (3) prevents an "all closed-without-merge" sequence from
+			// silently auto-closing the issue — if nothing was ever delivered,
+			// the user should decide what to do manually.
+			if (state == "merged" || state == "closed") && issue.Status != "done" && issue.Status != "cancelled" {
+				counts, err := h.Queries.GetSiblingPullRequestStateCountsForIssue(ctx, db.GetSiblingPullRequestStateCountsForIssueParams{
+					IssueID: issue.ID,
+					ID:      pr.ID,
+				})
+				if err != nil {
+					slog.Warn("github: count sibling pr states failed", "err", err, "issue_id", uuidToString(issue.ID))
+					continue
+				}
+				anyMerged := state == "merged" || counts.MergedCount > 0
+				if counts.OpenCount == 0 && anyMerged {
+					h.advanceIssueToDone(ctx, issue, workspaceID)
+				}
 			}
 		}
 	}
@@ -663,6 +674,32 @@ func extractIdentifiers(parts ...string) []string {
 
 // lookupIssueByIdentifier looks up an issue in the given workspace by its
 // "PREFIX-NUMBER" identifier. Returns the row + true if the prefix matches
+// workspaceAutoLinkPRsEnabled reports whether the workspace allows the
+// GitHub webhook to create issue ↔ PR link rows. Defaults to true so that
+// workspaces predating RFC MUL-2414 keep the historical "auto-link on"
+// behavior, and short-circuits to false whenever the master GitHub switch
+// is explicitly off — mirroring the precedence used on the client side.
+func (h *Handler) workspaceAutoLinkPRsEnabled(ctx context.Context, workspaceID pgtype.UUID) bool {
+	ws, err := h.Queries.GetWorkspace(ctx, workspaceID)
+	if err != nil || len(ws.Settings) == 0 {
+		return true
+	}
+	var s struct {
+		GitHubEnabled            *bool `json:"github_enabled"`
+		GitHubAutoLinkPRsEnabled *bool `json:"github_auto_link_prs_enabled"`
+	}
+	if err := json.Unmarshal(ws.Settings, &s); err != nil {
+		return true
+	}
+	if s.GitHubEnabled != nil && !*s.GitHubEnabled {
+		return false
+	}
+	if s.GitHubAutoLinkPRsEnabled == nil {
+		return true
+	}
+	return *s.GitHubAutoLinkPRsEnabled
+}
+
 // the workspace's configured prefix and the number resolves to a real issue.
 func (h *Handler) lookupIssueByIdentifier(ctx context.Context, workspaceID pgtype.UUID, prefix, identifier string) (db.Issue, bool) {
 	idx := strings.LastIndex(identifier, "-")

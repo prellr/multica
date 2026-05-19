@@ -52,6 +52,7 @@ import { collectThreadReplies } from "./thread-utils";
 import { AgentLiveCard } from "./agent-live-card";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
+import { useGitHubSettings } from "@multica/core/github";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
@@ -417,6 +418,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   const [parentIssueOpen, setParentIssueOpen] = useState(true);
   const [pullRequestsOpen, setPullRequestsOpen] = useState(true);
   const [tokenUsageOpen, setTokenUsageOpen] = useState(true);
+  const githubSettings = useGitHubSettings();
   // Virtuoso's `customScrollParent` wants the HTMLElement, not a ref. A plain
   // `useRef.current` does not trigger a re-render when it populates, so the
   // Virtuoso prop would never receive the element. Callback ref + state fixes
@@ -905,17 +907,21 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         </div>
       )}
 
-      {/* Pull requests */}
-      <div>
-        <button
-          className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors mb-2 hover:bg-accent/70 ${pullRequestsOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
-          onClick={() => setPullRequestsOpen(!pullRequestsOpen)}
-        >
-          {t(($) => $.detail.section_pull_requests)}
-          <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${pullRequestsOpen ? "rotate-90" : ""}`} />
-        </button>
-        {pullRequestsOpen && <div className="pl-2"><PullRequestList issueId={id} /></div>}
-      </div>
+      {/* Pull requests — hidden when the workspace disables the PR sidebar
+          (or the GitHub master switch is off). Backend data is kept either
+          way so re-enabling restores the section instantly. */}
+      {githubSettings.prSidebar && (
+        <div>
+          <button
+            className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors mb-2 hover:bg-accent/70 ${pullRequestsOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
+            onClick={() => setPullRequestsOpen(!pullRequestsOpen)}
+          >
+            {t(($) => $.detail.section_pull_requests)}
+            <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${pullRequestsOpen ? "rotate-90" : ""}`} />
+          </button>
+          {pullRequestsOpen && <div className="pl-2"><PullRequestList issueId={id} /></div>}
+        </div>
+      )}
 
       {/* Details */}
       <div>

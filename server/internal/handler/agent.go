@@ -231,6 +231,14 @@ type AgentTaskResponse struct {
 	ThreadIssueProjectTitle   string `json:"thread_issue_project_title,omitempty"`
 	ThreadIssueParentIssueID  string `json:"thread_issue_parent_issue_id,omitempty"`
 	ThreadIssueParentIssueKey string `json:"thread_issue_parent_issue_key,omitempty"`
+	// RequestingUserName + RequestingUserProfileDescription mirror the user
+	// the agent is acting on behalf of (see daemon/types.go). v1 sources them
+	// from the runtime owner so they're populated for daemon runtimes and
+	// empty otherwise. The daemon emits both into the brief under
+	// `## Requesting User`; the heading is skipped entirely when description
+	// is empty.
+	RequestingUserName               string `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string `json:"requesting_user_profile_description,omitempty"`
 	Kind                      string `json:"kind"` // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "channel_mention" | "thread_issue" | "direct" — used by the activity row to label tasks that have no linked issue
 }
 

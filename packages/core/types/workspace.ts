@@ -141,6 +141,13 @@ export interface User {
   starter_content_state: string | null;
   /** Preferred UI language. null means "follow client/system". */
   language: string | null;
+  /**
+   * Free-form self-description (role, stack, preferences). Injected into
+   * the agent brief so coding agents have cheap, durable context about
+   * who is requesting the work. Server always returns a string —
+   * NOT NULL DEFAULT '' at the column level, empty when unset.
+   */
+  profile_description: string;
   created_at: string;
   updated_at: string;
 }

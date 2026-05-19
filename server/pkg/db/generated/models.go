@@ -1423,6 +1423,7 @@ type User struct {
 	CloudWaitlistReason     pgtype.Text        `json:"cloud_waitlist_reason"`
 	StarterContentState     pgtype.Text        `json:"starter_content_state"`
 	Language                pgtype.Text        `json:"language"`
+	ProfileDescription      string             `json:"profile_description"`
 }
 
 type VerificationCode struct {

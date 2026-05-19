@@ -12,6 +12,12 @@ permissions:
   contents: write
   packages: write
 
+# Opt every JavaScript action in this workflow into Node 24 ahead of the
+# 2026-06-02 GitHub default. Silences "Node.js 20 actions are deprecated"
+# warnings (actions/setup-go@v5, pnpm/action-setup@v4, etc.).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   verify:
     runs-on: ubuntu-latest

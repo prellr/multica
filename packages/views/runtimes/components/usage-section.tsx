@@ -279,6 +279,11 @@ function WhenChart({
 
   const { dailyCostStack, dailyTokens } = useMemo(
     () => aggregateByDate(filtered),
+    // pricings is read by the aggregator through a custom-pricing-store
+    // closure — eslint can't see it across the function boundary and
+    // flags it as unused, but removing it stops the memo from
+    // recomputing on price changes (silent stale data). See line ~118.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [filtered, pricings],
   );
   const hourlyCost = useMemo(
@@ -287,6 +292,8 @@ function WhenChart({
         hour: Number(row.key),
         cost: row.cost,
       })),
+    // pricings dep: same store-closure reason as the memo above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [byHourRows, pricings],
   );
 
@@ -553,10 +560,15 @@ function CostByBlock({
 
   const byAgent = useMemo(
     () => aggregateCostByAgent(byAgentRows),
+    // pricings dep: store-closure use; see the matching note above the
+    // dailyCostStack memo. Removing it makes price changes invisible.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [byAgentRows, pricings],
   );
   const byModel = useMemo(
     () => aggregateCostByModel(usage),
+    // pricings dep: same store-closure reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [usage, pricings],
   );
 

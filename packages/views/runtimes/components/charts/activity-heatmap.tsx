@@ -171,6 +171,11 @@ export function ActivityHeatmap({ usage }: { usage: RuntimeUsage[] }) {
     };
 
     return { cells: cellsWithLevel, monthLabels: months, insights };
+    // pricings is read by the aggregators through a custom-pricing-store
+    // closure — eslint can't see across function boundaries and flags it
+    // as unused, but removing it stops the memo from recomputing on
+    // price changes (silent stale totalCost).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [usage, pricings]);
 
   const labelWidth = 28;

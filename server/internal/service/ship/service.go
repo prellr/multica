@@ -193,6 +193,16 @@ func (s *Service) SyncWorkspace(ctx context.Context, workspaceID pgtype.UUID) er
 }
 
 // upsertPR maps a gh.PullRequest into UpsertPullRequestParams and writes it.
+//
+// ci_status and review_decision are deliberately NOT written by this path.
+// Both columns are owned by webhook-driven writers (UpdatePullRequestCIStatus
+// fed by check_run / status events, UpdatePullRequestReviewDecision fed by
+// pull_request_review events). Before PR1 of the Ship Hub rebuild, this
+// sync path hard-coded both fields to empty string on every call — which
+// meant the 5-min reconciler tick blanked webhook-written state every sync
+// and the UI showed "CI pending" indefinitely for merged PRs (ROA-203).
+// If you need CI status here, fetch it through the webhook path or add a
+// targeted UpdatePullRequestCIStatus call AFTER the upsert.
 func (s *Service) upsertPR(
 	ctx context.Context,
 	workspaceID, projectID pgtype.UUID,
@@ -200,30 +210,6 @@ func (s *Service) upsertPR(
 	pr gh.PullRequest,
 ) error {
 	state := mapPRState(pr)
-
-	// Resolve CI status for OPEN PRs only — the merge-train gate
-	// (releaseEligibilityReason) only consults open PRs, and a
-	// closed/merged PR's head SHA is no longer interesting. Best-effort:
-	// a fetch failure leaves ci_status empty and the next sync corrects
-	// it; we never fail the whole sync over one PR's CI lookup
-	// (ROA-274).
-	ciStatus := ""
-	if state == db.PullRequestStateOpen {
-		owner, repo, perr := gh.ParseRepoURL(repoURL)
-		if perr != nil {
-			slog.Warn("ship: upsertPR could not fetch ci_status; leaving empty",
-				"workspace_id", uuidString(workspaceID),
-				"pr_number", pr.Number,
-				"error", perr)
-		} else if cs, cerr := s.Github.GetCIStatus(ctx, owner, repo, pr.Head.SHA); cerr != nil {
-			slog.Warn("ship: upsertPR could not fetch ci_status; leaving empty",
-				"workspace_id", uuidString(workspaceID),
-				"pr_number", pr.Number,
-				"error", cerr)
-		} else {
-			ciStatus = cs
-		}
-	}
 
 	labelsJSON, err := json.Marshal(pr.Labels)
 	if err != nil {
@@ -247,20 +233,15 @@ func (s *Service) upsertPR(
 		HeadSha:         pr.Head.SHA,
 		HtmlUrl:         pr.HTMLURL,
 		Body:            textOrEmpty(pr.Body),
-		// CI status resolved above (open PRs only; "" for closed/merged
-		// or on fetch failure). The frontend renders "unknown" for
-		// empty strings.
-		CiStatus:       pgtype.Text{String: ciStatus, Valid: true},
-		ReviewDecision: pgtype.Text{String: "", Valid: true},
-		Mergeable:      mapMergeable(pr.Mergeable),
-		Additions:      int32(pr.Additions),
-		Deletions:      int32(pr.Deletions),
-		ChangedFiles:   int32(pr.ChangedFiles),
-		Labels:         labelsJSON,
-		PrCreatedAt:    pgTime(pr.CreatedAt),
-		PrUpdatedAt:    pgTime(pr.UpdatedAt),
-		PrMergedAt:     pgTimePtr(pr.MergedAt),
-		PrClosedAt:     pgTimePtr(pr.ClosedAt),
+		Mergeable:       mapMergeable(pr.Mergeable),
+		Additions:       int32(pr.Additions),
+		Deletions:       int32(pr.Deletions),
+		ChangedFiles:    int32(pr.ChangedFiles),
+		Labels:          labelsJSON,
+		PrCreatedAt:     pgTime(pr.CreatedAt),
+		PrUpdatedAt:     pgTime(pr.UpdatedAt),
+		PrMergedAt:      pgTimePtr(pr.MergedAt),
+		PrClosedAt:      pgTimePtr(pr.ClosedAt),
 	}
 	_, err = s.Q.UpsertPullRequest(ctx, params)
 	return err

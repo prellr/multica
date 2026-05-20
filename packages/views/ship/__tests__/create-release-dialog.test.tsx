@@ -158,6 +158,41 @@ describe("CreateReleaseDialog", () => {
     ).toBeInTheDocument();
   });
 
+  it("does NOT block submit when a PR has CI pending (soft warning only)", () => {
+    render(
+      <CreateReleaseDialog
+        open
+        onOpenChange={() => {}}
+        projectId="p-1"
+        selectedPullRequests={[makePR({ ci_status: "pending" })]}
+      />,
+      { wrapper: Wrapper },
+    );
+    const submit = screen.getByTestId("release-submit");
+    expect(submit).not.toBeDisabled();
+    expect(screen.getByTestId("release-warnings")).toBeInTheDocument();
+    expect(
+      screen.getByText(/PR #1: CI is still pending/),
+    ).toBeInTheDocument();
+  });
+
+  it("still blocks submit when a PR has CI failure (hard block)", () => {
+    render(
+      <CreateReleaseDialog
+        open
+        onOpenChange={() => {}}
+        projectId="p-1"
+        selectedPullRequests={[makePR({ ci_status: "failure" })]}
+      />,
+      { wrapper: Wrapper },
+    );
+    const submit = screen.getByTestId("release-submit");
+    expect(submit).toBeDisabled();
+    expect(
+      screen.getByText(/PR #1 is not eligible.*CI failed/),
+    ).toBeInTheDocument();
+  });
+
   it("surfaces a soft warning when risk requires an approver but none is set", () => {
     render(
       <CreateReleaseDialog

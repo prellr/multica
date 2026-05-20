@@ -18,8 +18,8 @@ import (
 func TestReleaseEligibilityReason_CIGate(t *testing.T) {
 	openPR := func(ci string) db.PullRequest {
 		return db.PullRequest{
-			State:    db.PullRequestStateOpen,
-			IsDraft:  false,
+			State:     db.PullRequestStateOpen,
+			IsDraft:   false,
 			Mergeable: pgtype.Text{String: "MERGEABLE", Valid: true},
 			CiStatus:  pgtype.Text{String: ci, Valid: true},
 		}
@@ -35,13 +35,12 @@ func TestReleaseEligibilityReason_CIGate(t *testing.T) {
 			name:     "ci failure blocks",
 			pr:       openPR("failure"),
 			wantOK:   false,
-			wantsHas: "CI is failure",
+			wantsHas: "CI failed",
 		},
 		{
-			name:     "ci pending blocks",
-			pr:       openPR("pending"),
-			wantOK:   false,
-			wantsHas: "CI is pending",
+			name:   "ci pending is eligible (soft warning only)",
+			pr:     openPR("pending"),
+			wantOK: true,
 		},
 		{
 			name:   "ci success is eligible",

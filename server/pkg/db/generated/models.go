@@ -920,6 +920,56 @@ type IssueToLabel struct {
 	LabelID pgtype.UUID `json:"label_id"`
 }
 
+type McpServer struct {
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	Name                string             `json:"name"`
+	Transport           string             `json:"transport"`
+	Url                 pgtype.Text        `json:"url"`
+	Command             pgtype.Text        `json:"command"`
+	Args                []string           `json:"args"`
+	Scope               string             `json:"scope"`
+	AgentID             pgtype.UUID        `json:"agent_id"`
+	Required            bool               `json:"required"`
+	ReadOnly            bool               `json:"read_only"`
+	ApprovalRequiredFor string             `json:"approval_required_for"`
+	LastConnectedAt     pgtype.Timestamptz `json:"last_connected_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+type McpServerSecret struct {
+	ID             pgtype.UUID        `json:"id"`
+	ServerID       pgtype.UUID        `json:"server_id"`
+	Key            string             `json:"key"`
+	ValueEncrypted string             `json:"value_encrypted"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type McpServerToolAllowlist struct {
+	ID        pgtype.UUID        `json:"id"`
+	ServerID  pgtype.UUID        `json:"server_id"`
+	ToolName  string             `json:"tool_name"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type McpToolCallLog struct {
+	ID             pgtype.UUID        `json:"id"`
+	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
+	ServerID       pgtype.UUID        `json:"server_id"`
+	ServerName     string             `json:"server_name"`
+	NamespacedTool string             `json:"namespaced_tool"`
+	Classification string             `json:"classification"`
+	AgentID        pgtype.UUID        `json:"agent_id"`
+	RunID          pgtype.UUID        `json:"run_id"`
+	IssueID        pgtype.UUID        `json:"issue_id"`
+	ChannelID      pgtype.UUID        `json:"channel_id"`
+	ArgumentsJson  pgtype.Text        `json:"arguments_json"`
+	ResultStatus   string             `json:"result_status"`
+	ApprovalStatus pgtype.Text        `json:"approval_status"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
 type Member struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`

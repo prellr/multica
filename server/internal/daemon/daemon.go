@@ -2089,6 +2089,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		ProjectResources:        convertProjectResourcesForEnv(task.ProjectResources),
 		PeerAgents:              convertPeerAgentsForEnv(task.PeerAgents),
 		MemoryArtifacts:         convertMemoryArtifactsForEnv(task.MemoryArtifacts),
+		MCPServers:              convertMCPServersForEnv(task.MCPServers),
 		ChatSessionID:           task.ChatSessionID,
 		AutopilotRunID:          task.AutopilotRunID,
 		AutopilotID:             task.AutopilotID,
@@ -2966,6 +2967,28 @@ func convertMemoryArtifactsForEnv(artifacts []MemoryArtifactData) []execenv.Memo
 			AnchorID:   a.AnchorID,
 			UpdatedAt:  a.UpdatedAt,
 			VerifiedAt: a.VerifiedAt,
+		}
+	}
+	return result
+}
+
+func convertMCPServersForEnv(servers []MCPServerData) []execenv.MCPServerEnvEntry {
+	if len(servers) == 0 {
+		return nil
+	}
+	result := make([]execenv.MCPServerEnvEntry, len(servers))
+	for i, s := range servers {
+		result[i] = execenv.MCPServerEnvEntry{
+			Name:      s.Name,
+			Transport: s.Transport,
+			URL:       s.URL,
+			Command:   s.Command,
+			Args:      s.Args,
+			Env:       s.Env,
+			Headers:   s.Headers,
+			Allowlist: s.Allowlist,
+			Required:  s.Required,
+			ReadOnly:  s.ReadOnly,
 		}
 	}
 	return result

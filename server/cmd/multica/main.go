@@ -42,6 +42,7 @@ func init() {
 	labelCmd.GroupID = groupCore
 	agentCmd.GroupID = groupCore
 	autopilotCmd.GroupID = groupCore
+	mcpRegistryCmd.GroupID = groupCore
 	workspaceCmd.GroupID = groupCore
 	repoCmd.GroupID = groupCore
 	skillCmd.GroupID = groupCore
@@ -68,6 +69,7 @@ func init() {
 	rootCmd.AddCommand(labelCmd)
 	rootCmd.AddCommand(agentCmd)
 	rootCmd.AddCommand(autopilotCmd)
+	rootCmd.AddCommand(mcpRegistryCmd)
 	rootCmd.AddCommand(workspaceCmd)
 	rootCmd.AddCommand(repoCmd)
 	rootCmd.AddCommand(skillCmd)

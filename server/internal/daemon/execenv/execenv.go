@@ -83,6 +83,7 @@ type TaskContextForEnv struct {
 	ProjectResources        []ProjectResourceForEnv // resources attached to the project
 	PeerAgents              []PeerAgentForEnv       // other non-archived agents in this workspace, surfaced to orchestrators so they can route by name
 	MemoryArtifacts         []MemoryArtifactForEnv  // wiki/notes/runbooks/decisions anchored to this issue or its project
+	MCPServers              []MCPServerEnvEntry     // workspace/agent-scoped MCP servers written into .mcp.json
 	ChatSessionID           string                  // non-empty for chat tasks
 	AutopilotRunID          string                  // non-empty for autopilot run_only tasks
 	AutopilotID             string
@@ -207,6 +208,9 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 	if err := writeContextFiles(workDir, params.Provider, params.Task); err != nil {
 		return nil, fmt.Errorf("execenv: write context files: %w", err)
 	}
+	if err := InjectMCPServers(params.Task.MCPServers, workDir); err != nil {
+		return nil, fmt.Errorf("execenv: inject mcp servers: %w", err)
+	}
 
 	// For Codex, set up a per-task CODEX_HOME seeded from ~/.codex/ with skills.
 	if params.Provider == "codex" {
@@ -266,6 +270,9 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 	// Refresh context files (issue_context.md, skills).
 	if err := writeContextFiles(params.WorkDir, params.Provider, params.Task); err != nil {
 		logger.Warn("execenv: refresh context files failed", "error", err)
+	}
+	if err := InjectMCPServers(params.Task.MCPServers, params.WorkDir); err != nil {
+		logger.Warn("execenv: refresh mcp servers failed", "error", err)
 	}
 
 	// Restore CodexHome for Codex provider — the per-task codex-home directory

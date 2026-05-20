@@ -177,6 +177,7 @@ type AgentTaskResponse struct {
 	PeerAgents              []PeerAgentData       `json:"peer_agents,omitempty"`          // other agents in the same workspace (excluding the claiming agent), so orchestrators can route to peers by name/id
 	IsOrchestratorWake      bool                  `json:"is_orchestrator_wake,omitempty"` // true when the claiming agent is the workspace's configured orchestrator AND the trigger was an agent-authored comment. Tells the prompt builder to render the orchestrator review-and-act block instead of the generic "decide whether to reply" block.
 	MemoryArtifacts         []MemoryArtifactData  `json:"memory_artifacts,omitempty"`     // wiki/note/runbook/decision artifacts anchored to this issue or its project
+	MCPServers              []MCPServerEnvData    `json:"mcp_servers,omitempty"`          // workspace/agent-scoped MCP servers mounted into the daemon workdir as .mcp.json
 	CreatedAt               string                `json:"created_at"`
 	PriorSessionID          string                `json:"prior_session_id,omitempty"`          // session ID from a previous task on same issue
 	PriorWorkDir            string                `json:"prior_work_dir,omitempty"`            // work_dir from a previous task on same issue

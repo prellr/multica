@@ -1877,6 +1877,8 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// failure to list logs and continues with an empty list rather than
 	// failing the claim.
 	if workspaceUUID, err := util.ParseUUID(resp.WorkspaceID); err == nil {
+		resp.MCPServers = h.loadMCPServersForClaim(r.Context(), workspaceUUID, task.AgentID)
+
 		if peers, err := h.Queries.ListAgents(r.Context(), workspaceUUID); err == nil {
 			out := make([]PeerAgentData, 0, len(peers))
 			for _, p := range peers {

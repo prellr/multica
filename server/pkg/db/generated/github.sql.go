@@ -396,7 +396,7 @@ RETURNING id, workspace_id, installation_id, repo_owner, repo_name, pr_number, t
 
 type UpsertGitHubPullRequestParams struct {
 	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	InstallationID  int64              `json:"installation_id"`
+	InstallationID  pgtype.Int8        `json:"installation_id"`
 	RepoOwner       string             `json:"repo_owner"`
 	RepoName        string             `json:"repo_name"`
 	PrNumber        int32              `json:"pr_number"`
@@ -419,6 +419,91 @@ func (q *Queries) UpsertGitHubPullRequest(ctx context.Context, arg UpsertGitHubP
 	row := q.db.QueryRow(ctx, upsertGitHubPullRequest,
 		arg.WorkspaceID,
 		arg.InstallationID,
+		arg.RepoOwner,
+		arg.RepoName,
+		arg.PrNumber,
+		arg.Title,
+		arg.State,
+		arg.HtmlUrl,
+		arg.PrCreatedAt,
+		arg.PrUpdatedAt,
+		arg.Branch,
+		arg.AuthorLogin,
+		arg.AuthorAvatarUrl,
+		arg.MergedAt,
+		arg.ClosedAt,
+	)
+	var i GithubPullRequest
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InstallationID,
+		&i.RepoOwner,
+		&i.RepoName,
+		&i.PrNumber,
+		&i.Title,
+		&i.State,
+		&i.HtmlUrl,
+		&i.Branch,
+		&i.AuthorLogin,
+		&i.AuthorAvatarUrl,
+		&i.MergedAt,
+		&i.ClosedAt,
+		&i.PrCreatedAt,
+		&i.PrUpdatedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertGitHubPullRequestFromShipHub = `-- name: UpsertGitHubPullRequestFromShipHub :one
+INSERT INTO github_pull_request (
+    workspace_id, repo_owner, repo_name, pr_number,
+    title, state, html_url, branch, author_login, author_avatar_url,
+    merged_at, closed_at, pr_created_at, pr_updated_at
+) VALUES (
+    $1, $2, $3, $4,
+    $5, $6, $7, $10, $11, $12,
+    $13, $14, $8, $9
+)
+ON CONFLICT (workspace_id, repo_owner, repo_name, pr_number) DO UPDATE SET
+    title          = EXCLUDED.title,
+    state          = EXCLUDED.state,
+    html_url       = EXCLUDED.html_url,
+    branch         = EXCLUDED.branch,
+    author_login   = EXCLUDED.author_login,
+    author_avatar_url = EXCLUDED.author_avatar_url,
+    merged_at      = EXCLUDED.merged_at,
+    closed_at      = EXCLUDED.closed_at,
+    pr_updated_at  = EXCLUDED.pr_updated_at,
+    updated_at     = now()
+RETURNING id, workspace_id, installation_id, repo_owner, repo_name, pr_number, title, state, html_url, branch, author_login, author_avatar_url, merged_at, closed_at, pr_created_at, pr_updated_at, created_at, updated_at
+`
+
+type UpsertGitHubPullRequestFromShipHubParams struct {
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	RepoOwner       string             `json:"repo_owner"`
+	RepoName        string             `json:"repo_name"`
+	PrNumber        int32              `json:"pr_number"`
+	Title           string             `json:"title"`
+	State           string             `json:"state"`
+	HtmlUrl         string             `json:"html_url"`
+	PrCreatedAt     pgtype.Timestamptz `json:"pr_created_at"`
+	PrUpdatedAt     pgtype.Timestamptz `json:"pr_updated_at"`
+	Branch          pgtype.Text        `json:"branch"`
+	AuthorLogin     pgtype.Text        `json:"author_login"`
+	AuthorAvatarUrl pgtype.Text        `json:"author_avatar_url"`
+	MergedAt        pgtype.Timestamptz `json:"merged_at"`
+	ClosedAt        pgtype.Timestamptz `json:"closed_at"`
+}
+
+// Bridge path: mirrors a Ship Hub pull_request row into github_pull_request
+// so the issue panel can surface it without the GitHub App being installed.
+// installation_id is left NULL (no GitHub App in this path).
+func (q *Queries) UpsertGitHubPullRequestFromShipHub(ctx context.Context, arg UpsertGitHubPullRequestFromShipHubParams) (GithubPullRequest, error) {
+	row := q.db.QueryRow(ctx, upsertGitHubPullRequestFromShipHub,
+		arg.WorkspaceID,
 		arg.RepoOwner,
 		arg.RepoName,
 		arg.PrNumber,

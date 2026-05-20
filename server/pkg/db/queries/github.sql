@@ -65,6 +65,32 @@ ON CONFLICT (workspace_id, repo_owner, repo_name, pr_number) DO UPDATE SET
     updated_at = now()
 RETURNING *;
 
+-- name: UpsertGitHubPullRequestFromShipHub :one
+-- Bridge path: mirrors a Ship Hub pull_request row into github_pull_request
+-- so the issue panel can surface it without the GitHub App being installed.
+-- installation_id is left NULL (no GitHub App in this path).
+INSERT INTO github_pull_request (
+    workspace_id, repo_owner, repo_name, pr_number,
+    title, state, html_url, branch, author_login, author_avatar_url,
+    merged_at, closed_at, pr_created_at, pr_updated_at
+) VALUES (
+    $1, $2, $3, $4,
+    $5, $6, $7, sqlc.narg('branch'), sqlc.narg('author_login'), sqlc.narg('author_avatar_url'),
+    sqlc.narg('merged_at'), sqlc.narg('closed_at'), $8, $9
+)
+ON CONFLICT (workspace_id, repo_owner, repo_name, pr_number) DO UPDATE SET
+    title          = EXCLUDED.title,
+    state          = EXCLUDED.state,
+    html_url       = EXCLUDED.html_url,
+    branch         = EXCLUDED.branch,
+    author_login   = EXCLUDED.author_login,
+    author_avatar_url = EXCLUDED.author_avatar_url,
+    merged_at      = EXCLUDED.merged_at,
+    closed_at      = EXCLUDED.closed_at,
+    pr_updated_at  = EXCLUDED.pr_updated_at,
+    updated_at     = now()
+RETURNING *;
+
 -- name: GetGitHubPullRequest :one
 SELECT * FROM github_pull_request
 WHERE workspace_id = $1 AND repo_owner = $2 AND repo_name = $3 AND pr_number = $4;

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/mention"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -197,10 +198,23 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 			taskUUID, parseErr := util.ParseUUID(taskIDHeader)
 			if parseErr == nil {
 				task, err := h.Queries.GetAgentTask(r.Context(), taskUUID)
-				if err == nil && task.TriggerCommentID.Valid && uuidToString(task.IssueID) == uuidToString(issue.ID) {
-					if uuidToString(parentID) != uuidToString(task.TriggerCommentID) {
-						writeError(w, http.StatusConflict,
-							"parent_id must equal this task's trigger comment id ("+uuidToString(task.TriggerCommentID)+")")
+				if err == nil && task.IssueID.Valid && uuidToString(task.IssueID) == uuidToString(issue.ID) {
+					if task.TriggerCommentID.Valid {
+						if uuidToString(parentID) != uuidToString(task.TriggerCommentID) {
+							writeError(w, http.StatusConflict,
+								"parent_id must equal this task's trigger comment id ("+uuidToString(task.TriggerCommentID)+")")
+							return
+						}
+					}
+					noAction, checkErr := service.HasSquadLeaderNoActionEvaluationForTask(r.Context(), h.Queries, task)
+					if checkErr != nil {
+						slog.Warn("checking squad leader no_action evaluation failed", append(logger.RequestAttrs(r),
+							"error", checkErr,
+							"task_id", taskIDHeader,
+							"issue_id", issueID,
+						)...)
+					} else if noAction {
+						writeError(w, http.StatusConflict, "squad leader recorded no_action; comments are not allowed for this task")
 						return
 					}
 				}
@@ -287,8 +301,10 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Squad trigger: if the issue is assigned to a squad, trigger the squad leader.
-	// Skip when the comment author is a squad member (prevent internal loops).
-	if h.shouldEnqueueSquadLeaderOnComment(r.Context(), issue, authorType, authorID) {
+	// Skip when the comment author is the leader (prevent internal loops), or
+	// when a member explicitly @mentions anyone (agent/member/squad/all) — that
+	// counts as deliberate routing and the leader stays out.
+	if h.shouldEnqueueSquadLeaderOnComment(r.Context(), issue, comment.Content, authorType, authorID) {
 		h.enqueueSquadLeaderTask(r.Context(), issue, comment.ID, authorType, authorID)
 	}
 
@@ -498,6 +514,8 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 			h.enqueueAgentMention(ctx, issue, comment, m.ID, authorType, authorID, wsID)
 		case "broadcast":
 			h.enqueueBroadcastMention(ctx, issue, comment, m.BroadcastTag(), authorType, authorID, wsID)
+		case "squad":
+			h.enqueueSquadLeaderMention(ctx, issue, comment, m.ID, authorType, authorID, wsID)
 		}
 	}
 }
@@ -563,6 +581,50 @@ func (h *Handler) enqueueAgentMention(ctx context.Context, issue db.Issue, comme
 	}
 	if _, err := h.TaskService.EnqueueTaskForMention(ctx, issue, agentUUID, comment.ID); err != nil {
 		slog.Warn("enqueue mention agent task failed", "issue_id", uuidToString(issue.ID), "agent_id", agentID, "error", err)
+	}
+}
+
+// enqueueSquadLeaderMention resolves an @squad mention to the squad's leader
+// agent and enqueues a task for it (subject to visibility, dedup, and
+// self-trigger guards). Mirrors enqueueAgentMention but resolves the leader
+// from the squad row first.
+func (h *Handler) enqueueSquadLeaderMention(ctx context.Context, issue db.Issue, comment db.Comment, squadID, authorType, authorID, wsID string) {
+	squadUUID := parseUUID(squadID)
+	squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
+		ID:          squadUUID,
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err != nil {
+		return
+	}
+	leaderID := squad.LeaderID
+	// Prevent self-trigger only when the agent's last activity on this issue
+	// was itself a leader task. An agent that holds both the leader and a
+	// worker role in the squad must still wake its leader role after posting
+	// a comment from its worker task (MUL-2218).
+	if authorType == "agent" && authorID == uuidToString(leaderID) &&
+		h.lastTaskWasLeader(ctx, issue.ID, leaderID) {
+		return
+	}
+	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+		ID:          leaderID,
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+		return
+	}
+	if !h.canAccessPrivateAgent(ctx, agent, authorType, authorID, wsID) {
+		return
+	}
+	hasPending, err := h.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
+		IssueID: issue.ID,
+		AgentID: leaderID,
+	})
+	if err != nil || hasPending {
+		return
+	}
+	if _, err := h.TaskService.EnqueueTaskForSquadLeader(ctx, issue, leaderID, comment.ID); err != nil {
+		slog.Warn("enqueue squad leader mention task failed", "issue_id", uuidToString(issue.ID), "squad_id", squadID, "error", err)
 	}
 }
 

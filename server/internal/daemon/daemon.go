@@ -26,6 +26,20 @@ import (
 // server refresh.
 var ErrRepoNotConfigured = errors.New("repo is not configured for this workspace")
 
+// taskRunner executes a single agent task and returns the result.
+// Extracted as an interface so tests can inject a fake without spawning real
+// agent processes, while keeping test scaffolding out of the production struct.
+type taskRunner interface {
+	run(ctx context.Context, task Task, provider string, slot int, log *slog.Logger) (TaskResult, error)
+}
+
+// taskRunnerFunc adapts a plain function to the taskRunner interface.
+type taskRunnerFunc func(context.Context, Task, string, int, *slog.Logger) (TaskResult, error)
+
+func (f taskRunnerFunc) run(ctx context.Context, task Task, provider string, slot int, log *slog.Logger) (TaskResult, error) {
+	return f(ctx, task, provider, slot, log)
+}
+
 var (
 	isBrewInstall        = cli.IsBrewInstall
 	getBrewPrefix        = cli.GetBrewPrefix
@@ -106,6 +120,9 @@ type Daemon struct {
 	// goroutine can race against t.TempDir cleanup, leaving a partially
 	// deleted bare clone and an unrelated `not empty` cleanup failure.
 	bgSyncs sync.WaitGroup
+
+	runner             taskRunner    // executes agent tasks; set to d.runTask by New(), overridable in tests
+	cancelPollInterval time.Duration // how often handleTask polls for server-side cancellation; overridable in tests
 }
 
 // New creates a new Daemon instance.
@@ -115,7 +132,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 	// Tag every daemon HTTP request with the daemon's CLI version so the
 	// server can split logs/metrics by client version (parallel to the CLI).
 	client.SetVersion(cfg.CLIVersion)
-	return &Daemon{
+	d := &Daemon{
 		cfg:                   cfg,
 		client:                client,
 		repoCache:             repocache.New(cacheRoot, logger),
@@ -128,7 +145,10 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		activeEnvRoots:        make(map[string]int),
 		runtimeGoneInflight:   make(map[string]struct{}),
 		reregisterNextAttempt: make(map[string]time.Time),
+		cancelPollInterval:    5 * time.Second,
 	}
+	d.runner = taskRunnerFunc(d.runTask)
+	return d
 }
 
 // setAgentVersion records the detected CLI version for an agent provider so
@@ -505,6 +525,19 @@ func (d *Daemon) Run(ctx context.Context) error {
 		logFields = append(logFields, "profile", d.cfg.Profile)
 	}
 	d.logger.Info("starting daemon", logFields...)
+	d.logger.Debug("daemon config resolved",
+		"daemon_id", d.cfg.DaemonID,
+		"device_name", d.cfg.DeviceName,
+		"workspaces_root", d.cfg.WorkspacesRoot,
+		"health_port", d.cfg.HealthPort,
+		"poll_interval", d.cfg.PollInterval,
+		"heartbeat_interval", d.cfg.HeartbeatInterval,
+		"agent_timeout", d.cfg.AgentTimeout,
+		"idle_watchdog", d.cfg.AgentIdleWatchdog,
+		"max_concurrent_tasks", d.cfg.MaxConcurrentTasks,
+		"gc_enabled", d.cfg.GCEnabled,
+		"launched_by", d.cfg.LaunchedBy,
+	)
 
 	// Load auth token from CLI config.
 	if err := d.resolveAuth(); err != nil {
@@ -533,7 +566,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.watchdogLoop(ctx)
 	go d.gcLoop(ctx)
 	go d.serveHealth(ctx, healthLn, time.Now())
-	return d.pollLoop(ctx, taskWakeups)
+	d.logger.Debug("background loops launched (workspace-sync, task-wakeup, heartbeat, gc, auto-update, health)")
+	err = d.pollLoop(ctx, taskWakeups)
+	d.logger.Debug("daemon main loop returning", "error", err)
+	return err
 }
 
 // RestartBinary returns the path to the new binary if the daemon needs to restart
@@ -546,9 +582,11 @@ func (d *Daemon) RestartBinary() string {
 func (d *Daemon) deregisterRuntimes() {
 	runtimeIDs := d.allRuntimeIDs()
 	if len(runtimeIDs) == 0 {
+		d.logger.Debug("deregister: no runtimes to deregister")
 		return
 	}
 
+	d.logger.Debug("deregistering runtimes on shutdown", "count", len(runtimeIDs), "runtime_ids", runtimeIDs)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -575,6 +613,7 @@ func (d *Daemon) resolveAuth() error {
 	}
 	d.client.SetToken(cfg.Token)
 	d.logger.Info("authenticated")
+	d.logger.Debug("auth token loaded", "profile", d.cfg.Profile, "token_len", len(cfg.Token))
 	return nil
 }
 
@@ -600,6 +639,7 @@ func (d *Daemon) findRuntime(id string) *Runtime {
 }
 
 func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string) (*RegisterResponse, error) {
+	d.logger.Debug("registering runtimes for workspace", "workspace_id", workspaceID, "agent_count", len(d.cfg.Agents))
 	var runtimes []map[string]string
 	for name, entry := range d.cfg.Agents {
 		version, err := detectAgentVersion(ctx, entry.Path)
@@ -612,6 +652,7 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 			continue
 		}
 		d.setAgentVersion(name, version)
+		d.logger.Debug("agent version detected", "name", name, "version", version, "path", entry.Path)
 		displayName := strings.ToUpper(name[:1]) + name[1:]
 		if d.cfg.DeviceName != "" {
 			displayName = fmt.Sprintf("%s (%s)", displayName, d.cfg.DeviceName)
@@ -645,6 +686,7 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 	if len(resp.Runtimes) == 0 {
 		return nil, fmt.Errorf("register runtimes: empty response")
 	}
+	d.logger.Debug("register response", "workspace_id", workspaceID, "runtimes", len(resp.Runtimes), "repos", len(resp.Repos), "repos_version", resp.ReposVersion)
 	return resp, nil
 }
 
@@ -942,6 +984,7 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list workspaces: %w", err)
 	}
+	d.logger.Debug("workspace sync: fetched workspaces", "count", len(workspaces))
 
 	apiIDs := make(map[string]string, len(workspaces)) // id -> name
 	for _, ws := range workspaces {
@@ -1031,6 +1074,9 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 
 	if len(d.allRuntimeIDs()) == 0 && registered == 0 && len(workspaces) > 0 {
 		return fmt.Errorf("failed to register runtimes for any of the %d workspace(s)", len(workspaces))
+	}
+	if registered > 0 || removed > 0 {
+		d.logger.Debug("workspace sync done", "registered", registered, "removed", removed, "tracked", len(apiIDs))
 	}
 	return nil
 }
@@ -1123,8 +1169,10 @@ func (d *Daemon) runHeartbeatTick(ctx context.Context, rid string) {
 	// automatically on the next tick — that is the fallback the WS path
 	// relies on.
 	if d.wsHeartbeatRecentlyAcked(rid) {
+		d.logger.Debug("heartbeat: skipping HTTP tick, WS recently acked", "runtime_id", rid)
 		return
 	}
+	d.logger.Debug("heartbeat: HTTP tick", "runtime_id", rid)
 	resp, err := d.client.SendHeartbeat(ctx, rid)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -1159,6 +1207,15 @@ func (d *Daemon) runHeartbeatTick(ctx context.Context, rid string) {
 func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, resp *HeartbeatResponse) {
 	if resp == nil {
 		return
+	}
+	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil {
+		d.logger.Debug("heartbeat: pending actions",
+			"runtime_id", runtimeID,
+			"update", resp.PendingUpdate != nil,
+			"model_list", resp.PendingModelList != nil,
+			"local_skills", resp.PendingLocalSkills != nil,
+			"local_skill_import", resp.PendingLocalSkillImport != nil,
+		)
 	}
 	if resp.PendingUpdate != nil {
 		go d.handleUpdate(ctx, runtimeID, resp.PendingUpdate)
@@ -1614,6 +1671,7 @@ func (d *Daemon) pollLoop(ctx context.Context, taskWakeups <-chan struct{}) erro
 			// Fan out to every runtime poller. Any of them might have a queued
 			// task; the per-poller wakeup channel coalesces (cap 1) so a burst
 			// of wake-ups doesn't pile up.
+			d.logger.Debug("task wakeup: fanning out to pollers", "pollers", len(pollers))
 			for _, h := range pollers {
 				select {
 				case h.wakeup <- struct{}{}:
@@ -1802,6 +1860,17 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	} else {
 		taskLog.Info("picked task", "issue", task.IssueID, "agent", agentName, "provider", provider)
 	}
+	taskLog.Debug("task context",
+		"workspace_id", task.WorkspaceID,
+		"runtime_id", task.RuntimeID,
+		"agent_id", task.AgentID,
+		"repos", len(task.Repos),
+		"project_id", task.ProjectID,
+		"autopilot_run_id", task.AutopilotRunID,
+		"trigger_comment_id", task.TriggerCommentID,
+		"resume_session", task.PriorSessionID != "",
+		"reuse_workdir", task.PriorWorkDir != "",
+	)
 
 	if err := d.client.StartTask(ctx, task.ID); err != nil {
 		taskLog.Error("start task failed", "error", err)
@@ -1819,7 +1888,14 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 
-	cancelledByPoll := d.watchTaskCancellation(runCtx, task.ID, 5*time.Second, taskLog)
+	// Poll interval is d.cancelPollInterval (5s in production, reduced in tests
+	// via direct field override). Guard against zero so a misconfigured daemon
+	// doesn't panic time.NewTicker.
+	pollInterval := d.cancelPollInterval
+	if pollInterval == 0 {
+		pollInterval = 5 * time.Second
+	}
+	cancelledByPoll := d.watchTaskCancellation(runCtx, task.ID, pollInterval, taskLog)
 	go func() {
 		select {
 		case <-cancelledByPoll:
@@ -1828,7 +1904,18 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		}
 	}()
 
-	result, err := d.runTask(runCtx, task, provider, slot, taskLog)
+	result, err := d.runner.run(runCtx, task, provider, slot, taskLog)
+
+	// Report usage before any early return — the agent accumulates tokens
+	// whether the task completes, errors, or is cancelled mid-run by the poll
+	// goroutine. Both claude.go and codex.go populate result.Usage even when
+	// runCtx is cancelled, so dropping this on the cancelled path silently
+	// under-reports billing.
+	if len(result.Usage) > 0 {
+		if usageErr := d.client.ReportTaskUsage(ctx, task.ID, result.Usage); usageErr != nil {
+			taskLog.Warn("report task usage failed", "error", usageErr)
+		}
+	}
 
 	// Check if we were cancelled by the polling goroutine.
 	select {
@@ -1857,13 +1944,6 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	if status, err := d.client.GetTaskStatus(ctx, task.ID); shouldInterruptAgent(status, err) {
 		taskLog.Info("task cancelled during execution, discarding result", "status", status, "error", err)
 		return
-	}
-
-	// Report usage independently so it's captured even for failed/blocked tasks.
-	if len(result.Usage) > 0 {
-		if err := d.client.ReportTaskUsage(ctx, task.ID, result.Usage); err != nil {
-			taskLog.Warn("report task usage failed", "error", err)
-		}
 	}
 
 	d.reportTaskResult(ctx, task.ID, result, taskLog)
@@ -2031,6 +2111,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		ChannelAuthorType:     task.TriggerAuthorType,
 		ChannelAuthorName:     task.TriggerAuthorName,
 		ChannelHistory:        convertChannelHistoryForEnv(task.ChannelHistory),
+		IsSquadLeader:         strings.Contains(instructions, "## Squad Operating Protocol"),
 	}
 
 	// Mark candidate env roots as active before any env work so the GC loop
@@ -2051,8 +2132,18 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Try to reuse the workdir from a previous task on the same (agent, issue) pair.
 	var env *execenv.Environment
 	codexVersion := d.agentVersion("codex")
+	openclawBin := ""
+	if provider == "openclaw" {
+		openclawBin = entry.Path
+	}
 	if task.PriorWorkDir != "" {
-		env = execenv.Reuse(task.PriorWorkDir, provider, codexVersion, taskCtx, d.logger)
+		env = execenv.Reuse(execenv.ReuseParams{
+			WorkDir:      task.PriorWorkDir,
+			Provider:     provider,
+			CodexVersion: codexVersion,
+			OpenclawBin:  openclawBin,
+			Task:         taskCtx,
+		}, d.logger)
 	}
 	if env == nil {
 		var err error
@@ -2063,6 +2154,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			AgentName:      agentName,
 			Provider:       provider,
 			CodexVersion:   codexVersion,
+			OpenclawBin:    openclawBin,
 			Task:           taskCtx,
 		}, d.logger)
 		if err != nil {
@@ -2127,6 +2219,22 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// without polluting the system ~/.codex/skills/.
 	if env.CodexHome != "" {
 		agentEnv["CODEX_HOME"] = env.CodexHome
+	}
+	// Point OpenClaw at the per-task synthesized config. The config pins
+	// agents.defaults.workspace (and any agents.list[].workspace) to the
+	// task workdir, so the CLI's native skill scanner picks up the per-task
+	// skills written under {workDir}/skills/. Falls back silently when the
+	// preparer didn't run (non-openclaw provider, or write failure).
+	if env.OpenclawConfigPath != "" {
+		agentEnv["OPENCLAW_CONFIG_PATH"] = env.OpenclawConfigPath
+	}
+	// Grant the wrapper config permission to $include the user's active
+	// config across directories. OpenClaw's $include defaults to confining
+	// resolution to the wrapper's own directory; without this, the
+	// wrapper-out-of-envRoot $include into ~/.openclaw/openclaw.json is
+	// rejected and the run boots with no user-registered agents.
+	if rootsValue, ok := composeOpenclawIncludeRoots(env.OpenclawIncludeRoot, os.Getenv("OPENCLAW_INCLUDE_ROOTS")); ok {
+		agentEnv["OPENCLAW_INCLUDE_ROOTS"] = rootsValue
 	}
 	// Inject user-configured custom environment variables (e.g. ANTHROPIC_API_KEY,
 	// ANTHROPIC_BASE_URL for router/proxy mode, or CLAUDE_CODE_USE_BEDROCK for
@@ -2199,8 +2307,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	// Some providers do not reliably load the per-task runtime config files we
 	// write into the task workdir:
-	//   - openclaw loads bootstrap files (AGENTS.md, SOUL.md, ...) from its own
-	//     workspace dir rather than the task workdir.
+	//   - openclaw is pinned to the task workdir via the per-task config we
+	//     synthesize (see prepareOpenclawConfig), so AGENTS.md / .agent_context/
+	//     in the workdir ARE picked up by the CLI. Inline injection is retained
+	//     as a belt-and-suspenders for older openclaw releases until that load
+	//     path stabilises in production; remove this once a release tracks the
+	//     workdir bootstrap reliably end-to-end.
 	//   - hermes is driven through ACP and starts from a long-lived Hermes home;
 	//     deployments that cross a wrapper/container boundary can miss the
 	//     task-workdir AGENTS.md even when the prompt itself is delivered.
@@ -2215,6 +2327,18 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if providerNeedsInlineSystemPrompt(provider) {
 		execOpts.SystemPrompt = runtimeBrief
 	}
+
+	taskLog.Debug("invoking backend",
+		"provider", provider,
+		"model", model,
+		"prompt_bytes", len(prompt),
+		"custom_args", len(customArgs),
+		"extra_args", len(extraArgs),
+		"mcp_config", len(mcpConfig) > 0,
+		"inline_system_prompt", execOpts.SystemPrompt != "",
+		"resume_session", execOpts.ResumeSessionID != "",
+		"timeout", execOpts.Timeout,
+	)
 
 	result, tools, err := d.executeAndDrain(ctx, backend, prompt, execOpts, taskLog, task.ID)
 	if err != nil {
@@ -2243,6 +2367,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		"status", result.Status,
 		"duration", elapsed.String(),
 		"tools", tools,
+	)
+	taskLog.Debug("agent result detail",
+		"status", result.Status,
+		"output_bytes", len(result.Output),
+		"session_id", result.SessionID,
+		"models_with_usage", len(result.Usage),
+		"agent_error", result.Error,
 	)
 
 	// Convert agent usage map to task usage entries.
@@ -2325,6 +2456,25 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			FailureReason: "timeout",
 			Usage:         usageEntries,
 		}, nil
+	case "idle_watchdog":
+		// The idle watchdog force-stopped the run because the backend
+		// went silent (e.g. claude blocked on a tool call against a
+		// frozen child process). Route through the blocked path with a
+		// dedicated failure_reason so the run leaves "running" state and
+		// operators can tell idle-stop apart from a real timeout.
+		comment := result.Error
+		if comment == "" {
+			comment = idleWatchdogReason(d.cfg.AgentIdleWatchdog)
+		}
+		return TaskResult{
+			Status:        "blocked",
+			Comment:       comment,
+			SessionID:     result.SessionID,
+			WorkDir:       env.WorkDir,
+			EnvRoot:       env.RootDir,
+			FailureReason: "idle_watchdog",
+			Usage:         usageEntries,
+		}, nil
 	case "cancelled":
 		// Server cancelled the task (e.g. issue reassignment, user cancel).
 		// handleTask's cancelledByPoll branch already discards this result,
@@ -2377,10 +2527,20 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 // executeAndDrain runs a backend, drains its message stream (forwarding to the
 // server), and waits for the final result.
 func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, prompt string, opts agent.ExecOptions, taskLog *slog.Logger, taskID string) (agent.Result, int32, error) {
-	session, err := backend.Execute(ctx, prompt, opts)
+	// Wrap the caller's ctx so the idle watchdog (below) can interrupt both
+	// the agent subprocess (via the ctx passed to backend.Execute) AND the
+	// drain loop with a single cancel. Without this layer the backend would
+	// stay tied to the parent ctx and our cancellation could only abort
+	// drain, leaving the subprocess running.
+	agentCtx, agentCancel := context.WithCancel(ctx)
+	defer agentCancel()
+
+	session, err := backend.Execute(agentCtx, prompt, opts)
 	if err != nil {
+		taskLog.Debug("backend execute returned error", "error", err)
 		return agent.Result{}, 0, err
 	}
+	taskLog.Debug("backend started, draining messages")
 
 	// Create an independent drain deadline so we don't block forever if the
 	// backend's internal timeout fails to produce a Result (e.g. scanner
@@ -2390,10 +2550,29 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 	if opts.Timeout == 0 {
 		drainTimeout = 21 * time.Minute
 	}
-	drainCtx, drainCancel := context.WithTimeout(ctx, drainTimeout)
+	drainCtx, drainCancel := context.WithTimeout(agentCtx, drainTimeout)
 	defer drainCancel()
 
 	var toolCount atomic.Int32
+	// lastActivityAt records (as unix nanos) when the drain loop most
+	// recently received a message from the backend. The idle watchdog
+	// reads this to decide whether the agent has gone silent for too long.
+	// Initialise to the start so a backend that never emits a single
+	// message also trips the watchdog.
+	var lastActivityAt atomic.Int64
+	lastActivityAt.Store(time.Now().UnixNano())
+	// inFlightTools counts tool_use messages that haven't yet been paired
+	// with a matching tool_result. A non-zero count means the agent is
+	// legitimately waiting on a tool (e.g. `npm install`, `docker build`)
+	// that may run far longer than the idle window without emitting any
+	// message — so the watchdog must not interpret that silence as a hang.
+	var inFlightTools atomic.Int32
+	var idleWatchdogFired atomic.Bool
+	idleWindow := d.cfg.AgentIdleWatchdog
+	if idleWindow > 0 {
+		go d.runIdleWatchdog(agentCtx, idleWindow, &lastActivityAt, &inFlightTools, &idleWatchdogFired, agentCancel, session.Messages, taskLog, taskID)
+	}
+
 	go func() {
 		var seq atomic.Int32
 		var mu sync.Mutex
@@ -2459,6 +2638,12 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 				if !ok {
 					goto drainDone
 				}
+				// Stamp activity as soon as a message lands. The idle
+				// watchdog reads this to decide whether the backend has
+				// gone silent — stamping before processing makes sure a
+				// slow downstream call (mu.Lock contention, batch resize)
+				// can't be misattributed to backend silence.
+				lastActivityAt.Store(time.Now().UnixNano())
 				switch msg.Type {
 				case agent.MessageStatus:
 					// Persist the session/work_dir as soon as the backend
@@ -2478,6 +2663,7 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 					}
 				case agent.MessageToolUse:
 					n := toolCount.Add(1)
+					inFlightTools.Add(1)
 					taskLog.Info(fmt.Sprintf("tool #%d: %s", n, msg.Tool))
 					if msg.CallID != "" {
 						mu.Lock()
@@ -2494,6 +2680,20 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 					})
 					mu.Unlock()
 				case agent.MessageToolResult:
+					// Decrement only when the count would stay >= 0. A stray
+					// tool_result with no matching tool_use (backend bug or
+					// reconnect mid-stream) shouldn't push the counter
+					// negative — that would re-arm the watchdog one tool_use
+					// too early on the next call.
+					for {
+						cur := inFlightTools.Load()
+						if cur <= 0 {
+							break
+						}
+						if inFlightTools.CompareAndSwap(cur, cur-1) {
+							break
+						}
+					}
 					s := seq.Add(1)
 					output := msg.Output
 					if len(output) > 8192 {
@@ -2549,8 +2749,29 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 
 	select {
 	case result := <-session.Result:
+		if idleWatchdogFired.Load() {
+			// The backend's wait goroutine (e.g. claude.go) translates the
+			// SIGKILL we delivered via agentCancel into Status="aborted".
+			// Re-tag it as "idle_watchdog" so runTask routes the
+			// disposition through a dedicated failure_reason, not the
+			// generic "agent_error" bucket the aborted path falls into.
+			result.Status = "idle_watchdog"
+			if result.Error == "" {
+				result.Error = idleWatchdogReason(idleWindow)
+			}
+		}
 		return result, toolCount.Load(), nil
 	case <-drainCtx.Done():
+		// Idle watchdog cancels via agentCancel(), which propagates here as
+		// context.Canceled. Check this BEFORE the generic cancelled/timeout
+		// classifiers so a watchdog-induced stop isn't misreported as
+		// "task cancelled by server".
+		if idleWatchdogFired.Load() {
+			return agent.Result{
+				Status: "idle_watchdog",
+				Error:  idleWatchdogReason(idleWindow),
+			}, toolCount.Load(), nil
+		}
 		// Distinguish external cancellation (e.g. server-initiated cancel
 		// because the issue was reassigned, or the user invoked CancelTask)
 		// from genuine drain-deadline timeouts. context.Canceled means the
@@ -2566,6 +2787,76 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 			Status: "timeout",
 			Error:  "agent did not produce result within drain timeout",
 		}, toolCount.Load(), nil
+	}
+}
+
+// idleWatchdogReason formats the human-facing explanation surfaced on
+// idle_watchdog dispositions. Centralised so the result-arrival branch and the
+// drain-timeout branch in executeAndDrain emit identical wording.
+func idleWatchdogReason(window time.Duration) string {
+	return fmt.Sprintf("agent produced no new messages for %s and message queue was empty; force-stopped by idle watchdog", window)
+}
+
+// runIdleWatchdog ticks until either agentCtx is cancelled or the backend has
+// been silent for at least window with no in-flight tool call. On firing, it
+// sets fired and calls cancel, which propagates to the agent subprocess (via
+// the ctx passed to backend.Execute) and to drainCtx. The check requires:
+//
+//  1. inFlightTools == 0 — the backend has emitted a tool_use whose
+//     matching tool_result hasn't arrived yet, meaning a real tool (e.g.
+//     `npm install`, `docker build`) is legitimately running. Long tool
+//     calls produce no messages between use and result; killing here would
+//     yank the agent mid-build. AND
+//  2. time since lastActivityAt exceeds window — the drain loop is single
+//     reader, so a stale stamp means no message has actually arrived; AND
+//  3. session.Messages buffer is empty — defensive against a hypothetical
+//     drain stall where unprocessed messages would still imply progress.
+//
+// Tick interval is window/2 (floored at 30 s in production, but the floor only
+// kicks in for windows >= 1 min so tests can pass tiny windows like 50 ms and
+// see the watchdog fire within a few ticks).
+func (d *Daemon) runIdleWatchdog(agentCtx context.Context, window time.Duration, lastActivityAt *atomic.Int64, inFlightTools *atomic.Int32, fired *atomic.Bool, cancel context.CancelFunc, messages <-chan agent.Message, taskLog *slog.Logger, taskID string) {
+	interval := window / 2
+	if window >= time.Minute && interval < 30*time.Second {
+		interval = 30 * time.Second
+	}
+	if interval <= 0 {
+		interval = window
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-agentCtx.Done():
+			return
+		case <-ticker.C:
+			// In-flight tool call: the agent has emitted tool_use and
+			// the corresponding tool_result hasn't landed yet. A long
+			// build/install/test can sit here silently for many minutes
+			// — that is forward progress, not a hang.
+			if inFlightTools.Load() > 0 {
+				continue
+			}
+			last := time.Unix(0, lastActivityAt.Load())
+			idleFor := time.Since(last)
+			if idleFor < window {
+				continue
+			}
+			// A buffered-but-undrained message means the drain loop is
+			// behind, not the backend. Wait one more tick rather than
+			// killing a backend that is still producing output.
+			if len(messages) > 0 {
+				continue
+			}
+			taskLog.Warn("idle watchdog firing: no agent activity, force-stopping run",
+				"task", shortID(taskID),
+				"idle_for", idleFor.Round(time.Second).String(),
+				"threshold", window.String(),
+			)
+			fired.Store(true)
+			cancel()
+			return
+		}
 	}
 }
 
@@ -2738,8 +3029,9 @@ func convertSkillsForEnv(skills []SkillData) []execenv.SkillContextForEnv {
 	result := make([]execenv.SkillContextForEnv, len(skills))
 	for i, s := range skills {
 		result[i] = execenv.SkillContextForEnv{
-			Name:    s.Name,
-			Content: s.Content,
+			Name:        s.Name,
+			Description: s.Description,
+			Content:     s.Content,
 		}
 		for _, f := range s.Files {
 			result[i].Files = append(result[i].Files, execenv.SkillFileContextForEnv{
@@ -2751,6 +3043,40 @@ func convertSkillsForEnv(skills []SkillData) []execenv.SkillContextForEnv {
 	return result
 }
 
+// composeOpenclawIncludeRoots returns the value the daemon should set for
+// OPENCLAW_INCLUDE_ROOTS on the child openclaw process so its `$include`
+// loader will follow the wrapper's reference out of envRoot into the
+// user's active config directory.
+//
+// addRoot is the directory we must grant (typically dirname of the user's
+// active openclaw.json). userValue is whatever the daemon's own
+// environment already has under OPENCLAW_INCLUDE_ROOTS — the user's own
+// cross-directory layout. We prepend addRoot, dedupe by string equality,
+// drop empty path segments, and return ok=false when there's nothing to
+// grant (addRoot is empty — fresh install case), so callers can leave the
+// env var alone in that case.
+//
+// Path separator is the OS-native list separator (`:` on Unix, `;` on
+// Windows) to match how OpenClaw splits the env var.
+func composeOpenclawIncludeRoots(addRoot, userValue string) (string, bool) {
+	if addRoot == "" {
+		return "", false
+	}
+	parts := []string{addRoot}
+	seen := map[string]struct{}{addRoot: {}}
+	for _, p := range strings.Split(userValue, string(os.PathListSeparator)) {
+		if p == "" {
+			continue
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		parts = append(parts, p)
+	}
+	return strings.Join(parts, string(os.PathListSeparator)), true
+}
+
 // isBlockedEnvKey returns true if the key must not be overridden by user-
 // configured custom_env. This prevents accidental or malicious override of
 // daemon-internal variables and critical system paths.
@@ -2760,7 +3086,7 @@ func isBlockedEnvKey(key string) bool {
 		return true
 	}
 	switch upper {
-	case "HOME", "PATH", "USER", "SHELL", "TERM", "CODEX_HOME":
+	case "HOME", "PATH", "USER", "SHELL", "TERM", "CODEX_HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_INCLUDE_ROOTS":
 		return true
 	}
 	return false

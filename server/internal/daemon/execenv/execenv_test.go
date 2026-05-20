@@ -984,8 +984,9 @@ func TestWriteContextFilesOpencodeNativeSkills(t *testing.T) {
 		IssueID: "opencode-skill-test",
 		AgentSkills: []SkillContextForEnv{
 			{
-				Name:    "Go Conventions",
-				Content: "Follow Go conventions.",
+				Name:        "Go Conventions",
+				Description: "Follow our internal Go style.",
+				Content:     "Follow Go conventions.",
 				Files: []SkillFileContextForEnv{
 					{Path: "templates/example.go", Content: "package main"},
 				},
@@ -1002,8 +1003,26 @@ func TestWriteContextFilesOpencodeNativeSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read .opencode/skills/go-conventions/SKILL.md: %v", err)
 	}
-	if !strings.Contains(string(skillMd), "Follow Go conventions.") {
+	body := string(skillMd)
+	if !strings.Contains(body, "Follow Go conventions.") {
 		t.Error("SKILL.md missing content")
+	}
+	// OpenCode (and every other runtime) silently drops SKILL.md without a
+	// parseable frontmatter `name`. The synthesized frontmatter must lead
+	// with `name:` matching the parent directory slug and carry the
+	// description verbatim from the DB so OpenCode's `skill` tool can route
+	// the model to it by name. The description is always double-quoted so
+	// values that happen to be YAML keywords (`null`, `true`, `[foo]`,
+	// etc.) still parse as strings and don't get dropped.
+	prefix := body
+	if len(prefix) > 120 {
+		prefix = prefix[:120]
+	}
+	if !strings.HasPrefix(body, "---\nname: go-conventions\n") {
+		t.Errorf("SKILL.md missing synthesized frontmatter name; got: %q", prefix)
+	}
+	if !strings.Contains(body, `description: "Follow our internal Go style."`) {
+		t.Errorf("SKILL.md missing synthesized quoted description; got: %q", prefix)
 	}
 
 	// Supporting files should also be under .opencode/skills/.
@@ -1023,6 +1042,129 @@ func TestWriteContextFilesOpencodeNativeSkills(t *testing.T) {
 	// issue_context.md should still be in .agent_context/.
 	if _, err := os.Stat(filepath.Join(dir, ".agent_context", "issue_context.md")); os.IsNotExist(err) {
 		t.Error("expected .agent_context/issue_context.md to exist")
+	}
+}
+
+// Skill content imported from upstream sources (GitHub, ClawHub, Skills.sh)
+// often already carries its own YAML frontmatter — possibly with a `name`
+// that differs from the DB row's display name to match a specific runtime's
+// expectations. The writer must not clobber that block; it should only
+// synthesize when frontmatter is absent.
+func TestWriteContextFilesPreservesExistingSkillFrontmatter(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	preExisting := "---\nname: upstream-name\ndescription: imported as-is\n---\n\nbody"
+	ctx := TaskContextForEnv{
+		IssueID: "preserve-frontmatter-test",
+		AgentSkills: []SkillContextForEnv{
+			{
+				Name:        "Display Name",
+				Description: "overridden by upstream frontmatter",
+				Content:     preExisting,
+			},
+		},
+	}
+
+	if err := writeContextFiles(dir, "opencode", ctx); err != nil {
+		t.Fatalf("writeContextFiles failed: %v", err)
+	}
+
+	skillMd, err := os.ReadFile(filepath.Join(dir, ".opencode", "skills", "display-name", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("failed to read SKILL.md: %v", err)
+	}
+	if string(skillMd) != preExisting {
+		t.Errorf("SKILL.md was rewritten; got:\n%s\nwant:\n%s", skillMd, preExisting)
+	}
+}
+
+// Some upstream skills (GitHub imports, Skills.sh) ship a frontmatter block
+// that sets `description` but omits `name` — the directory layout is what
+// identifies the skill there. OpenCode's scanner requires a parseable `name`
+// in the frontmatter or it silently drops the SKILL.md. The writer must
+// inject `name: <slug>` into the existing block (not replace it) so the
+// upstream description and body still ride along intact.
+func TestWriteContextFilesInjectsNameIntoNamelessFrontmatter(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	preExisting := "---\ndescription: Review pull requests\n---\n\nbody"
+	ctx := TaskContextForEnv{
+		IssueID: "inject-name-test",
+		AgentSkills: []SkillContextForEnv{
+			{
+				Name:        "Review PRs",
+				Description: "DB description ignored when content already carries one",
+				Content:     preExisting,
+			},
+		},
+	}
+
+	if err := writeContextFiles(dir, "opencode", ctx); err != nil {
+		t.Fatalf("writeContextFiles failed: %v", err)
+	}
+
+	skillMd, err := os.ReadFile(filepath.Join(dir, ".opencode", "skills", "review-prs", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("failed to read SKILL.md: %v", err)
+	}
+	got := string(skillMd)
+	want := "---\nname: review-prs\ndescription: Review pull requests\n---\n\nbody"
+	if got != want {
+		t.Errorf("SKILL.md was not patched correctly;\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// OpenClaw's native skill scanner reads {workspaceDir}/skills/. The daemon
+// pairs writeContextFiles with a per-task synthesized openclaw-config.json
+// (see openclaw_config.go) that pins agents.defaults.workspace to workDir,
+// so writing skills to {workDir}/skills/ is what the CLI actually scans.
+// This test pins the post-MUL-2219 write path; the previous fallback into
+// .agent_context/skills/ was a dead drop the openclaw scanner never read.
+func TestWriteContextFilesOpenclawNativeSkills(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	ctx := TaskContextForEnv{
+		IssueID: "openclaw-skill-test",
+		AgentSkills: []SkillContextForEnv{
+			{
+				Name:    "Go Conventions",
+				Content: "Follow Go conventions.",
+				Files: []SkillFileContextForEnv{
+					{Path: "templates/example.go", Content: "package main"},
+				},
+			},
+		},
+	}
+
+	if err := writeContextFiles(dir, "openclaw", ctx); err != nil {
+		t.Fatalf("writeContextFiles failed: %v", err)
+	}
+
+	skillMd, err := os.ReadFile(filepath.Join(dir, "skills", "go-conventions", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("failed to read skills/go-conventions/SKILL.md: %v", err)
+	}
+	if !strings.Contains(string(skillMd), "Follow Go conventions.") {
+		t.Error("SKILL.md missing content")
+	}
+
+	supportFile, err := os.ReadFile(filepath.Join(dir, "skills", "go-conventions", "templates", "example.go"))
+	if err != nil {
+		t.Fatalf("failed to read supporting file: %v", err)
+	}
+	if string(supportFile) != "package main" {
+		t.Errorf("supporting file content = %q, want %q", string(supportFile), "package main")
+	}
+
+	// The pre-MUL-2219 fallback path must NOT be written: openclaw never scans it.
+	if _, err := os.Stat(filepath.Join(dir, ".agent_context", "skills")); !os.IsNotExist(err) {
+		t.Error(".agent_context/skills/ MUST NOT be written for openclaw — the scanner does not read that path")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".openclaw", "skills")); !os.IsNotExist(err) {
+		t.Error(".openclaw/skills/ MUST NOT be written — openclaw never scans that path; writing there is a dead drop")
 	}
 }
 
@@ -2090,7 +2232,7 @@ func TestReuseRestoresCodexHome(t *testing.T) {
 	}
 
 	// Reuse should restore CodexHome.
-	reused := Reuse(env.WorkDir, "codex", "", TaskContextForEnv{IssueID: "reuse-test"}, testLogger())
+	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{IssueID: "reuse-test"}}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -2140,7 +2282,7 @@ func TestReuseRestoresCodexPluginCache(t *testing.T) {
 		t.Fatalf("remove codex plugins dir: %v", err)
 	}
 
-	reused := Reuse(env.WorkDir, "codex", "", TaskContextForEnv{IssueID: "reuse-plugin-test"}, testLogger())
+	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{IssueID: "reuse-plugin-test"}}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -2178,7 +2320,7 @@ func TestReuseWritesMissingCodexWorkspaceSkills(t *testing.T) {
 		t.Fatalf("remove codex skills dir: %v", err)
 	}
 
-	reused := Reuse(env.WorkDir, "codex", "", TaskContextForEnv{
+	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{
 		IssueID: "reuse-skill-test",
 		AgentSkills: []SkillContextForEnv{
 			{
@@ -2187,7 +2329,7 @@ func TestReuseWritesMissingCodexWorkspaceSkills(t *testing.T) {
 				Files:   []SkillFileContextForEnv{{Path: "examples/example.md", Content: "Example"}},
 			},
 		},
-	}, testLogger())
+	}}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -2196,7 +2338,7 @@ func TestReuseWritesMissingCodexWorkspaceSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing reused codex workspace skill: %v", err)
 	}
-	if string(data) != "Write clearly." {
+	if !strings.Contains(string(data), "Write clearly.") {
 		t.Errorf("skill content = %q", data)
 	}
 	example, err := os.ReadFile(filepath.Join(reused.CodexHome, "skills", "writing", "examples", "example.md"))
@@ -2237,7 +2379,7 @@ func TestReuseUpdatesCodexWorkspaceSkills(t *testing.T) {
 	}
 	defer env.Cleanup(true)
 
-	reused := Reuse(env.WorkDir, "codex", "", TaskContextForEnv{
+	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{
 		IssueID: "reuse-skill-update-test",
 		AgentSkills: []SkillContextForEnv{
 			{
@@ -2246,7 +2388,7 @@ func TestReuseUpdatesCodexWorkspaceSkills(t *testing.T) {
 				Files:   []SkillFileContextForEnv{{Path: "examples/example.md", Content: "Updated example"}},
 			},
 		},
-	}, testLogger())
+	}}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -2255,7 +2397,7 @@ func TestReuseUpdatesCodexWorkspaceSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing reused codex workspace skill: %v", err)
 	}
-	if string(data) != "Updated writing guidance." {
+	if !strings.Contains(string(data), "Updated writing guidance.") {
 		t.Errorf("skill content = %q", data)
 	}
 	example, err := os.ReadFile(filepath.Join(reused.CodexHome, "skills", "writing", "examples", "example.md"))
@@ -2375,7 +2517,7 @@ func TestPrepareCodexWorkspaceSkillBeatsUserSkillOnConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workspace skill not written: %v", err)
 	}
-	if string(data) != "workspace writing" {
+	if !strings.Contains(string(data), "workspace writing") {
 		t.Errorf("SKILL.md = %q, want workspace content", data)
 	}
 	// The user's stale support file must not leak through — seeding is
@@ -2504,9 +2646,9 @@ func TestReuseSeedsUserSkillUpdates(t *testing.T) {
 		t.Fatalf("update user SKILL.md: %v", err)
 	}
 
-	reused := Reuse(env.WorkDir, "codex", "", TaskContextForEnv{
+	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{
 		IssueID: "user-skill-reuse-test",
-	}, testLogger())
+	}}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -2559,12 +2701,12 @@ func TestReuseClearsUserSkillResidueOnWorkspaceConflict(t *testing.T) {
 		t.Fatalf("user support file should be seeded in round 1: %v", err)
 	}
 
-	reused := Reuse(env.WorkDir, "codex", "", TaskContextForEnv{
+	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{
 		IssueID: "reuse-conflict-test",
 		AgentSkills: []SkillContextForEnv{
 			{Name: "Writing", Content: "workspace writing"},
 		},
-	}, testLogger())
+	}}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -2573,7 +2715,7 @@ func TestReuseClearsUserSkillResidueOnWorkspaceConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workspace SKILL.md missing after reuse: %v", err)
 	}
-	if string(data) != "workspace writing" {
+	if !strings.Contains(string(data), "workspace writing") {
 		t.Errorf("SKILL.md = %q, want workspace content", data)
 	}
 	if _, err := os.Stat(filepath.Join(reused.CodexHome, "skills", "writing", "drafts", "stale.md")); !os.IsNotExist(err) {
@@ -2621,9 +2763,9 @@ func TestReuseClearsRemovedUserSkill(t *testing.T) {
 		t.Fatalf("remove user skill: %v", err)
 	}
 
-	reused := Reuse(env.WorkDir, "codex", "", TaskContextForEnv{
+	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{
 		IssueID: "reuse-remove-test",
-	}, testLogger())
+	}}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -3097,5 +3239,64 @@ func TestInjectRuntimeConfigOmitsEmptyMemorySection(t *testing.T) {
 	}
 	if strings.Contains(string(content), "\n## Memory\n") {
 		t.Errorf("CLAUDE.md should not include the ## Memory section heading when MemoryArtifacts is empty")
+	}
+}
+
+// TestInjectRuntimeConfigSquadLeaderCommentTriggeredNoAction verifies that
+// when IsSquadLeader is true and the task is comment-triggered, the generated
+// CLAUDE.md explicitly forbids posting comments that merely announce no_action.
+// This is the fix for MUL-2168 — squad leaders were posting "Exiting silently"
+// comments because the comment-triggered path lacked the prohibition.
+func TestInjectRuntimeConfigSquadLeaderCommentTriggeredNoAction(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ctx := TaskContextForEnv{
+		IssueID:          "issue-1",
+		TriggerCommentID: "comment-1",
+		IsSquadLeader:    true,
+	}
+	if _, err := InjectRuntimeConfig(dir, "claude", ctx); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("read CLAUDE.md: %v", err)
+	}
+	s := string(data)
+
+	// The comment-triggered workflow must contain the squad leader no_action rule.
+	for _, want := range []string{
+		"Squad leader rule",
+		"DO NOT post any comment",
+		"multica squad activity",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("squad leader comment-triggered CLAUDE.md missing %q", want)
+		}
+	}
+
+	// The Output section must use strong prohibition language.
+	if !strings.Contains(s, "you MUST exit without posting any comment") {
+		t.Errorf("Output section missing strong prohibition for squad leader no_action")
+	}
+
+	// Non-squad-leader should NOT have the squad leader rule in comment-triggered path.
+	dir2 := t.TempDir()
+	ctx2 := TaskContextForEnv{
+		IssueID:          "issue-1",
+		TriggerCommentID: "comment-1",
+		IsSquadLeader:    false,
+	}
+	if _, err := InjectRuntimeConfig(dir2, "claude", ctx2); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+	data2, err := os.ReadFile(filepath.Join(dir2, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("read CLAUDE.md: %v", err)
+	}
+	s2 := string(data2)
+	if strings.Contains(s2, "Squad leader rule") {
+		t.Errorf("non-squad-leader CLAUDE.md should NOT contain squad leader rule")
 	}
 }

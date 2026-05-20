@@ -47,7 +47,7 @@ import {
 import { StatusIcon, PriorityIcon } from ".";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
+import { memberListOptions, agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { labelListOptions } from "@multica/core/labels/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
@@ -169,6 +169,7 @@ function ActorSubContent({
   includeNoAssignee,
   onToggleNoAssignee,
   noAssigneeCount,
+  showSquads = true,
 }: {
   counts: Map<string, number>;
   selected: ActorFilterValue[];
@@ -177,12 +178,14 @@ function ActorSubContent({
   includeNoAssignee?: boolean;
   onToggleNoAssignee?: () => void;
   noAssigneeCount?: number;
+  showSquads?: boolean;
 }) {
   const { t } = useT("issues");
   const [search, setSearch] = useState("");
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: squads = [] } = useQuery(squadListOptions(wsId));
   const query = search.trim().toLowerCase();
   const filteredMembers = members.filter((m) =>
     m.name.toLowerCase().includes(query),
@@ -190,8 +193,11 @@ function ActorSubContent({
   const filteredAgents = agents.filter((a) =>
     !a.archived_at && a.name.toLowerCase().includes(query),
   );
+  const filteredSquads = squads.filter((s) =>
+    !s.archived_at && s.name.toLowerCase().includes(query),
+  );
 
-  const isSelected = (type: "member" | "agent", id: string) =>
+  const isSelected = (type: "member" | "agent" | "squad", id: string) =>
     selected.some((f) => f.type === type && f.id === id);
 
   return (
@@ -284,7 +290,36 @@ function ActorSubContent({
           </DropdownMenuGroup>
         )}
 
-        {filteredMembers.length === 0 && filteredAgents.length === 0 && search && (
+        {showSquads && filteredSquads.length > 0 && (
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>{t(($) => $.filters.squads_group)}</DropdownMenuLabel>
+            {filteredSquads.map((s) => {
+              const checked = isSelected("squad", s.id);
+              const count = counts.get(`squad:${s.id}`) ?? 0;
+              return (
+                <DropdownMenuCheckboxItem
+                  key={s.id}
+                  checked={checked}
+                  onCheckedChange={() =>
+                    onToggle({ type: "squad", id: s.id })
+                  }
+                  className={FILTER_ITEM_CLASS}
+                >
+                  <HoverCheck checked={checked} />
+                  <ActorAvatar actorType="squad" actorId={s.id} size={18} />
+                  <span className="truncate">{s.name}</span>
+                  {count > 0 && (
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {count}
+                    </span>
+                  )}
+                </DropdownMenuCheckboxItem>
+              );
+            })}
+          </DropdownMenuGroup>
+        )}
+
+        {filteredMembers.length === 0 && filteredAgents.length === 0 && (!showSquads || filteredSquads.length === 0) && search && (
           <div className="px-2 py-3 text-center text-sm text-muted-foreground">
             {t(($) => $.filters.no_results)}
           </div>
@@ -459,7 +494,53 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
   const isMobile = useIsMobile();
   const scope = useIssuesScopeStore((s) => s.scope);
   const setScope = useIssuesScopeStore((s) => s.setScope);
+  const SCOPE_LABEL_KEY: Record<IssuesScope, "all_label" | "members_label" | "agents_label"> = {
+    all: "all_label",
+    members: "members_label",
+    agents: "agents_label",
+  };
+  const SCOPE_DESC_KEY: Record<IssuesScope, "all_description" | "members_description" | "agents_description"> = {
+    all: "all_description",
+    members: "members_description",
+    agents: "agents_description",
+  };
 
+  return (
+    <div className="flex h-12 shrink-0 items-center justify-between gap-2 px-2 sm:px-4">
+      {/* Left: scope buttons */}
+      <div className="flex min-w-0 items-center gap-1">
+        {SCOPE_VALUES.map((s) => (
+          <Tooltip key={s}>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={
+                    (isMobile ? "px-2 text-xs " : "") +
+                    (scope === s
+                      ? "bg-accent text-accent-foreground hover:bg-accent/80"
+                      : "text-muted-foreground")
+                  }
+                  onClick={() => setScope(s)}
+                >
+                  {t(($) => $.scope[SCOPE_LABEL_KEY[s]])}
+                </Button>
+              }
+            />
+            <TooltipContent side="bottom">{t(($) => $.scope[SCOPE_DESC_KEY[s]])}</TooltipContent>
+          </Tooltip>
+        ))}
+      </div>
+
+      <IssueDisplayControls scopedIssues={scopedIssues} />
+    </div>
+  );
+}
+
+export function IssueDisplayControls({ scopedIssues }: { scopedIssues: Issue[] }) {
+  const { t } = useT("issues");
+  const isMobile = useIsMobile();
   const viewMode = useViewStore((s) => s.viewMode);
   const statusFilters = useViewStore((s) => s.statusFilters);
   const priorityFilters = useViewStore((s) => s.priorityFilters);
@@ -506,47 +587,9 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
     childProgress: "card_child_progress",
   };
   const sortLabel = t(($) => $.display[SORT_LABEL_KEY[sortBy]]);
-  const SCOPE_LABEL_KEY: Record<IssuesScope, "all_label" | "members_label" | "agents_label"> = {
-    all: "all_label",
-    members: "members_label",
-    agents: "agents_label",
-  };
-  const SCOPE_DESC_KEY: Record<IssuesScope, "all_description" | "members_description" | "agents_description"> = {
-    all: "all_description",
-    members: "members_description",
-    agents: "agents_description",
-  };
 
   return (
-    <div className="flex h-12 shrink-0 items-center justify-between gap-2 px-2 sm:px-4">
-      {/* Left: scope buttons */}
-      <div className="flex min-w-0 items-center gap-1">
-        {SCOPE_VALUES.map((s) => (
-          <Tooltip key={s}>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={
-                    (isMobile ? "px-2 text-xs " : "") +
-                    (scope === s
-                      ? "bg-accent text-accent-foreground hover:bg-accent/80"
-                      : "text-muted-foreground")
-                  }
-                  onClick={() => setScope(s)}
-                >
-                  {t(($) => $.scope[SCOPE_LABEL_KEY[s]])}
-                </Button>
-              }
-            />
-            <TooltipContent side="bottom">{t(($) => $.scope[SCOPE_DESC_KEY[s]])}</TooltipContent>
-          </Tooltip>
-        ))}
-      </div>
-
-      {/* Right: filter + display + view toggle */}
-      <div className="flex shrink-0 items-center gap-1">
+    <div className="flex shrink-0 items-center gap-1">
         {/* Filter */}
         <DropdownMenu>
           <Tooltip>
@@ -686,6 +729,7 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
                   counts={counts.creator}
                   selected={creatorFilters}
                   onToggle={act.toggleCreatorFilter}
+                  showSquads={false}
                 />
               </DropdownMenuSubContent>
             </DropdownMenuSub>
@@ -894,7 +938,6 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-      </div>
     </div>
   );
 }

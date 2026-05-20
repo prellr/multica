@@ -182,6 +182,7 @@
   },
   "tabs": {
     "activity": "动态",
+    "tasks": "task",
     "instructions": "指令",
     "skills": "skill",
     "environment": "环境变量",
@@ -220,6 +221,7 @@
     "template_created_toast": "智能体「{{name}}」已创建",
     "template_created_with_reuse_toast_other": "智能体「{{name}}」已创建。复用了 {{count}} 个现有 skill。",
     "skill_attach_failed_toast": "智能体已创建，但 skill 关联失败：{{error}}",
+    "squad_join_failed_toast": "智能体「{{name}}」已创建，但加入小队失败：{{error}}。你可以在 Members 标签里手动添加。",
     "chooser": {
       "blank_title": "从零开始",
       "blank_desc": "全部由你来填写。",
@@ -389,6 +391,13 @@
     "skills_label": "skill",
     "owner_label": "所有者",
     "unknown_runtime": "未知运行时"
+  },
+  "live_peek": {
+    "current_issue_label": "正在处理",
+    "no_current_issue": "暂无任务",
+    "last_activity_label": "最近活动",
+    "no_recent_activity": "暂无活动",
+    "failed_indicator": "失败"
   },
   "transcript": {
     "dialog_title": "智能体执行记录",

@@ -5,6 +5,7 @@ import {
   User,
   SlidersHorizontal,
   Plug,
+  AppWindow,
   Settings,
   Users,
   FolderGit2,
@@ -21,6 +22,7 @@ import { WorkspaceTab } from "./workspace-tab";
 import { MembersTab } from "./members-tab";
 import { RepositoriesTab } from "./repositories-tab";
 import { IntegrationsTab } from "./integrations-tab";
+import { ConnectedAppsTab } from "./connected-apps-tab";
 import { LabsTab } from "./labs-tab";
 import { NotificationsTab } from "./notifications-tab";
 import { useT } from "../../i18n";
@@ -37,11 +39,12 @@ const ACCOUNT_TAB_ICONS = {
   tokens: Plug,
 } as const;
 
-const WORKSPACE_TAB_KEYS = ["general", "repositories", "integrations", "labs", "members"] as const;
+const WORKSPACE_TAB_KEYS = ["general", "repositories", "integrations", "connected-apps", "labs", "members"] as const;
 const WORKSPACE_TAB_VALUES = {
   general: "workspace",
   repositories: "repositories",
   integrations: "integrations",
+  "connected-apps": "connected-apps",
   labs: "labs",
   members: "members",
 } as const;
@@ -49,6 +52,7 @@ const WORKSPACE_TAB_ICONS = {
   general: Settings,
   repositories: FolderGit2,
   integrations: Plug,
+  "connected-apps": AppWindow,
   labs: FlaskConical,
   members: Users,
 } as const;
@@ -155,6 +159,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <TabsContent value="workspace"><WorkspaceTab /></TabsContent>
           <TabsContent value="repositories"><RepositoriesTab /></TabsContent>
           <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
+          <TabsContent value="connected-apps"><ConnectedAppsTab /></TabsContent>
           <TabsContent value="labs"><LabsTab /></TabsContent>
           <TabsContent value="members"><MembersTab /></TabsContent>
           {extraAccountTabs?.map((tab) => (

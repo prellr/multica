@@ -6,8 +6,11 @@ import type {
   AgentTemplateSummary,
   Attachment,
   CreateAgentFromTemplateResponse,
+  GetMCPServerResponse,
   ListIssuesResponse,
+  ListMCPServersResponse,
   MarketplaceSearchResult,
+  MCPServer,
   TimelineEntry,
 } from "../types";
 
@@ -95,6 +98,67 @@ const AgentTagSchema = z.object({
 
 export const AgentTagListSchema = z.array(AgentTagSchema);
 export const EMPTY_AGENT_TAG_LIST: AgentTag[] = [];
+
+const MCPServerSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  name: z.string(),
+  transport: z.enum(["stdio", "sse", "http"]).catch("stdio"),
+  url: z.string().nullable().default(null),
+  command: z.string().nullable().default(null),
+  args: z.array(z.string()).default([]),
+  scope: z.enum(["workspace", "agent"]).catch("workspace"),
+  agent_id: z.string().nullable().default(null),
+  required: z.boolean().default(false),
+  read_only: z.boolean().default(false),
+  approval_required_for: z.enum(["none", "writes"]).catch("none"),
+  last_connected_at: z.string().nullable().default(null),
+  secret_keys: z.array(z.string()).default([]),
+  tool_allowlist: z.array(z.string()).default([]),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const ListMCPServersResponseSchema = z.object({
+  mcp_servers: z.array(MCPServerSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_MCP_SERVERS_RESPONSE: ListMCPServersResponse = {
+  mcp_servers: [],
+  total: 0,
+};
+
+export const GetMCPServerResponseSchema = z.object({
+  mcp_server: MCPServerSchema,
+}).loose();
+
+const EMPTY_MCP_SERVER: MCPServer = {
+  id: "",
+  workspace_id: "",
+  name: "",
+  transport: "stdio",
+  url: null,
+  command: null,
+  args: [],
+  scope: "workspace",
+  agent_id: null,
+  required: false,
+  read_only: false,
+  approval_required_for: "none",
+  last_connected_at: null,
+  secret_keys: [],
+  tool_allowlist: [],
+  created_at: "",
+  updated_at: "",
+};
+
+export const EMPTY_GET_MCP_SERVER_RESPONSE: GetMCPServerResponse = {
+  mcp_server: EMPTY_MCP_SERVER,
+};
+
+export const MCPServerResponseSchema = MCPServerSchema;
+export const EMPTY_MCP_SERVER_RESPONSE: MCPServer = EMPTY_MCP_SERVER;
 
 const MarketplaceSkillSchema = z.object({
   name: z.string(),

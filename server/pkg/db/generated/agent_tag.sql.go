@@ -156,7 +156,7 @@ func (q *Queries) ListAgentTags(ctx context.Context, workspaceID pgtype.UUID) ([
 }
 
 const listAgentsByTag = `-- name: ListAgentsByTag :many
-SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status, a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id, a.instructions, a.archived_at, a.archived_by, a.custom_env, a.custom_args, a.mcp_config, a.model
+SELECT a.id, a.workspace_id, a.name, a.avatar_url, a.runtime_mode, a.runtime_config, a.visibility, a.status, a.max_concurrent_tasks, a.owner_id, a.created_at, a.updated_at, a.description, a.runtime_id, a.instructions, a.archived_at, a.archived_by, a.custom_env, a.custom_args, a.mcp_config, a.model, a.thinking_level
 FROM agent a
 JOIN agent_to_tag att ON att.agent_id = a.id
 JOIN agent_tag t ON t.id = att.tag_id
@@ -204,6 +204,7 @@ func (q *Queries) ListAgentsByTag(ctx context.Context, arg ListAgentsByTagParams
 			&i.CustomArgs,
 			&i.McpConfig,
 			&i.Model,
+			&i.ThinkingLevel,
 		); err != nil {
 			return nil, err
 		}

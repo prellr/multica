@@ -675,6 +675,24 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
+			// MCP Server Registry
+			r.Route("/api/mcp-servers", func(r chi.Router) {
+				r.Get("/", h.ListMCPServers)
+				r.Post("/", h.CreateMCPServer)
+				r.Route("/{serverId}", func(r chi.Router) {
+					r.Get("/", h.GetMCPServer)
+					r.Patch("/", h.UpdateMCPServer)
+					r.Delete("/", h.DeleteMCPServer)
+					r.Post("/test", h.TestMCPServer)
+					r.Get("/secrets", h.ListMCPServerSecretKeys)
+					r.Put("/secrets/{key}", h.UpsertMCPServerSecret)
+					r.Delete("/secrets/{key}", h.DeleteMCPServerSecret)
+					r.Get("/allowlist", h.ListMCPServerToolAllowlist)
+					r.Post("/allowlist", h.AddMCPServerToolAllowlistEntry)
+					r.Delete("/allowlist/{toolName}", h.RemoveMCPServerToolAllowlistEntry)
+				})
+			})
+
 			// Pins
 			r.Route("/api/pins", func(r chi.Router) {
 				r.Get("/", h.ListPins)

@@ -474,7 +474,7 @@
       "submit": "创建发布",
       "submitting": "创建中…",
       "cancel": "取消",
-      "warning_title": "软提醒",
+      "warning_title": "提醒",
       "no_approver_required": "风险等级 {{level}} 需要先指定审批人才能启动合并列车",
       "no_second_approver_required": "关键级风险需要第二审批人",
       "ineligible_pr": "PR #{{number}} 不可加入：{{reason}}"

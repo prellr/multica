@@ -479,7 +479,7 @@
       "submit": "Create release",
       "submitting": "Creating…",
       "cancel": "Cancel",
-      "warning_title": "Soft warnings",
+      "warning_title": "Warnings",
       "no_approver_required": "Risk level {{level}} requires an approver to start the merge train",
       "no_second_approver_required": "Critical risk requires a second approver",
       "ineligible_pr": "PR #{{number}} is not eligible: {{reason}}"

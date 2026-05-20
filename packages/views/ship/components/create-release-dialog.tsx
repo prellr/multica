@@ -92,7 +92,7 @@ function eligibilityReason(pr: PullRequest): string | null {
   if (pr.state === "closed") return "is closed";
   if (pr.is_draft) return "is a draft";
   if (pr.mergeable === "CONFLICTING") return "has merge conflicts";
-  if (pr.ci_status && pr.ci_status !== "success") return `CI ${pr.ci_status}`;
+  if (pr.ci_status === "failure") return "CI failed";
   if (pr.review_decision && pr.review_decision !== "APPROVED") {
     return `review: ${pr.review_decision}`;
   }
@@ -312,8 +312,23 @@ export function CreateReleaseDialog({
     if (showSecondApproverField && !secondApproverId) {
       out.push(t(($) => $.releases.create_dialog.no_second_approver_required));
     }
+    for (const pr of selectedPullRequests) {
+      if (pr.ci_status === "pending") {
+        out.push(
+          `PR #${pr.number}: CI is still pending — merge train will wait for it to pass`,
+        );
+      }
+    }
     return out;
-  }, [showApproverField, showSecondApproverField, highestRisk, approverId, secondApproverId, t]);
+  }, [
+    showApproverField,
+    showSecondApproverField,
+    highestRisk,
+    approverId,
+    secondApproverId,
+    selectedPullRequests,
+    t,
+  ]);
 
   const submitDisabled =
     create.isPending ||

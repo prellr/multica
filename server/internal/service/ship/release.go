@@ -120,12 +120,12 @@ type CreateReleaseResult struct {
 
 // Sentinel errors so the handler can map to clean status codes.
 var (
-	ErrReleaseNoPullRequests       = errors.New("release: must include at least one pull request")
-	ErrReleasePullRequestNotFound  = errors.New("release: pull request not found in workspace")
-	ErrReleasePullRequestIneligible = errors.New("release: pull request not eligible for release")
-	ErrReleasePullRequestInActive  = errors.New("release: pull request is already in an active release")
+	ErrReleaseNoPullRequests             = errors.New("release: must include at least one pull request")
+	ErrReleasePullRequestNotFound        = errors.New("release: pull request not found in workspace")
+	ErrReleasePullRequestIneligible      = errors.New("release: pull request not eligible for release")
+	ErrReleasePullRequestInActive        = errors.New("release: pull request is already in an active release")
 	ErrReleasePullRequestProjectMismatch = errors.New("release: pull request belongs to a different project than the release")
-	ErrReleaseNotAssembling        = errors.New("release: only releases in 'assembling' stage can be modified")
+	ErrReleaseNotAssembling              = errors.New("release: only releases in 'assembling' stage can be modified")
 )
 
 // CreateRelease is the entry point used by the POST /api/projects/{id}/releases
@@ -658,8 +658,8 @@ func releaseEligibilityReason(pr db.PullRequest) (string, bool) {
 	if pr.Mergeable.Valid && pr.Mergeable.String == "CONFLICTING" {
 		return "has merge conflicts", false
 	}
-	if pr.CiStatus.Valid && pr.CiStatus.String != "" && pr.CiStatus.String != "success" {
-		return "CI is " + pr.CiStatus.String, false
+	if pr.CiStatus.Valid && pr.CiStatus.String == "failure" {
+		return "CI failed", false
 	}
 	if pr.ReviewDecision.Valid && pr.ReviewDecision.String != "" && pr.ReviewDecision.String != "APPROVED" {
 		return "review status: " + pr.ReviewDecision.String, false
@@ -767,6 +767,11 @@ func riskWarnings(
 	for _, k := range overlapKeys {
 		nums := prsByLabel[k]
 		out = append(out, fmt.Sprintf("Label \"%s\" shared by PR #%d and PR #%d", k, nums[0], nums[1]))
+	}
+	for _, pr := range prs {
+		if pr.CiStatus.Valid && pr.CiStatus.String == "pending" {
+			out = append(out, fmt.Sprintf("PR #%d: CI is still pending", pr.PrNumber))
+		}
 	}
 	return out
 }

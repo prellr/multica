@@ -53,6 +53,13 @@ type GithubClient interface {
 	// returns an error or empty list), but listed in the interface so
 	// the test mocks know they need to provide it.
 	ListPullRequestFiles(ctx context.Context, owner, repo string, prNumber int) ([]gh.PullRequestFile, error)
+	// PR5a phase 2 — pipeline introspector. Lists workflow files in
+	// `.github/workflows/` and reads their YAML contents. Test mocks
+	// that don't exercise introspection can return gh.ErrNotFound
+	// from both — IntrospectAllWorkspaceProjects treats a 404 as
+	// "shape signal absent" rather than an error.
+	ListRepoDir(ctx context.Context, owner, repo, path string) ([]gh.RepoContentEntry, error)
+	GetRepoFile(ctx context.Context, owner, repo, path string) (string, error)
 }
 
 // PRChannelPoster posts a system-style message to a PR's conversation

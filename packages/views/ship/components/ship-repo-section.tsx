@@ -4,7 +4,11 @@ import { useMemo } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { useCollapsedRepos } from "@multica/core/ship";
-import type { ProjectPipelineKind, PullRequest } from "@multica/core/types";
+import type {
+  PipelineConfig,
+  ProjectPipelineKind,
+  PullRequest,
+} from "@multica/core/types";
 import { ShipKanban } from "./ship-kanban";
 import { useT } from "../../i18n";
 
@@ -14,6 +18,11 @@ interface ShipRepoSectionProps {
   isLoading?: boolean;
   projectId: string;
   pipelineKind?: ProjectPipelineKind;
+  /** PR5b — structured pipeline config from the project response.
+   *  Forwarded to ShipKanban which renders columns from
+   *  config.stages when provided. Falls back to pipelineKind-derived
+   *  columns when this is undefined. */
+  pipelineConfig?: PipelineConfig;
 }
 
 export function ShipRepoSection({
@@ -22,6 +31,7 @@ export function ShipRepoSection({
   isLoading,
   projectId,
   pipelineKind,
+  pipelineConfig,
 }: ShipRepoSectionProps) {
   const { t } = useT("ship");
   const repoName = repoUrl.split("/").at(-1) ?? repoUrl;
@@ -100,6 +110,7 @@ export function ShipRepoSection({
             isLoading={isLoading}
             projectId={projectId}
             pipelineKind={pipelineKind}
+            pipelineConfig={pipelineConfig}
           />
         </div>
       )}

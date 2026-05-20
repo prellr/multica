@@ -297,6 +297,7 @@ export function ShipProjectSection({ project }: ShipProjectSectionProps) {
                 isLoading={isLoading}
                 projectId={project.id}
                 pipelineKind={fullProject?.pipeline_kind}
+                pipelineConfig={fullProject?.pipeline_config}
               />
             ))}
           </div>

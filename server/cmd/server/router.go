@@ -341,6 +341,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/members", h.ListMembersWithUser)
 					r.Post("/leave", h.LeaveWorkspace)
 					r.Get("/invitations", h.ListWorkspaceInvitations)
+					// Listing GitHub installations is member-visible so the
+					// integrations tab no longer renders blank for non-admins;
+					// the handler strips the management handle and adds a
+					// can_manage hint so the UI can gate connect/disconnect.
+					r.Get("/github/installations", h.ListGitHubInstallations)
 				})
 				// Admin-level access
 				r.Group(func(r chi.Router) {
@@ -362,13 +367,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.With(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner")).
 					Post("/ship_hub/regenerate_webhook_secret", h.RegenerateShipHubWebhookSecret)
 
-				// Upstream GitHub App integration — admin-only operations
-				// (connect, list installations, delete installation).
-				// Independent of the Ship Hub webhook secret above.
+				// Upstream GitHub App integration — connect / disconnect remain
+				// admin-only; the read-only list endpoint lives in the
+				// member-level group above so non-admins can see the workspace's
+				// connection state. Independent of the Ship Hub webhook secret
+				// above.
 				r.Group(func(r chi.Router) {
 					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
 					r.Get("/github/connect", h.GitHubConnect)
-					r.Get("/github/installations", h.ListGitHubInstallations)
 					r.Delete("/github/installations/{installationId}", h.DeleteGitHubInstallation)
 				})
 			})

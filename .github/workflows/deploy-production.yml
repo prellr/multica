@@ -245,8 +245,14 @@ jobs:
           FRONTEND_HOST_PORT="${FRONTEND_PORT:-3000}"
           # Build the set of ports OUR project is already publishing,
           # so we don't fail the preflight on our own containers.
+          #
+          # The bind-address half can be 0.0.0.0 (legacy default) or 127.0.0.1
+          # (security: bind services to loopback in self-host compose, Tier 1
+          # upstream sync). Match either — and the bare port form ("8081/tcp"
+          # with no host) for unpublished ports — so docker-compose binding
+          # changes never silently break this detection.
           our_ports=$(docker ps --filter "label=com.docker.compose.project=multica-prod" --format '{{.Ports}}' \
-                       | grep -oE '0\.0\.0\.0:[0-9]+' | cut -d: -f2 | sort -u)
+                       | grep -oE '(127\.0\.0\.1|0\.0\.0\.0):[0-9]+' | cut -d: -f2 | sort -u)
           fail=0
           for port in "$BACKEND_PORT" "$FRONTEND_HOST_PORT"; do
             holder=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | tail -n +2 || true)

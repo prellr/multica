@@ -157,9 +157,62 @@ func (s *Service) SyncProject(ctx context.Context, workspaceID, projectID pgtype
 				continue
 			}
 			result.Upserted++
+			// Live-refresh CI status for OPEN PRs. PR1 of the Ship Hub
+			// rebuild took CI status out of upsertPR; this is the
+			// counterpart that puts a real refresh back on the sync
+			// path — without the clobbering bug that PR1 closed.
+			//
+			// Webhooks are the primary path for ci_status; this is the
+			// periodic + on-demand backup that catches dropped events.
+			// Best-effort: a fetch failure logs but doesn't fail the
+			// sync (next tick corrects). The Sync Now button hits this
+			// same code, so "Sync Now" is finally a real refresh
+			// rather than the no-op (or worse, regression) it was
+			// before PR1 + PR2 landed.
+			if mapPRState(pr) == db.PullRequestStateOpen {
+				if err := s.refreshPRCIStatus(ctx, workspaceID, repoURL, owner, repo, pr); err != nil {
+					slog.Warn("ship: refresh PR ci_status failed",
+						"repo", result.Repo, "pr", pr.Number, "error", err)
+					// Not incrementing result.Errors — the row is
+					// still upserted, only the optional refresh slipped.
+				}
+			}
 		}
 	}
 	return result, nil
+}
+
+// refreshPRCIStatus live-fetches the CI rollup for an OPEN PR's head SHA
+// and writes the result through the targeted UpdatePullRequestCIStatus
+// writer. Mirrors what the check_run webhook does (without needing the
+// individual per-check rows) so a missed webhook is repaired by the next
+// 5-min reconciler tick or any manual Sync Now click.
+//
+// Returns nil on success; on best-effort failures (PR row not found, GH
+// fetch fails, write fails) returns a wrapped error the caller should log
+// and move on. We never propagate refresh failures up to the SyncProject
+// caller because the row is still upserted; only the optional CI rollup
+// is missing.
+func (s *Service) refreshPRCIStatus(ctx context.Context, workspaceID pgtype.UUID, repoURL, owner, repo string, pr gh.PullRequest) error {
+	status, err := s.Github.GetCIStatus(ctx, owner, repo, pr.Head.SHA)
+	if err != nil {
+		return fmt.Errorf("fetch ci status: %w", err)
+	}
+	row, err := s.Q.GetPullRequestByNumber(ctx, db.GetPullRequestByNumberParams{
+		WorkspaceID: workspaceID,
+		RepoUrl:     repoURL,
+		PrNumber:    int32(pr.Number),
+	})
+	if err != nil {
+		return fmt.Errorf("lookup PR row: %w", err)
+	}
+	if _, err := s.Q.UpdatePullRequestCIStatus(ctx, db.UpdatePullRequestCIStatusParams{
+		ID:       row.ID,
+		CiStatus: pgtype.Text{String: status, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("write ci status: %w", err)
+	}
+	return nil
 }
 
 // SyncWorkspace iterates every project with at least one github_repo

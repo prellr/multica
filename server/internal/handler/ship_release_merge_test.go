@@ -716,34 +716,36 @@ func readPRCIStatus(t *testing.T, repoURL string, prNumber int) string {
 	return ci
 }
 
-// TestUpsertPR_NeverFetchesCIStatus — Ship Hub rebuild PR1 contract.
+// TestSyncProject_OpenPRRefreshesCIStatus_MergedSkipsFetch pins the
+// combined contract of Ship Hub rebuild PR1 + PR2.
 //
-// Replaces the prior ROA-274 trio of tests (Open/Merged/CIFetchError) that
-// asserted upsertPR self-fetched CI status for open PRs. That contract was
-// the root cause of ROA-203: every sync wiped webhook-written ci_status
-// + review_decision. PR1 made the writer leave both columns alone — they
-// are now exclusively owned by UpdatePullRequestCIStatus /
-// UpdatePullRequestReviewDecision driven by check_run +
-// pull_request_review webhooks.
+// PR1 (upsertPR side): the unexported upsertPR writer MUST NOT touch
+// ci_status / review_decision on any code path. Both columns are owned
+// by webhook-driven targeted writers (UpdatePullRequestCIStatus,
+// UpdatePullRequestReviewDecision).
 //
-// This test pins the new contract: upsertPR MUST NOT call GetCIStatus,
-// regardless of PR state (open OR closed/merged), and MUST NOT write
-// ci_status to the row on INSERT or UPDATE. The companion test
-// TestShipService_SyncProject_PreservesWebhookCIStatus in
-// ship_service_integration_test.go pins the read-back: webhook-set
-// ci_status survives a subsequent sync.
-func TestUpsertPR_NeverFetchesCIStatus(t *testing.T) {
+// PR2 (SyncProject side): for OPEN PRs only, SyncProject's loop refreshes
+// ci_status via a live GetCIStatus call AFTER the upsert, then writes the
+// result through the same targeted writer the webhooks use. This restores
+// "Sync Now" as a real live-fetch escape hatch — without the blanket
+// clobbering that PR1 closed. For MERGED/CLOSED PRs, no refresh happens
+// (head SHA is no longer interesting; webhooks remain the only writer).
+//
+// The companion test TestShipService_SyncProject_PreservesWebhookCIStatus
+// in ship_service_integration_test.go pins the read-back: a webhook-set
+// ci_status on a MERGED PR survives subsequent syncs (PR2 doesn't touch
+// merged PRs, so the prior PR1 invariant still holds).
+func TestSyncProject_OpenPRRefreshesCIStatus_MergedSkipsFetch(t *testing.T) {
 	enableShipHub(t, false)
-	repoURL := "https://github.com/multica-ai/ship-pr1-no-ci-fetch"
+	repoURL := "https://github.com/multica-ai/ship-pr2-refresh"
 	projectID := createShipProject(t, repoURL)
 
 	mergedAt := time.Now()
 	var ciCalls int32
+	openSHASeen := ""
+	var openSHALock sync.Mutex
 	ghClient := &fakeShipGithub{
 		listFn: func(_ context.Context, _, _ string, opts gh.ListOptions) ([]gh.PullRequest, error) {
-			// Return both an open PR and a merged PR in the same sync so
-			// the test covers both branches of mapPRState. Pre-PR1, the
-			// open branch did call GetCIStatus; post-PR1 neither does.
 			if opts.State == "open" {
 				pr := gh.PullRequest{
 					Number: 601, Title: "open pr", State: "open",
@@ -759,10 +761,19 @@ func TestUpsertPR_NeverFetchesCIStatus(t *testing.T) {
 			pr.Head.SHA = "headsha602"
 			return []gh.PullRequest{pr}, nil
 		},
-		getCIStatusFn: func(_ context.Context, _, _, _ string) (string, error) {
+		getCIStatusFn: func(_ context.Context, _, _, sha string) (string, error) {
 			atomic.AddInt32(&ciCalls, 1)
-			t.Errorf("GetCIStatus must not be called from upsertPR after PR1; got an unexpected call")
-			return "failure", nil
+			openSHALock.Lock()
+			openSHASeen = sha
+			openSHALock.Unlock()
+			if sha == "headsha602" {
+				// Pre-PR2 buggy regression: merged PRs were the case
+				// the original ROA-274 logic skipped. PR2 must NOT
+				// extend the fetch to merged PRs — head SHA is no
+				// longer interesting and we'd waste a GH round-trip.
+				t.Errorf("GetCIStatus called for merged PR (sha=%s); PR2 must only refresh OPEN PRs", sha)
+			}
+			return "success", nil
 		},
 	}
 	svc := &ship.Service{Q: testHandler.Queries, Github: ghClient}
@@ -772,15 +783,23 @@ func TestUpsertPR_NeverFetchesCIStatus(t *testing.T) {
 		t.Fatalf("SyncProject: %v", err)
 	}
 
-	if got := atomic.LoadInt32(&ciCalls); got != 0 {
-		t.Fatalf("GetCIStatus must not be called from upsertPR; got %d calls", got)
+	// Exactly one GetCIStatus call — for the open PR's head SHA.
+	if got := atomic.LoadInt32(&ciCalls); got != 1 {
+		t.Fatalf("GetCIStatus call count: got %d, want 1 (open PR only)", got)
 	}
-	// Both rows land with ci_status = NULL (read as "" by the helper) —
-	// the webhook path is the sole writer of this column now.
-	if got := readPRCIStatus(t, repoURL, 601); got != "" {
-		t.Fatalf("open PR ci_status: upsert wrote %q; expected NULL/empty (webhook-owned)", got)
+	openSHALock.Lock()
+	sha := openSHASeen
+	openSHALock.Unlock()
+	if sha != "headsha601" {
+		t.Fatalf("GetCIStatus sha: got %q, want headsha601", sha)
+	}
+
+	// Open PR row carries the refreshed ci_status; merged PR row stays
+	// NULL/empty because no refresh ran and no webhook simulated.
+	if got := readPRCIStatus(t, repoURL, 601); got != "success" {
+		t.Fatalf("open PR ci_status: got %q, want %q (PR2 refresh missed)", got, "success")
 	}
 	if got := readPRCIStatus(t, repoURL, 602); got != "" {
-		t.Fatalf("merged PR ci_status: upsert wrote %q; expected NULL/empty (webhook-owned)", got)
+		t.Fatalf("merged PR ci_status: got %q, want NULL/empty (no refresh, no webhook)", got)
 	}
 }

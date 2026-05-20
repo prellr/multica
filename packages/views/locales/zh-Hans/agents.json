@@ -126,6 +126,7 @@
     "section_skills": "skill",
     "prop_runtime": "运行时",
     "prop_model": "模型",
+    "prop_thinking": "思考",
     "prop_visibility": "可见性",
     "prop_concurrency": "并发",
     "prop_owner": "所有者",
@@ -168,7 +169,12 @@
     "model_custom_tooltip": "使用\"{{value}}\"作为自定义模型 ID",
     "model_custom_use": "使用\"{{value}}\"",
     "model_clear": "清除（使用提供方默认）",
-    "model_clear_title": "清除并回退到运行时的提供方默认"
+    "model_clear_title": "清除并回退到运行时的提供方默认",
+    "thinking_default": "默认",
+    "thinking_tooltip": "思考 · {{value}}",
+    "thinking_default_badge": "默认",
+    "thinking_clear": "使用模型默认",
+    "thinking_clear_title": "清除并回退到该模型的默认推理级别"
   },
   "model_dropdown": {
     "label": "模型",

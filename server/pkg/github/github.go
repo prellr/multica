@@ -9,6 +9,7 @@ package github
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -357,6 +358,70 @@ func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, prNumbe
 		return nil, err
 	}
 	return &out, nil
+}
+
+// RepoContentEntry mirrors the GitHub /repos/{owner}/{repo}/contents/{path}
+// response shape when the path is a directory (returns an array). We only
+// pull the fields the Ship Hub pipeline introspector cares about — name,
+// type ("file" | "dir"), path. The full response also includes sha, size,
+// url, etc.; ignored to keep the wire size small.
+type RepoContentEntry struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+	Path string `json:"path"`
+}
+
+// RepoContentFile mirrors the same endpoint when the path is a FILE.
+// Content is base64-encoded and Encoding is always "base64" per GH docs.
+type RepoContentFile struct {
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Type     string `json:"type"`
+	Encoding string `json:"encoding"`
+	Content  string `json:"content"`
+}
+
+// ListRepoDir lists the entries at a directory path in the default
+// branch. Used by the Ship Hub pipeline introspector to enumerate
+// `.github/workflows/`. Returns ErrNotFound when the path doesn't exist
+// (legitimate state for a repo with no workflows — manual_compose shape).
+func (c *Client) ListRepoDir(ctx context.Context, owner, repo, path string) ([]RepoContentEntry, error) {
+	apiPath := fmt.Sprintf("/repos/%s/%s/contents/%s",
+		url.PathEscape(owner), url.PathEscape(repo), path)
+	var out []RepoContentEntry
+	if err := c.do(ctx, "GET", apiPath, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetRepoFile fetches a single file's contents from the default branch
+// and returns the decoded UTF-8 string. Used by the pipeline introspector
+// to read individual workflow YAML files (plus the optional repo-root
+// `.shiphub.yml`). Returns ErrNotFound when the path doesn't exist.
+//
+// Files >1MB return ErrFileTooLarge so the introspector doesn't blow up
+// reading a generated artifact accidentally checked in.
+func (c *Client) GetRepoFile(ctx context.Context, owner, repo, path string) (string, error) {
+	apiPath := fmt.Sprintf("/repos/%s/%s/contents/%s",
+		url.PathEscape(owner), url.PathEscape(repo), path)
+	var out RepoContentFile
+	if err := c.do(ctx, "GET", apiPath, &out); err != nil {
+		return "", err
+	}
+	if out.Type != "file" {
+		return "", fmt.Errorf("github: %s is not a file (type=%q)", path, out.Type)
+	}
+	if out.Encoding != "base64" {
+		return "", fmt.Errorf("github: unexpected encoding %q for %s", out.Encoding, path)
+	}
+	// GH base64-wraps file contents at 60 chars; the standard decoder
+	// handles the embedded newlines.
+	raw, err := base64.StdEncoding.DecodeString(out.Content)
+	if err != nil {
+		return "", fmt.Errorf("github: decode base64 for %s: %w", path, err)
+	}
+	return string(raw), nil
 }
 
 // do is the GET/no-body shorthand that delegates to doWithBody. Kept as a

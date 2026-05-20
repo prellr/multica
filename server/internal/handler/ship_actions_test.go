@@ -78,6 +78,18 @@ func (f *fakeShipGithub) ListPullRequestFiles(_ context.Context, _, _ string, _ 
 	// nil so the classifier degrades to its title-only path.
 	return nil, nil
 }
+
+// PR5a phase 2 — pipeline introspector stubs. Default to ErrNotFound
+// so tests that don't exercise introspection see "shape signal absent"
+// behavior, matching the introspector's handling of repos with no
+// workflows directory. Tests that DO exercise introspection should
+// override these via a dedicated fake.
+func (f *fakeShipGithub) ListRepoDir(_ context.Context, _, _, _ string) ([]gh.RepoContentEntry, error) {
+	return nil, gh.ErrNotFound
+}
+func (f *fakeShipGithub) GetRepoFile(_ context.Context, _, _, _ string) (string, error) {
+	return "", gh.ErrNotFound
+}
 func (f *fakeShipGithub) SubmitReview(ctx context.Context, owner, repo string, prNumber int, event gh.ReviewEvent, body string) (*gh.Review, error) {
 	if f.submitReviewFn != nil {
 		return f.submitReviewFn(ctx, owner, repo, prNumber, event, body)

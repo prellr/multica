@@ -437,6 +437,78 @@ func (h *Handler) SyncProjectPullRequests(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, result)
 }
 
+// IntrospectWorkspacePipelines is the operator-triggered seed for
+// PR5b's dynamic kanban: walks the workspace's projects, runs the PR5a
+// phase 2 introspector against each project's primary github_repo
+// resource, and persists the result so the kanban renders the
+// repo-specific shape instead of the read shim's legacy-enum fallback.
+//
+// POST /api/workspaces/{id}/ship/introspect-pipelines
+//
+// Idempotent: re-running re-introspects every project from current
+// repo state and overwrites the prior stored config. Per-project
+// failures don't block the rest of the workspace — the response
+// returns one ProjectIntrospectionResult per project so the operator
+// can see exactly what changed and what failed.
+//
+// Designed as an operator action rather than an auto-running migration
+// because:
+//   1. The workspace's GitHub token is the auth boundary. Background
+//      auto-introspection on every deploy would hit rate limits on
+//      large workspaces; on-demand keeps it predictable.
+//   2. The kanban-shape change is visible — the operator might
+//      legitimately want to wait or batch this with other config
+//      edits.
+//   3. PR8 will add scheduled + webhook-driven refreshes on top of
+//      this same service method; PR8's diff/approve flow is the
+//      auto-pilot. This endpoint is the manual seed.
+func (h *Handler) IntrospectWorkspacePipelines(w http.ResponseWriter, r *http.Request) {
+	wsID, ws, ok := h.requireShipHubEnabled(w, r)
+	if !ok {
+		return
+	}
+	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(wsID), "workspace not found"); !ok {
+		return
+	}
+	svc, ok := h.shipServiceFromWorkspace(w, r, ws, true)
+	if !ok {
+		return
+	}
+	results, err := svc.IntrospectAllWorkspaceProjects(r.Context(), wsID)
+	if err != nil {
+		// Translate the typed GH errors so the UI can render something
+		// actionable. Auth + rate-limit failures hit the workspace
+		// itself (token bad, rate limit exhausted), not per-project,
+		// so they're whole-call errors.
+		if errors.Is(err, gh.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized, "github: invalid or revoked token")
+			return
+		}
+		if errors.Is(err, gh.ErrRateLimited) {
+			writeError(w, http.StatusTooManyRequests, "github: rate limit hit, retry shortly")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "introspect workspace pipelines failed: "+err.Error())
+		return
+	}
+	// Summary counters so the operator gets a quick "20 introspected,
+	// 3 skipped, 1 error" headline without having to read every entry.
+	summary := map[string]int{
+		"introspected":              0,
+		"skipped_no_repo":           0,
+		"skipped_no_github_client":  0,
+		"error":                     0,
+	}
+	for _, res := range results {
+		summary[res.Status]++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"results": results,
+		"summary": summary,
+		"total":   len(results),
+	})
+}
+
 // ListProjectDeployEnvironments returns the staging/production envs the
 // user has configured for a project.
 func (h *Handler) ListProjectDeployEnvironments(w http.ResponseWriter, r *http.Request) {

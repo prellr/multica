@@ -471,6 +471,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// these on the regular project page).
 			r.Get("/api/projects/{id}/pull_requests", h.ListProjectPullRequests)
 			r.Post("/api/projects/{id}/pull_requests/sync", h.SyncProjectPullRequests)
+			r.Post("/api/workspaces/{id}/ship/introspect-pipelines", h.IntrospectWorkspacePipelines)
 			r.Get("/api/projects/{id}/deploy_environments", h.ListProjectDeployEnvironments)
 			r.Post("/api/projects/{id}/deploy_environments", h.CreateProjectDeployEnvironment)
 			r.Patch("/api/deploy_environments/{id}", h.UpdateDeployEnvironment)

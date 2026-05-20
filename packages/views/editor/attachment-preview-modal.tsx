@@ -101,15 +101,25 @@ export function useAttachmentPreview(): AttachmentPreviewHandle {
     return true;
   }, []);
 
-  const modal = current ? (
-    <AttachmentPreviewModal
-      attachment={current}
-      open
-      onClose={() => setCurrent(null)}
-    />
-  ) : null;
-
-  return useMemo(() => ({ open, tryOpen, modal }), [open, tryOpen, modal]);
+  // Inlined inside the useMemo (not as a top-level const) so the JSX
+  // reference doesn't change every render — that defeated the memo
+  // entirely and triggered react-hooks/exhaustive-deps warnings about
+  // a non-stable dep. Keyed on `current` (the actual driver) instead of
+  // the freshly-created JSX element. setCurrent is stable per React.
+  return useMemo(
+    () => ({
+      open,
+      tryOpen,
+      modal: current ? (
+        <AttachmentPreviewModal
+          attachment={current}
+          open
+          onClose={() => setCurrent(null)}
+        />
+      ) : null,
+    }),
+    [open, tryOpen, current],
+  );
 }
 
 // ---------------------------------------------------------------------------

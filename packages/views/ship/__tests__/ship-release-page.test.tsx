@@ -704,7 +704,11 @@ describe("ShipReleasePage", () => {
     expect(promoteMutateAsync).toHaveBeenCalledWith({
       rollback_plan: "revert the migration",
     });
-  });
+    // 15s rather than the default 5s: this test types 19 chars into a
+    // portal'd dialog via user-event, which fires a React re-render per
+    // keystroke + an actionability check. Runs ~500ms locally but flakes
+    // on slow CI runners. 30× local headroom without masking a true hang.
+  }, 15_000);
 
   it("renders the Live banner + production panels on in_production", () => {
     detailFixture = {

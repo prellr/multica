@@ -66,13 +66,11 @@ if (typeof document.elementFromPoint !== "function") {
 // and otherwise crashes a setTimeout with TypeError. Returning [] is the
 // "no in-flight animations" answer the polling code expects.
 if (typeof Element.prototype.getAnimations !== "function") {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (Element.prototype as any).getAnimations = function getAnimations() {
     return [];
   };
 }
 if (typeof (document as Document & { getAnimations?: unknown }).getAnimations !== "function") {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (document as any).getAnimations = function getAnimations() {
     return [];
   };

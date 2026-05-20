@@ -10,6 +10,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Opt every JavaScript action in this workflow into Node 24 ahead of the
+# 2026-06-02 GitHub default. Silences the recurring "Node.js 20 actions
+# are deprecated" warnings (pnpm/action-setup@v4, actions/setup-go@v5,
+# etc.) without waiting for each action to ship a Node-24 major.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   frontend:
     runs-on: ubuntu-latest

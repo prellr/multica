@@ -232,13 +232,11 @@ describe("user-supplied custom pricing", () => {
         agent_count: 1,
       },
     ];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const byModel = aggregateCostByModel(rows as any);
     const sonnet = byModel.find((r) => r.key === "claude-sonnet-4-6");
     const fictional = byModel.find((r) => r.key === "fictional-model-x");
     expect(sonnet?.cost).toBeCloseTo(3, 5);
     expect(fictional?.cost).toBe(0);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(collectUnmappedModels(rows as any)).toEqual(["fictional-model-x"]);
   });
 
@@ -257,7 +255,6 @@ describe("user-supplied custom pricing", () => {
         agent_count: 1,
       },
     ];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const before = aggregateCostByModel(rows as any);
     expect(before[0]?.cost).toBe(0);
 
@@ -267,7 +264,6 @@ describe("user-supplied custom pricing", () => {
       cacheRead: 0.2,
       cacheWrite: 2,
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const after = aggregateCostByModel(rows as any);
     expect(after[0]?.cost).toBeCloseTo(2, 5);
   });

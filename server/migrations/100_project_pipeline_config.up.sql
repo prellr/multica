@@ -1,0 +1,46 @@
+-- PR5a of the Ship Hub rebuild — per-repo pipeline configuration.
+--
+-- The audit's Section 4.2 documented five distinct pipeline shapes
+-- currently in production across the repos Ship Hub tracks (direct-to-
+-- prod CD, staged with strict manual prod gate, fully manual cross-
+-- repo, library / image-publish, manual SSH+compose). The existing
+-- `project.pipeline_kind` enum (migration 095) only models two of
+-- those (`staged` and `direct_to_prod`). Result: every repo gets the
+-- same hardcoded kanban columns and the same prompts to "Promote to
+-- production", even when those steps are meaningless for the repo's
+-- actual deploy story.
+--
+-- This migration adds a single JSONB column on `project` that captures
+-- each repo's actual pipeline as an ordered list of stages, each
+-- declaring its own trigger source (push_branch, workflow_run,
+-- workflow_dispatch, deployment_status, manual_ack, image_publish_tag)
+-- and metadata (terminal? requires human ack? deploy environment?).
+--
+-- v1 deliberately uses a single JSONB column rather than a normalized
+-- project_pipeline_stage table because:
+--   1. The shape is small and read-mostly (write on introspection
+--      refresh + the very occasional manual override). A JSONB blob
+--      keyed on project_id beats a JOIN every kanban render.
+--   2. Schema can evolve in Go without follow-on migrations — adding
+--      a new trigger kind or a per-stage metadata field is just a
+--      type change, the existing rows keep parsing.
+--   3. PR5b's kanban-render path only needs the whole config for the
+--      current project at a time; there's no query like "find all
+--      projects with a workflow_dispatch stage". When that need
+--      arises, a GIN index on the JSONB column handles it without a
+--      schema redo.
+--
+-- The legacy `pipeline_kind` enum stays in place. PR5a does NOT seed
+-- this column (existing projects have NULL); a read shim in
+-- pipeline_config.go synthesizes a config from the legacy enum value
+-- so the kanban keeps rendering correctly for un-seeded projects until
+-- PR8 (auto-introspect + accept proposed config) lands.
+
+ALTER TABLE project
+    ADD COLUMN pipeline_config JSONB,
+    -- When the introspector last ran against the repo. NULL means
+    -- "never introspected" — the v1 read shim derives from
+    -- pipeline_kind. Once an introspection lands (PR5a one-shot for
+    -- now, PR8 on workflow file changes), this stamps now() and the
+    -- shim returns the JSONB value instead.
+    ADD COLUMN pipeline_config_introspected_at TIMESTAMPTZ;

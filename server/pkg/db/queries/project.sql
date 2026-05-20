@@ -42,6 +42,25 @@ RETURNING *;
 -- name: DeleteProject :exec
 DELETE FROM project WHERE id = $1;
 
+-- name: UpdateProjectPipelineConfig :one
+-- PR5a of the Ship Hub rebuild — write the per-project pipeline config
+-- JSONB after the introspector has run against the repo's workflows
+-- (PR8 will hook the introspector into webhook/scheduled refreshes).
+-- Stamps pipeline_config_introspected_at so the read shim knows to
+-- prefer this value over the legacy pipeline_kind enum.
+--
+-- Pass NULL to reset back to "use the legacy enum" (a manual override
+-- path for the rare operator who wants to undo a bad introspection).
+UPDATE project SET
+    pipeline_config = sqlc.narg('pipeline_config')::jsonb,
+    pipeline_config_introspected_at = CASE
+        WHEN sqlc.narg('pipeline_config') IS NULL THEN NULL
+        ELSE now()
+    END,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
 -- name: ArchiveProject :one
 -- Soft-delete: stamps archived_at + archived_by. Idempotent — re-archiving
 -- a row that's already archived just refreshes the timestamp.

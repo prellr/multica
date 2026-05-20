@@ -38,9 +38,11 @@ function createStores(): RealtimeSyncStores {
 }
 
 function createWrapper(qc: QueryClient) {
-  return ({ children }: { children: ReactNode }) => (
+  const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
   );
+  Wrapper.displayName = "TestQueryClientWrapper";
+  return Wrapper;
 }
 
 describe("useRealtimeSync — ws instance change", () => {

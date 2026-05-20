@@ -3,7 +3,11 @@
 import { useMemo } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useDeployEnvironments, useRecentDeploys } from "@multica/core/ship";
-import type { ProjectPipelineKind, PullRequest } from "@multica/core/types";
+import type {
+  PipelineConfig,
+  ProjectPipelineKind,
+  PullRequest,
+} from "@multica/core/types";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { useT } from "../../i18n";
 import {
@@ -28,8 +32,28 @@ interface ShipKanbanProps {
   projectId: string;
   /** The project's pipeline topology. Drives which stage columns are
    *  visible — `direct_to_prod` projects hide In Staging + Verifying.
-   *  Undefined falls back to the full `staged` superset. */
+   *  Undefined falls back to the full `staged` superset.
+   *
+   *  PR5b of the Ship Hub rebuild: superseded by `pipelineConfig` for
+   *  callers that have it. Kept for backward compatibility with
+   *  consumers that don't yet read the structured config from the
+   *  project response. */
   pipelineKind?: ProjectPipelineKind;
+  /** PR5b — the project's structured pipeline config. When provided,
+   *  drives both column visibility AND column display names: each
+   *  stage in `config.stages` becomes one kanban column in position
+   *  order, with `stage.name` as the column header (no i18n lookup
+   *  for custom stage names — the operator's repo-specific copy
+   *  wins). Falls back to `pipelineKind`-derived columns when this
+   *  prop is undefined.
+   *
+   *  Stage IDs that match a known `ShipKanbanColumn` get the existing
+   *  bucketing + locale label; unknown stage IDs (e.g. library's
+   *  `image_published`, manual_compose's `manually_deployed`) render
+   *  as empty columns with the operator's chosen name until future
+   *  PRs add the per-id derivation. The empty column is the
+   *  "Multica sees this stage exists in your repo's pipeline" signal. */
+  pipelineConfig?: PipelineConfig;
 }
 
 const COLUMN_ACCENT: Record<ShipKanbanColumn, string> = {
@@ -49,20 +73,53 @@ const COLUMN_ACCENT: Record<ShipKanbanColumn, string> = {
   done: "bg-zinc-500/40",
 };
 
+/** Maps a stage id from PipelineConfig to its color accent. Known ids
+ *  (matching ShipKanbanColumn) get the curated palette; unknown ids
+ *  (operator-defined or new shapes' stages like image_published)
+ *  fall back to a neutral muted accent so the column still scans
+ *  visually even before we add a dedicated color. */
+function accentForId(id: string): string {
+  if ((id as ShipKanbanColumn) in COLUMN_ACCENT) {
+    return COLUMN_ACCENT[id as ShipKanbanColumn];
+  }
+  return "bg-slate-500/40";
+}
+
 function ColumnHeader({
   column,
   count,
+  displayName,
 }: {
-  column: ShipKanbanColumn;
+  column: ShipKanbanColumn | string;
   count: number;
+  /** Optional override for the header text. PR5b passes the
+   *  stage.name from pipeline_config so operator-chosen stage labels
+   *  (e.g. "Manually deployed" for compose-shape repos) show
+   *  verbatim. Falls back to the i18n key lookup for known stage
+   *  ids, then to the bare id as a last resort. */
+  displayName?: string;
 }) {
   const { t } = useT("ship");
+  let label = displayName;
+  if (!label) {
+    if ((column as ShipKanbanColumn) in COLUMN_ACCENT) {
+      // Known column id → use the existing locale key. The cast
+      // is safe because the `in` check guarantees the id is one
+      // of the legacy ShipKanbanColumn enum values.
+      label = t(($) => $.kanban.column[column as ShipKanbanColumn]);
+    } else {
+      // Unknown id with no display name override — render the bare
+      // id rather than crash. Operators of new pipeline shapes
+      // (library, manual_compose) should always pass displayName.
+      label = column;
+    }
+  }
   return (
     <div className="flex items-center justify-between gap-2 px-2 py-1.5">
       <div className="flex items-center gap-2">
-        <span className={`size-2 rounded-full ${COLUMN_ACCENT[column]}`} />
+        <span className={`size-2 rounded-full ${accentForId(column)}`} />
         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          {t(($) => $.kanban.column[column])}
+          {label}
         </span>
       </div>
       <span className="text-xs tabular-nums text-muted-foreground">
@@ -123,6 +180,7 @@ export function ShipKanban({
   isLoading,
   projectId,
   pipelineKind,
+  pipelineConfig,
 }: ShipKanbanProps) {
   const { t } = useT("ship");
   const isMobile = useIsMobile();
@@ -130,10 +188,37 @@ export function ShipKanban({
   // in_staging / promoting / in_production columns via SHA matching.
   // Only the column *visibility* derivation moved to pipelineKind.
   const snapshot = useDeploySnapshot(projectId);
-  const visibleColumns = useMemo<ShipKanbanColumn[]>(
-    () => columnsForPipeline(pipelineKind),
-    [pipelineKind],
-  );
+
+  // PR5b — when the project has a structured pipeline_config, drive
+  // both column visibility AND display labels from it. Otherwise fall
+  // back to the legacy pipelineKind-derived superset.
+  //
+  // Each entry in `columnSpecs` is { id, displayName, bucketKey }:
+  // - `id` is the stage id from config (or the legacy ShipKanbanColumn)
+  // - `displayName` is the stage.name override (only when pipelineConfig
+  //   is present); the ColumnHeader renders it verbatim
+  // - `bucketKey` is the ShipKanbanColumn used to look up PRs in
+  //   `buckets`. Known stage ids reuse the existing bucket; unknown
+  //   ids point at "" so the column always renders empty.
+  const columnSpecs = useMemo<
+    Array<{ id: string; displayName?: string; bucketKey: ShipKanbanColumn | null }>
+  >(() => {
+    if (pipelineConfig && pipelineConfig.stages.length > 0) {
+      return pipelineConfig.stages.map((stage) => {
+        const isKnown = (stage.id as ShipKanbanColumn) in COLUMN_ACCENT;
+        return {
+          id: stage.id,
+          displayName: stage.name,
+          bucketKey: isKnown ? (stage.id as ShipKanbanColumn) : null,
+        };
+      });
+    }
+    return columnsForPipeline(pipelineKind).map((col) => ({
+      id: col,
+      bucketKey: col,
+    }));
+  }, [pipelineConfig, pipelineKind]);
+
   const buckets = useMemo(
     () => bucketPullRequests(pullRequests, snapshot),
     [pullRequests, snapshot],
@@ -168,51 +253,65 @@ export function ShipKanban({
 
       {isMobile ? (
         <div className="space-y-2">
-          {visibleColumns.map((col) => (
-            <details
-              key={col}
-              open={buckets[col].length > 0}
-              className="group rounded-md border bg-muted/20"
-            >
-              <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
-                <ColumnHeader column={col} count={buckets[col].length} />
-              </summary>
-              <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto p-2 pt-0">
-                {buckets[col].length === 0 ? (
-                  <div className="px-2 py-3 text-center text-xs text-muted-foreground">
-                    {isLoading ? "" : t(($) => $.kanban.empty_column)}
-                  </div>
-                ) : (
-                  buckets[col].map((pr) => (
-                    <ShipPRCard key={pr.id} pr={pr} stagingEnv={snapshot.staging} />
-                  ))
-                )}
-              </div>
-            </details>
-          ))}
-        </div>
-      ) : (
-        <div className="overflow-x-auto pb-2">
-          <div className="flex gap-3 min-w-max">
-            {visibleColumns.map((col) => (
-              <div
-                key={col}
-                className="flex w-64 shrink-0 flex-col rounded-md border bg-muted/20"
+          {columnSpecs.map((spec) => {
+            const colPRs = spec.bucketKey ? buckets[spec.bucketKey] : [];
+            return (
+              <details
+                key={spec.id}
+                open={colPRs.length > 0}
+                className="group rounded-md border bg-muted/20"
               >
-                <ColumnHeader column={col} count={buckets[col].length} />
+                <summary className="cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+                  <ColumnHeader
+                    column={spec.id}
+                    count={colPRs.length}
+                    displayName={spec.displayName}
+                  />
+                </summary>
                 <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto p-2 pt-0">
-                  {buckets[col].length === 0 ? (
-                    <div className="px-2 py-4 text-center text-xs text-muted-foreground">
+                  {colPRs.length === 0 ? (
+                    <div className="px-2 py-3 text-center text-xs text-muted-foreground">
                       {isLoading ? "" : t(($) => $.kanban.empty_column)}
                     </div>
                   ) : (
-                    buckets[col].map((pr) => (
+                    colPRs.map((pr) => (
                       <ShipPRCard key={pr.id} pr={pr} stagingEnv={snapshot.staging} />
                     ))
                   )}
                 </div>
-              </div>
-            ))}
+              </details>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="overflow-x-auto pb-2">
+          <div className="flex gap-3 min-w-max">
+            {columnSpecs.map((spec) => {
+              const colPRs = spec.bucketKey ? buckets[spec.bucketKey] : [];
+              return (
+                <div
+                  key={spec.id}
+                  className="flex w-64 shrink-0 flex-col rounded-md border bg-muted/20"
+                >
+                  <ColumnHeader
+                    column={spec.id}
+                    count={colPRs.length}
+                    displayName={spec.displayName}
+                  />
+                  <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto p-2 pt-0">
+                    {colPRs.length === 0 ? (
+                      <div className="px-2 py-4 text-center text-xs text-muted-foreground">
+                        {isLoading ? "" : t(($) => $.kanban.empty_column)}
+                      </div>
+                    ) : (
+                      colPRs.map((pr) => (
+                        <ShipPRCard key={pr.id} pr={pr} stagingEnv={snapshot.staging} />
+                      ))
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

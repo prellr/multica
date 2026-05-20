@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service/ship"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -36,7 +37,21 @@ type ProjectResponse struct {
 	// bar. `staged` = full pipeline through staging/QA; `direct_to_prod`
 	// = skip staging stages (merging → promoting → in_production).
 	// See migration 095 and completeMergeTrain in release_merge.go.
+	//
+	// PR5a/b of the Ship Hub rebuild: PipelineKind is a legacy 2-value
+	// enum and is being superseded by PipelineConfig (a structured
+	// per-project shape that supports all 5 real pipeline shapes —
+	// direct_to_prod, staged_strict, manual_only, library,
+	// manual_compose). Existing API consumers that read pipeline_kind
+	// continue to work; new consumers (PR5b's kanban) should read
+	// pipeline_config instead.
 	PipelineKind string `json:"pipeline_kind"`
+	// PipelineConfig is the structured per-project pipeline shape
+	// (PR5a phase 1). Always populated via the read shim so consumers
+	// can render the kanban from this field even when the underlying
+	// JSONB column is still NULL — the shim synthesizes a sensible
+	// default from PipelineKind.
+	PipelineConfig ship.PipelineConfig `json:"pipeline_config"`
 	// ResourceCount is a breadcrumb pointing at the sub-collection at
 	// /api/projects/{id}/resources. Resources themselves stay out of this
 	// payload to keep parent metadata and child collections separate; clients
@@ -45,21 +60,37 @@ type ProjectResponse struct {
 }
 
 func projectToResponse(p db.Project) ProjectResponse {
+	// PR5b — surface the effective pipeline config alongside the legacy
+	// pipeline_kind enum. If the JSONB column is NULL, the read shim
+	// synthesizes a config from the legacy enum so consumers can render
+	// from pipeline_config unconditionally.
+	pipelineConfig, err := ship.EffectivePipelineConfig(p)
+	if err != nil {
+		// A corrupt JSONB blob would already have been recovered by
+		// the read shim, so this branch only fires for unexpected
+		// runtime errors. Log + fall back to the canonical staged
+		// default to keep the API surface non-nullable.
+		slog.Warn("ship: pipeline_config read shim returned error; using staged_strict default",
+			"project_id", uuidToString(p.ID),
+			"error", err)
+		pipelineConfig = ship.DefaultStagedStrictConfig()
+	}
 	return ProjectResponse{
-		ID:           uuidToString(p.ID),
-		WorkspaceID:  uuidToString(p.WorkspaceID),
-		Title:        p.Title,
-		Description:  textToPtr(p.Description),
-		Icon:         textToPtr(p.Icon),
-		Status:       p.Status,
-		Priority:     p.Priority,
-		LeadType:     textToPtr(p.LeadType),
-		LeadID:       uuidToPtr(p.LeadID),
-		ArchivedAt:   timestampToPtr(p.ArchivedAt),
-		ArchivedBy:   uuidToPtr(p.ArchivedBy),
-		CreatedAt:    timestampToString(p.CreatedAt),
-		UpdatedAt:    timestampToString(p.UpdatedAt),
-		PipelineKind: string(p.PipelineKind),
+		ID:             uuidToString(p.ID),
+		WorkspaceID:    uuidToString(p.WorkspaceID),
+		Title:          p.Title,
+		Description:    textToPtr(p.Description),
+		Icon:           textToPtr(p.Icon),
+		Status:         p.Status,
+		Priority:       p.Priority,
+		LeadType:       textToPtr(p.LeadType),
+		LeadID:         uuidToPtr(p.LeadID),
+		ArchivedAt:     timestampToPtr(p.ArchivedAt),
+		ArchivedBy:     uuidToPtr(p.ArchivedBy),
+		CreatedAt:      timestampToString(p.CreatedAt),
+		UpdatedAt:      timestampToString(p.UpdatedAt),
+		PipelineKind:   string(p.PipelineKind),
+		PipelineConfig: pipelineConfig,
 	}
 }
 

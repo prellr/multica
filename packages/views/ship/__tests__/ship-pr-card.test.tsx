@@ -144,4 +144,62 @@ describe("ShipPRCard", () => {
     // protects most browsers.
     expect(link.getAttribute("rel")).toMatch(/noopener/);
   });
+
+  // PR3 of the Ship Hub rebuild — freshness indicator.
+  //
+  // The hint renders only when (state === "open") AND
+  // (now - fetched_at > 7 minutes). Closed/merged rows don't change,
+  // so freshness is meaningless for them; recent fetches stay quiet.
+  describe("FreshnessHint", () => {
+    const aboveThreshold = () =>
+      new Date(Date.now() - 9 * 60 * 1000).toISOString(); // 9 min ago
+    const belowThreshold = () =>
+      new Date(Date.now() - 2 * 60 * 1000).toISOString(); // 2 min ago
+
+    it("renders the stale hint on an open PR whose fetched_at exceeds the threshold", () => {
+      render(
+        <ShipPRCard
+          pr={makePR({ state: "open", fetched_at: aboveThreshold() })}
+        />,
+        { wrapper: I18nWrapper },
+      );
+      // Locate by the marker attribute the component sets — robust to
+      // copy changes in the locale file.
+      const hint = document.querySelector('[data-stale="true"]');
+      expect(hint).toBeTruthy();
+      expect(hint?.getAttribute("title") ?? "").toMatch(/refreshed/i);
+    });
+
+    it("does not render the hint for a fresh open PR", () => {
+      render(
+        <ShipPRCard
+          pr={makePR({ state: "open", fetched_at: belowThreshold() })}
+        />,
+        { wrapper: I18nWrapper },
+      );
+      expect(document.querySelector('[data-stale="true"]')).toBeNull();
+    });
+
+    it("does not render the hint for a merged PR even if fetched_at is old", () => {
+      // Merged rows don't change; their head SHA isn't interesting and
+      // PR2 doesn't refresh them. Showing "stale" on a merged PR would
+      // mislead the operator into thinking Sync Now would do something.
+      render(
+        <ShipPRCard
+          pr={makePR({ state: "merged", fetched_at: aboveThreshold() })}
+        />,
+        { wrapper: I18nWrapper },
+      );
+      expect(document.querySelector('[data-stale="true"]')).toBeNull();
+    });
+
+    it("does not render the hint when fetched_at is empty", () => {
+      // Newly-inserted PR rows that haven't been touched by a fetch
+      // yet land here. Better to render nothing than guess.
+      render(<ShipPRCard pr={makePR({ state: "open", fetched_at: "" })} />, {
+        wrapper: I18nWrapper,
+      });
+      expect(document.querySelector('[data-stale="true"]')).toBeNull();
+    });
+  });
 });

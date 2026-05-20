@@ -98,6 +98,8 @@
     "ci_failing": "CI failing",
     "ci_pending": "CI pending",
     "ci_unknown": "CI unknown",
+    "stale_indicator": "Stale",
+    "stale_indicator_tooltip": "Last refreshed {{when}}. Click Sync Now if values look wrong.",
     "review_required": "Review needed",
     "review_approved": "Approved",
     "review_changes_requested": "Changes requested",

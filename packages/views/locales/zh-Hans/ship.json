@@ -98,6 +98,8 @@
     "ci_failing": "CI 失败",
     "ci_pending": "CI 进行中",
     "ci_unknown": "CI 状态未知",
+    "stale_indicator": "可能过时",
+    "stale_indicator_tooltip": "上次刷新：{{when}}。如果信息看起来不对，请点击 Sync Now 重新拉取。",
     "review_required": "待审查",
     "review_approved": "已通过",
     "review_changes_requested": "需修改",

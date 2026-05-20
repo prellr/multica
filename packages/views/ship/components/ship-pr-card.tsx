@@ -133,6 +133,55 @@ function CIPill({ status }: { status: string }) {
   );
 }
 
+/** FreshnessHint — PR3 of the Ship Hub rebuild.
+ *
+ *  The audit found Ship Hub treats its own DB as the source of truth for
+ *  state that physically lives at GitHub. Even with PR1+PR2 closing the
+ *  worst writer bugs, webhook deliveries can still drop and the UI has
+ *  no way to communicate "this might be stale" to the operator — so a
+ *  bad value looks identical to a fresh value.
+ *
+ *  This is the first signal that "Multica thinks this is stale": when
+ *  the PR row's last fetched_at exceeds the staleness threshold AND the
+ *  PR is still open (closed/merged rows don't change so freshness is
+ *  meaningless for them), a subtle muted clock icon appears next to the
+ *  status pills with a tooltip explaining what to do.
+ *
+ *  Threshold (7 min) = 5 min reconciler interval + 2 min jitter buffer.
+ *  Open PRs that haven't been touched by either a webhook write or a
+ *  reconciler tick in 7+ minutes are the ones most likely to be wrong. */
+const STALENESS_THRESHOLD_MS = 7 * 60 * 1000;
+
+function FreshnessHint({
+  fetchedAt,
+  state,
+  locale,
+}: {
+  fetchedAt: string;
+  state: string;
+  locale: string;
+}) {
+  const { t } = useT("ship");
+  if (state !== "open") return null;
+  if (!fetchedAt) return null;
+  const then = new Date(fetchedAt).getTime();
+  if (!Number.isFinite(then)) return null;
+  const ageMs = Date.now() - then;
+  if (ageMs < STALENESS_THRESHOLD_MS) return null;
+  const relative = formatRelativeTime(fetchedAt, locale);
+  const tooltip = t(($) => $.card.stale_indicator_tooltip, { when: relative });
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-muted-foreground/70"
+      title={tooltip}
+      data-stale="true"
+    >
+      <Clock className="size-3" />
+      <span className="text-[11px]">{t(($) => $.card.stale_indicator)}</span>
+    </span>
+  );
+}
+
 /** Review-decision badge. Phase 2 — backend now populates this from PR
  *  review webhooks. Empty string ("") is the "no decision yet" state and
  *  intentionally renders nothing so the card stays clean for fresh PRs.
@@ -362,8 +411,18 @@ export function ShipPRCard({
           Render review_decision next to ci_status because they read as
           a unit ("approved + passing CI" / "changes requested + failing"
           etc.). Conflict warning is its own chip because it's a hard
-          blocker independent of either signal. */}
-      {(pr.ci_status || pr.review_decision || pr.mergeable === "CONFLICTING") && (
+          blocker independent of either signal.
+          PR3 of the Ship Hub rebuild adds a freshness hint at the tail
+          of the row — see FreshnessHint. It only renders when the row
+          is open AND its fetched_at is older than 7 minutes, so the
+          normal case stays uncluttered. */}
+      {(pr.ci_status ||
+        pr.review_decision ||
+        pr.mergeable === "CONFLICTING" ||
+        // Also render the row when only the freshness hint applies, so
+        // an open PR with no other status info still gets the stale
+        // signal when relevant.
+        (pr.state === "open" && pr.fetched_at)) && (
         <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
           <CIPill status={pr.ci_status} />
           <ReviewBadge decision={pr.review_decision} />
@@ -373,6 +432,11 @@ export function ShipPRCard({
               {t(($) => $.kanban.conflicting)}
             </span>
           )}
+          <FreshnessHint
+            fetchedAt={pr.fetched_at}
+            state={pr.state}
+            locale={i18n.language}
+          />
         </div>
       )}
 

@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -201,13 +202,22 @@ type releaseResponse struct {
 }
 
 func releaseToResponse(r db.ShipRelease, prCount int) releaseResponse {
+	// PR4 of the Ship Hub rebuild: derive the displayed stage at read
+	// time rather than trusting the stored column. The stored stage is
+	// written by multiple producers (merge train, staging promotion,
+	// production promotion, rollback, cancel) and a failed mid-train
+	// write or a missed webhook can leave it stale forever; derivation
+	// reconciles against the observable timestamp ladder + the sticky
+	// operator-intent terminals. See server/internal/service/ship/stage_derive.go
+	// for the full algorithm + invariants.
+	derivedStage := ship.DeriveReleaseStage(r, time.Now())
 	return releaseResponse{
 		ID:                 uuidToString(r.ID),
 		WorkspaceID:        uuidToString(r.WorkspaceID),
 		ProjectID:          uuidToString(r.ProjectID),
 		Title:              r.Title,
 		Description:        textToPtr(r.Description),
-		Stage:              string(r.Stage),
+		Stage:              string(derivedStage),
 		RiskLevel:          string(r.RiskLevel),
 		ChannelID:          uuidToPtr(r.ChannelID),
 		IssueID:            uuidToPtr(r.IssueID),
@@ -596,10 +606,20 @@ func (h *Handler) ListWorkspaceActiveReleases(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "failed to list active releases")
 		return
 	}
-	out := make([]releaseResponse, len(rows))
-	for i, rel := range rows {
+	// PR4 of the Ship Hub rebuild: post-filter on the DERIVED stage so
+	// a release whose stored stage drifted but whose timestamp ladder
+	// reached a terminal state (the canonical "Active rail won't clear"
+	// failure mode — audit doc Bug 3) drops off this list on the next
+	// page load without operator intervention. The SQL filter still
+	// applies a coarse cut on the stored stage; derivation tightens it.
+	now := time.Now()
+	out := make([]releaseResponse, 0, len(rows))
+	for _, rel := range rows {
+		if ship.IsTerminalDerivedStage(ship.DeriveReleaseStage(rel, now)) {
+			continue
+		}
 		count, _ := h.Queries.CountActiveReleasePullRequests(r.Context(), rel.ID)
-		out[i] = releaseToResponse(rel, int(count))
+		out = append(out, releaseToResponse(rel, int(count)))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"releases": out})
 }

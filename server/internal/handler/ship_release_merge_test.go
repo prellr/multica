@@ -716,34 +716,52 @@ func readPRCIStatus(t *testing.T, repoURL string, prNumber int) string {
 	return ci
 }
 
-// TestUpsertPR_OpenPR_PersistsFetchedCIStatus — ROA-274 regression.
-// The polling sync must self-fetch CI for OPEN PRs and persist it, so
-// the merge-train gate can block red CI. Drives SyncProject (the only
-// path into the unexported upsertPR) with a fake that returns
-// "failure".
-func TestUpsertPR_OpenPR_PersistsFetchedCIStatus(t *testing.T) {
+// TestUpsertPR_NeverFetchesCIStatus — Ship Hub rebuild PR1 contract.
+//
+// Replaces the prior ROA-274 trio of tests (Open/Merged/CIFetchError) that
+// asserted upsertPR self-fetched CI status for open PRs. That contract was
+// the root cause of ROA-203: every sync wiped webhook-written ci_status
+// + review_decision. PR1 made the writer leave both columns alone — they
+// are now exclusively owned by UpdatePullRequestCIStatus /
+// UpdatePullRequestReviewDecision driven by check_run +
+// pull_request_review webhooks.
+//
+// This test pins the new contract: upsertPR MUST NOT call GetCIStatus,
+// regardless of PR state (open OR closed/merged), and MUST NOT write
+// ci_status to the row on INSERT or UPDATE. The companion test
+// TestShipService_SyncProject_PreservesWebhookCIStatus in
+// ship_service_integration_test.go pins the read-back: webhook-set
+// ci_status survives a subsequent sync.
+func TestUpsertPR_NeverFetchesCIStatus(t *testing.T) {
 	enableShipHub(t, false)
-	repoURL := "https://github.com/multica-ai/roa274-open"
+	repoURL := "https://github.com/multica-ai/ship-pr1-no-ci-fetch"
 	projectID := createShipProject(t, repoURL)
 
+	mergedAt := time.Now()
 	var ciCalls int32
 	ghClient := &fakeShipGithub{
 		listFn: func(_ context.Context, _, _ string, opts gh.ListOptions) ([]gh.PullRequest, error) {
-			if opts.State != "open" {
-				return nil, nil // closed-list call returns nothing
+			// Return both an open PR and a merged PR in the same sync so
+			// the test covers both branches of mapPRState. Pre-PR1, the
+			// open branch did call GetCIStatus; post-PR1 neither does.
+			if opts.State == "open" {
+				pr := gh.PullRequest{
+					Number: 601, Title: "open pr", State: "open",
+					CreatedAt: time.Now(), UpdatedAt: time.Now(),
+				}
+				pr.Head.SHA = "headsha601"
+				return []gh.PullRequest{pr}, nil
 			}
 			pr := gh.PullRequest{
-				Number: 501, Title: "open pr", State: "open",
+				Number: 602, Title: "merged pr", State: "closed", MergedAt: &mergedAt,
 				CreatedAt: time.Now(), UpdatedAt: time.Now(),
 			}
-			pr.Head.SHA = "headsha501"
+			pr.Head.SHA = "headsha602"
 			return []gh.PullRequest{pr}, nil
 		},
-		getCIStatusFn: func(_ context.Context, _, _, sha string) (string, error) {
+		getCIStatusFn: func(_ context.Context, _, _, _ string) (string, error) {
 			atomic.AddInt32(&ciCalls, 1)
-			if sha != "headsha501" {
-				t.Errorf("GetCIStatus sha: got %q, want headsha501", sha)
-			}
+			t.Errorf("GetCIStatus must not be called from upsertPR after PR1; got an unexpected call")
 			return "failure", nil
 		},
 	}
@@ -754,92 +772,15 @@ func TestUpsertPR_OpenPR_PersistsFetchedCIStatus(t *testing.T) {
 		t.Fatalf("SyncProject: %v", err)
 	}
 
-	if got := atomic.LoadInt32(&ciCalls); got != 1 {
-		t.Fatalf("GetCIStatus call count: got %d, want 1", got)
-	}
-	if got := readPRCIStatus(t, repoURL, 501); got != "failure" {
-		t.Fatalf("persisted ci_status: got %q, want %q", got, "failure")
-	}
-}
-
-// TestUpsertPR_MergedPR_SkipsCIFetchAndLeavesEmpty — closed/merged PRs
-// must NOT trigger a CI fetch (their head SHA is no longer interesting)
-// and persist ci_status="".
-func TestUpsertPR_MergedPR_SkipsCIFetchAndLeavesEmpty(t *testing.T) {
-	enableShipHub(t, false)
-	repoURL := "https://github.com/multica-ai/roa274-merged"
-	projectID := createShipProject(t, repoURL)
-
-	mergedAt := time.Now()
-	var ciCalls int32
-	ghClient := &fakeShipGithub{
-		listFn: func(_ context.Context, _, _ string, opts gh.ListOptions) ([]gh.PullRequest, error) {
-			if opts.State != "closed" {
-				return nil, nil
-			}
-			pr := gh.PullRequest{
-				Number: 502, Title: "merged pr", State: "closed", MergedAt: &mergedAt,
-				CreatedAt: time.Now(), UpdatedAt: time.Now(),
-			}
-			pr.Head.SHA = "headsha502"
-			return []gh.PullRequest{pr}, nil
-		},
-		getCIStatusFn: func(_ context.Context, _, _, _ string) (string, error) {
-			atomic.AddInt32(&ciCalls, 1)
-			return "success", nil
-		},
-	}
-	svc := &ship.Service{Q: testHandler.Queries, Github: ghClient}
-
-	if _, err := svc.SyncProject(context.Background(),
-		parseUUID(testWorkspaceID), parseUUID(projectID)); err != nil {
-		t.Fatalf("SyncProject: %v", err)
-	}
-
 	if got := atomic.LoadInt32(&ciCalls); got != 0 {
-		t.Fatalf("GetCIStatus must not be called for merged PRs; got %d calls", got)
+		t.Fatalf("GetCIStatus must not be called from upsertPR; got %d calls", got)
 	}
-	if got := readPRCIStatus(t, repoURL, 502); got != "" {
-		t.Fatalf("persisted ci_status for merged PR: got %q, want empty", got)
+	// Both rows land with ci_status = NULL (read as "" by the helper) —
+	// the webhook path is the sole writer of this column now.
+	if got := readPRCIStatus(t, repoURL, 601); got != "" {
+		t.Fatalf("open PR ci_status: upsert wrote %q; expected NULL/empty (webhook-owned)", got)
 	}
-}
-
-// TestUpsertPR_CIFetchError_LeavesEmptyAndContinues — a CI fetch
-// failure is best-effort: ci_status stays "" and the sync still
-// succeeds (next sync corrects it). We must never fail the whole sync
-// over one PR's CI lookup.
-func TestUpsertPR_CIFetchError_LeavesEmptyAndContinues(t *testing.T) {
-	enableShipHub(t, false)
-	repoURL := "https://github.com/multica-ai/roa274-err"
-	projectID := createShipProject(t, repoURL)
-
-	ghClient := &fakeShipGithub{
-		listFn: func(_ context.Context, _, _ string, opts gh.ListOptions) ([]gh.PullRequest, error) {
-			if opts.State != "open" {
-				return nil, nil
-			}
-			pr := gh.PullRequest{
-				Number: 503, Title: "open pr", State: "open",
-				CreatedAt: time.Now(), UpdatedAt: time.Now(),
-			}
-			pr.Head.SHA = "headsha503"
-			return []gh.PullRequest{pr}, nil
-		},
-		getCIStatusFn: func(_ context.Context, _, _, _ string) (string, error) {
-			return "", gh.ErrNotFound
-		},
-	}
-	svc := &ship.Service{Q: testHandler.Queries, Github: ghClient}
-
-	res, err := svc.SyncProject(context.Background(),
-		parseUUID(testWorkspaceID), parseUUID(projectID))
-	if err != nil {
-		t.Fatalf("SyncProject must not fail on CI fetch error: %v", err)
-	}
-	if res.Upserted == 0 {
-		t.Fatalf("expected the PR to still upsert despite CI error, got %+v", res)
-	}
-	if got := readPRCIStatus(t, repoURL, 503); got != "" {
-		t.Fatalf("ci_status on fetch error: got %q, want empty", got)
+	if got := readPRCIStatus(t, repoURL, 602); got != "" {
+		t.Fatalf("merged PR ci_status: upsert wrote %q; expected NULL/empty (webhook-owned)", got)
 	}
 }

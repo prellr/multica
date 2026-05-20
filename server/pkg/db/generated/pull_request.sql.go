@@ -1017,12 +1017,12 @@ const upsertPullRequest = `-- name: UpsertPullRequest :one
 INSERT INTO pull_request (
     workspace_id, project_id, repo_url, pr_number, title, state, is_draft,
     author_login, author_avatar_url, base_ref, head_ref, head_sha, html_url,
-    body, ci_status, review_decision, mergeable, additions, deletions,
+    body, mergeable, additions, deletions,
     changed_files, labels, pr_created_at, pr_updated_at, pr_merged_at,
     pr_closed_at, fetched_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-    $17, $18, $19, $20, $21, $22, $23, $24, $25, now()
+    $17, $18, $19, $20, $21, $22, $23, now()
 )
 ON CONFLICT (workspace_id, repo_url, pr_number) DO UPDATE SET
     project_id        = EXCLUDED.project_id,
@@ -1036,8 +1036,9 @@ ON CONFLICT (workspace_id, repo_url, pr_number) DO UPDATE SET
     head_sha          = EXCLUDED.head_sha,
     html_url          = EXCLUDED.html_url,
     body              = EXCLUDED.body,
-    ci_status         = EXCLUDED.ci_status,
-    review_decision   = EXCLUDED.review_decision,
+    -- ci_status and review_decision are intentionally NOT updated here;
+    -- see the header comment + UpdatePullRequestCIStatus /
+    -- UpdatePullRequestReviewDecision.
     mergeable         = EXCLUDED.mergeable,
     additions         = EXCLUDED.additions,
     deletions         = EXCLUDED.deletions,
@@ -1066,8 +1067,6 @@ type UpsertPullRequestParams struct {
 	HeadSha         string             `json:"head_sha"`
 	HtmlUrl         string             `json:"html_url"`
 	Body            pgtype.Text        `json:"body"`
-	CiStatus        pgtype.Text        `json:"ci_status"`
-	ReviewDecision  pgtype.Text        `json:"review_decision"`
 	Mergeable       pgtype.Text        `json:"mergeable"`
 	Additions       int32              `json:"additions"`
 	Deletions       int32              `json:"deletions"`
@@ -1082,6 +1081,14 @@ type UpsertPullRequestParams struct {
 // Sync path: insert a freshly-fetched PR or update the existing row's mutable
 // fields. The unique key (workspace_id, repo_url, pr_number) keeps the upsert
 // idempotent: re-running SyncProject is safe and does not produce duplicates.
+//
+// Authoritative writers for ci_status and review_decision are the webhook-
+// driven helpers UpdatePullRequestCIStatus and UpdatePullRequestReviewDecision.
+// This upsert deliberately DOES NOT touch those columns — on INSERT they
+// default to NULL (read as "unknown"), and on UPDATE they retain whatever the
+// check_run / pull_request_review webhook last wrote. Without this guard the
+// 5-min reconciler tick wipes webhook-supplied state every sync (ROA-203 root
+// cause; see Ship Hub rebuild audit, PR1).
 func (q *Queries) UpsertPullRequest(ctx context.Context, arg UpsertPullRequestParams) (PullRequest, error) {
 	row := q.db.QueryRow(ctx, upsertPullRequest,
 		arg.WorkspaceID,
@@ -1098,8 +1105,6 @@ func (q *Queries) UpsertPullRequest(ctx context.Context, arg UpsertPullRequestPa
 		arg.HeadSha,
 		arg.HtmlUrl,
 		arg.Body,
-		arg.CiStatus,
-		arg.ReviewDecision,
 		arg.Mergeable,
 		arg.Additions,
 		arg.Deletions,

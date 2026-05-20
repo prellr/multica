@@ -88,6 +88,11 @@ import type {
   ListAutopilotsResponse,
   GetAutopilotResponse,
   ListAutopilotRunsResponse,
+  MCPServer,
+  CreateMCPServerRequest,
+  UpdateMCPServerRequest,
+  ListMCPServersResponse,
+  GetMCPServerResponse,
   NotificationPreferenceResponse,
   NotificationPreferences,
   Channel,
@@ -248,6 +253,12 @@ import {
   EMPTY_PULL_REQUEST_DETAILS_RESPONSE,
   AgentTagListSchema,
   EMPTY_AGENT_TAG_LIST,
+  ListMCPServersResponseSchema,
+  EMPTY_LIST_MCP_SERVERS_RESPONSE,
+  GetMCPServerResponseSchema,
+  EMPTY_GET_MCP_SERVER_RESPONSE,
+  MCPServerResponseSchema,
+  EMPTY_MCP_SERVER_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1967,6 +1978,74 @@ export class ApiClient {
 
   async deleteAutopilotTrigger(autopilotId: string, triggerId: string): Promise<void> {
     await this.fetch(`/api/autopilots/${autopilotId}/triggers/${triggerId}`, { method: "DELETE" });
+  }
+
+  // MCP Servers
+  async listMCPServers(): Promise<ListMCPServersResponse> {
+    const raw = await this.fetch<unknown>("/api/mcp-servers");
+    return parseWithFallback(raw, ListMCPServersResponseSchema, EMPTY_LIST_MCP_SERVERS_RESPONSE, {
+      endpoint: "GET /api/mcp-servers",
+    }) as ListMCPServersResponse;
+  }
+
+  async getMCPServer(id: string): Promise<GetMCPServerResponse> {
+    const raw = await this.fetch<unknown>(`/api/mcp-servers/${id}`);
+    return parseWithFallback(raw, GetMCPServerResponseSchema, EMPTY_GET_MCP_SERVER_RESPONSE, {
+      endpoint: "GET /api/mcp-servers/:id",
+    }) as GetMCPServerResponse;
+  }
+
+  async createMCPServer(data: CreateMCPServerRequest): Promise<MCPServer> {
+    const raw = await this.fetch<unknown>("/api/mcp-servers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, MCPServerResponseSchema, EMPTY_MCP_SERVER_RESPONSE, {
+      endpoint: "POST /api/mcp-servers",
+    }) as MCPServer;
+  }
+
+  async updateMCPServer(id: string, data: UpdateMCPServerRequest): Promise<MCPServer> {
+    const raw = await this.fetch<unknown>(`/api/mcp-servers/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, MCPServerResponseSchema, EMPTY_MCP_SERVER_RESPONSE, {
+      endpoint: "PATCH /api/mcp-servers/:id",
+    }) as MCPServer;
+  }
+
+  async deleteMCPServer(id: string): Promise<void> {
+    await this.fetch(`/api/mcp-servers/${id}`, { method: "DELETE" });
+  }
+
+  async upsertMCPServerSecret(id: string, key: string, value: string): Promise<void> {
+    await this.fetch(`/api/mcp-servers/${id}/secrets/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      body: JSON.stringify({ value }),
+    });
+  }
+
+  async deleteMCPServerSecret(id: string, key: string): Promise<void> {
+    await this.fetch(`/api/mcp-servers/${id}/secrets/${encodeURIComponent(key)}`, {
+      method: "DELETE",
+    });
+  }
+
+  async addMCPServerToolAllowlistEntry(
+    id: string,
+    toolName: string,
+  ): Promise<{ tool_allowlist: string[] }> {
+    return this.fetch(`/api/mcp-servers/${id}/tool-allowlist`, {
+      method: "POST",
+      body: JSON.stringify({ tool_name: toolName }),
+    });
+  }
+
+  async removeMCPServerToolAllowlistEntry(id: string, toolName: string): Promise<void> {
+    await this.fetch(`/api/mcp-servers/${id}/tool-allowlist/${encodeURIComponent(toolName)}`, {
+      method: "DELETE",
+    });
   }
 
   // Memory artifacts — workspace-scoped, kind-discriminated markdown

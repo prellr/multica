@@ -125,6 +125,13 @@ export type {
   ListAutopilotRunsResponse,
 } from "./autopilot";
 export type {
+  MCPServer,
+  ListMCPServersResponse,
+  GetMCPServerResponse,
+  CreateMCPServerRequest,
+  UpdateMCPServerRequest,
+} from "./mcp-server";
+export type {
   MemoryArtifact,
   MemoryArtifactKind,
   MemoryArtifactAnchorType,

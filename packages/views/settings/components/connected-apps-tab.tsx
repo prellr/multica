@@ -577,8 +577,9 @@ function ServerDetailPanel({
 
         <section className="space-y-3">
           <h3 className="text-sm font-semibold">{t(($) => $.connected_apps.allowlist_title)}</h3>
-          <p className="text-xs text-muted-foreground">{t(($) => $.connected_apps.allowlist_empty)}</p>
-          {server.tool_allowlist.length > 0 && (
+          {server.tool_allowlist.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{t(($) => $.connected_apps.allowlist_empty)}</p>
+          ) : (
             <div className="space-y-2">
               {server.tool_allowlist.map((tool) => (
                 <div key={tool} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card p-2">
@@ -790,7 +791,9 @@ export function ConnectedAppsTab() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              {t(($) => $.connected_apps.remove_confirm_cancel)}
+            </AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               onClick={confirmDelete}

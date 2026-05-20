@@ -303,6 +303,7 @@
     "remove": "Remove",
     "remove_confirm_title": "Remove MCP server",
     "remove_confirm_description": "This server and all its secrets will be permanently deleted.",
+    "remove_confirm_cancel": "Cancel",
     "remove_confirm_action": "Remove",
     "form_name": "Name",
     "form_transport": "Transport",

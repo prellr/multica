@@ -66,3 +66,72 @@ func TestMapPRStateToGitHubPanel(t *testing.T) {
 		})
 	}
 }
+
+// TestPushTouchesPipelineFiles pins the PR8 webhook trigger: a push is
+// only worth re-introspecting when it changed a workflow YAML or
+// `.shiphub.yml`. The added / modified / removed lists are all scanned.
+func TestPushTouchesPipelineFiles(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		commit *gh.PushCommit
+		want   bool
+	}{
+		{"nil head commit", nil, false},
+		{
+			"unrelated source file",
+			&gh.PushCommit{Modified: []string{"server/internal/handler/ship.go"}},
+			false,
+		},
+		{
+			"added workflow yml",
+			&gh.PushCommit{Added: []string{".github/workflows/deploy.yml"}},
+			true,
+		},
+		{
+			"modified workflow yaml",
+			&gh.PushCommit{Modified: []string{".github/workflows/ci.yaml"}},
+			true,
+		},
+		{
+			"removed workflow",
+			&gh.PushCommit{Removed: []string{".github/workflows/old-deploy.yml"}},
+			true,
+		},
+		{
+			"shiphub override at root",
+			&gh.PushCommit{Modified: []string{".shiphub.yml"}},
+			true,
+		},
+		{
+			"workflows dir but non-yaml file",
+			&gh.PushCommit{Modified: []string{".github/workflows/README.md"}},
+			false,
+		},
+		{
+			"shiphub-named file in a subdir is not the root override",
+			&gh.PushCommit{Modified: []string{"docs/.shiphub.yml"}},
+			false,
+		},
+		{
+			"leading ./ is tolerated",
+			&gh.PushCommit{Added: []string{"./.github/workflows/deploy.yml"}},
+			true,
+		},
+		{
+			"mixed: one relevant path among many",
+			&gh.PushCommit{
+				Modified: []string{"README.md", "src/main.go", ".github/workflows/deploy.yml"},
+			},
+			true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := gh.PushEvent{HeadCommit: tc.commit}
+			if got := pushTouchesPipelineFiles(payload); got != tc.want {
+				t.Errorf("pushTouchesPipelineFiles(%+v) = %v, want %v", tc.commit, got, tc.want)
+			}
+		})
+	}
+}

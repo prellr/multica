@@ -20,6 +20,7 @@ import { ProjectIcon } from "../../projects/components/project-icon";
 import { useT } from "../../i18n";
 import { ShipDeploySwimlanes } from "./ship-deploy-swimlanes";
 import { ShipRepoSection } from "./ship-repo-section";
+import { PipelineProposalBanner } from "./pipeline-proposal-banner";
 
 interface ShipProjectSectionProps {
   project: ShipProjectSummary;
@@ -286,6 +287,14 @@ export function ShipProjectSection({ project }: ShipProjectSectionProps) {
 
       {!collapsed && (
         <div id={sectionId} className="space-y-3">
+          {/* PR8 — pipeline auto-refresh: shows a pending proposal +
+              the "Refresh pipeline from repo" trigger. */}
+          <PipelineProposalBanner
+            projectId={project.id}
+            pipelineConfig={fullProject?.pipeline_config}
+            pipelineConfigProposed={fullProject?.pipeline_config_proposed}
+          />
+
           <ShipDeploySwimlanes projectId={project.id} />
 
           <div className="space-y-3">

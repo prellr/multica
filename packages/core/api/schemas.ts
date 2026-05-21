@@ -888,6 +888,100 @@ export const EMPTY_CREATE_RELEASE_RESPONSE = {
   warnings: [],
 };
 
+// ---------------------------------------------------------------------------
+// PR8 — pipeline auto-refresh. Schemas for the three new endpoints
+// (refresh / proposal accept / proposal reject). Per the API-compat
+// contract: enum-ish strings (diff kind, refresh outcome kind, trigger
+// kind, shape) stay as `z.string()` so a new server-side value
+// downgrades to a generic render instead of throwing. Every nested
+// object is `.loose()` so an added field can't fail the parse.
+// ---------------------------------------------------------------------------
+
+const PipelineTriggerSchema = z.object({
+  kind: z.string().default(""),
+  config: z.object({
+    branch: z.string().optional(),
+    workflow: z.string().optional(),
+    parent_workflow: z.string().optional(),
+    environment: z.string().optional(),
+    tag_pattern: z.string().optional(),
+  }).loose().optional(),
+}).loose();
+
+const PipelineStageSchema = z.object({
+  id: z.string().default(""),
+  name: z.string().default(""),
+  position: z.number().default(0),
+  is_terminal: z.boolean().optional(),
+  requires_human_ack: z.boolean().optional(),
+  deploy_environment_id: z.string().optional(),
+  triggers: z.array(PipelineTriggerSchema).optional(),
+}).loose();
+
+export const PipelineConfigSchema = z.object({
+  shape: z.string().default(""),
+  stages: z.array(PipelineStageSchema).default([]),
+}).loose();
+
+const DiffStageRefSchema = z.object({
+  id: z.string().default(""),
+  name: z.string().default(""),
+}).loose();
+
+const DiffRenameSchema = z.object({
+  id: z.string().default(""),
+  old_name: z.string().default(""),
+  new_name: z.string().default(""),
+}).loose();
+
+export const PipelineDiffSchema = z.object({
+  kind: z.string().default("none"),
+  shape_changed: z.boolean().default(false),
+  old_shape: z.string().optional(),
+  new_shape: z.string().optional(),
+  added_stages: z.array(DiffStageRefSchema).default([]),
+  removed_stages: z.array(DiffStageRefSchema).default([]),
+  renamed_stages: z.array(DiffRenameSchema).default([]),
+  reordered_stages: z.array(z.string()).default([]),
+  triggers_added_stages: z.array(z.string()).default([]),
+  triggers_removed_stages: z.array(z.string()).default([]),
+}).loose();
+
+export const PipelineRefreshResponseSchema = z.object({
+  project_id: z.string().default(""),
+  kind: z.string().default("unchanged"),
+  // Diff is present for applied_additive / proposed_destructive only.
+  diff: PipelineDiffSchema.nullable().optional(),
+  shape: z.string().optional(),
+}).loose();
+
+export const EMPTY_PIPELINE_REFRESH_RESPONSE = {
+  project_id: "",
+  kind: "unchanged",
+};
+
+export const AcceptPipelineProposalResponseSchema = z.object({
+  project_id: z.string().default(""),
+  applied: z.boolean().default(false),
+  pipeline_config: PipelineConfigSchema.nullable().optional(),
+  diff: PipelineDiffSchema.nullable().optional(),
+}).loose();
+
+export const EMPTY_ACCEPT_PIPELINE_PROPOSAL_RESPONSE = {
+  project_id: "",
+  applied: false,
+};
+
+export const RejectPipelineProposalResponseSchema = z.object({
+  project_id: z.string().default(""),
+  rejected: z.boolean().default(false),
+}).loose();
+
+export const EMPTY_REJECT_PIPELINE_PROPOSAL_RESPONSE = {
+  project_id: "",
+  rejected: false,
+};
+
 // Phase 7b — lightweight merge_state poll response. Used by clients
 // that aren't on a WS socket (e.g. integration tests, future CLI
 // surfaces). Mirrors the per-PR merge_state pill shape without

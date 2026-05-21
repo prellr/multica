@@ -204,10 +204,20 @@ type PushEvent struct {
 }
 
 // PushCommit is the slice of GitHub's commit object the push handler
-// needs — the SHA (mirrors PushEvent.After) and the commit message.
+// needs — the SHA (mirrors PushEvent.After), the commit message, and
+// the changed-path lists.
+//
+// Added / Modified / Removed are the repo-relative paths touched by the
+// commit. GitHub populates these on the `head_commit` of a push event;
+// PR8's webhook trigger scans them for `.github/workflows/*.yml` or
+// `.shiphub.yml` changes to know when to re-run the pipeline
+// introspector.
 type PushCommit struct {
-	ID      string `json:"id"`
-	Message string `json:"message"`
+	ID       string   `json:"id"`
+	Message  string   `json:"message"`
+	Added    []string `json:"added"`
+	Modified []string `json:"modified"`
+	Removed  []string `json:"removed"`
 }
 
 // Repository is the slice of GitHub's repo object we extract URLs from.

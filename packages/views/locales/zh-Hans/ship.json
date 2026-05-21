@@ -700,5 +700,28 @@
       "no_signal": "—",
       "awaiting_first_snapshot": "发布上线生产环境后开始监控。"
     }
+  },
+  "pipeline_proposal": {
+    "title": "检测到流水线变更",
+    "description": "Multica 重新读取了该仓库的部署工作流，发现流水线结构有变化。请在应用前确认。",
+    "shape_changed": "流水线类型：{{from}} → {{to}}",
+    "added_stage": "新增阶段「{{name}}」",
+    "removed_stage": "移除阶段「{{name}}」",
+    "renamed_stage": "将「{{from}}」重命名为「{{to}}」",
+    "reordered": "重新排列了已有阶段",
+    "triggers_changed": "更改了阶段推进方式",
+    "accept": "接受",
+    "reject": "拒绝",
+    "accepting": "接受中…",
+    "rejecting": "拒绝中…",
+    "refresh": "从仓库刷新流水线",
+    "refreshing": "刷新中…",
+    "refresh_unchanged": "流水线已与仓库一致。",
+    "refresh_applied": "已从仓库应用新增的流水线变更。",
+    "refresh_skipped": "该项目没有关联的 GitHub 仓库，无法检测。",
+    "blocked_title": "暂时无法应用",
+    "blocked_description": "有 {{count}} 个进行中的发布处于此变更将移除的阶段。请先完成或回滚这些发布。",
+    "error_title": "流水线刷新失败",
+    "error_description": "{{message}}"
   }
 }

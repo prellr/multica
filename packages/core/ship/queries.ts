@@ -1,6 +1,7 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
+import { projectKeys } from "../projects/queries";
 import type {
   CreateDeployEnvironmentRequest,
   LogDeployRequest,
@@ -153,6 +154,57 @@ export function useSyncProject() {
       qc.invalidateQueries({
         queryKey: shipKeys.pullRequestsForProject(wsId, projectId),
       });
+      qc.invalidateQueries({ queryKey: shipKeys.projects(wsId) });
+    },
+  });
+}
+
+// --- PR8 — pipeline auto-refresh -------------------------------------
+//
+// All three mutations invalidate the project list cache: the project
+// row carries `pipeline_config` + `pipeline_config_proposed`, and a
+// refresh / accept / reject changes one or both. The Ship project
+// section reads the project from that list, so invalidating it
+// re-renders the kanban + the proposal banner.
+
+/** POST /api/projects/:id/pipeline/refresh — re-run the introspector
+ *  now. Returns the diff outcome; the caller renders it. */
+export function useRefreshPipeline() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (projectId: string) => api.refreshProjectPipeline(projectId),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: projectKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: shipKeys.projects(wsId) });
+    },
+  });
+}
+
+/** POST /api/projects/:id/pipeline/proposal/accept — apply a parked
+ *  proposal. Throws (409) when an in-flight release blocks it; the
+ *  caller surfaces the affected release ids. */
+export function useAcceptPipelineProposal() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (projectId: string) => api.acceptPipelineProposal(projectId),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: projectKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: shipKeys.projects(wsId) });
+    },
+  });
+}
+
+/** POST /api/projects/:id/pipeline/proposal/reject — discard a parked
+ *  proposal, leaving the live config untouched. */
+export function useRejectPipelineProposal() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (projectId: string) => api.rejectPipelineProposal(projectId),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: projectKeys.list(wsId) });
       qc.invalidateQueries({ queryKey: shipKeys.projects(wsId) });
     },
   });

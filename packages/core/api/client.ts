@@ -128,6 +128,9 @@ import type {
   ListPullRequestsResponse,
   PullRequest,
   SyncPullRequestsResult,
+  PipelineRefreshResponse,
+  AcceptPipelineProposalResponse,
+  RejectPipelineProposalResponse,
   ListDeployEnvironmentsResponse,
   ListDeploysResponse,
   PullRequestState,
@@ -211,6 +214,12 @@ import {
   ListPullRequestsResponseSchema,
   ListDeployEnvironmentsResponseSchema,
   ListDeploysResponseSchema,
+  PipelineRefreshResponseSchema,
+  AcceptPipelineProposalResponseSchema,
+  RejectPipelineProposalResponseSchema,
+  EMPTY_PIPELINE_REFRESH_RESPONSE,
+  EMPTY_ACCEPT_PIPELINE_PROPOSAL_RESPONSE,
+  EMPTY_REJECT_PIPELINE_PROPOSAL_RESPONSE,
   EMPTY_LIST_SHIP_PROJECTS_RESPONSE,
   EMPTY_LIST_PULL_REQUESTS_RESPONSE,
   EMPTY_LIST_DEPLOY_ENVIRONMENTS_RESPONSE,
@@ -2167,6 +2176,55 @@ export class ApiClient {
     return this.fetch(`/api/projects/${projectId}/pull_requests/sync`, {
       method: "POST",
     });
+  }
+
+  // PR8 — pipeline auto-refresh. refreshProjectPipeline re-runs the
+  // introspector and reports the diff (additive changes are
+  // auto-applied; destructive ones are parked as a proposal).
+  // accept/reject act on a parked proposal.
+  async refreshProjectPipeline(
+    projectId: string,
+  ): Promise<PipelineRefreshResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/pipeline/refresh`,
+      { method: "POST" },
+    );
+    return parseWithFallback(
+      raw,
+      PipelineRefreshResponseSchema,
+      EMPTY_PIPELINE_REFRESH_RESPONSE,
+      { endpoint: "POST /api/projects/:id/pipeline/refresh" },
+    );
+  }
+
+  async acceptPipelineProposal(
+    projectId: string,
+  ): Promise<AcceptPipelineProposalResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/pipeline/proposal/accept`,
+      { method: "POST" },
+    );
+    return parseWithFallback(
+      raw,
+      AcceptPipelineProposalResponseSchema,
+      EMPTY_ACCEPT_PIPELINE_PROPOSAL_RESPONSE,
+      { endpoint: "POST /api/projects/:id/pipeline/proposal/accept" },
+    );
+  }
+
+  async rejectPipelineProposal(
+    projectId: string,
+  ): Promise<RejectPipelineProposalResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/projects/${projectId}/pipeline/proposal/reject`,
+      { method: "POST" },
+    );
+    return parseWithFallback(
+      raw,
+      RejectPipelineProposalResponseSchema,
+      EMPTY_REJECT_PIPELINE_PROPOSAL_RESPONSE,
+      { endpoint: "POST /api/projects/:id/pipeline/proposal/reject" },
+    );
   }
 
   async listProjectDeployEnvironments(

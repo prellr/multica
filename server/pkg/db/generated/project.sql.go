@@ -11,13 +11,55 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const applyProjectPipelineProposal = `-- name: ApplyProjectPipelineProposal :one
+UPDATE project SET
+    pipeline_config = COALESCE(pipeline_config_proposed, pipeline_config),
+    pipeline_config_introspected_at = now(),
+    pipeline_config_proposed = NULL,
+    pipeline_config_proposed_at = NULL,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at, pipeline_config_proposed, pipeline_config_proposed_at
+`
+
+// PR8 — Accept: swap the pending proposal into pipeline_config, stamp
+// introspected_at, and clear the proposal columns in one statement so
+// there is no window where both the live config and the proposal are
+// visible. No-ops cleanly if no proposal is pending (the COALESCE keeps
+// pipeline_config as-is and the proposal columns are already NULL).
+func (q *Queries) ApplyProjectPipelineProposal(ctx context.Context, id pgtype.UUID) (Project, error) {
+	row := q.db.QueryRow(ctx, applyProjectPipelineProposal, id)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Icon,
+		&i.Status,
+		&i.LeadType,
+		&i.LeadID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Priority,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.PipelineKind,
+		&i.PipelineConfig,
+		&i.PipelineConfigIntrospectedAt,
+		&i.PipelineConfigProposed,
+		&i.PipelineConfigProposedAt,
+	)
+	return i, err
+}
+
 const archiveProject = `-- name: ArchiveProject :one
 UPDATE project
 SET archived_at = now(),
     archived_by = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at
+RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at, pipeline_config_proposed, pipeline_config_proposed_at
 `
 
 type ArchiveProjectParams struct {
@@ -47,6 +89,47 @@ func (q *Queries) ArchiveProject(ctx context.Context, arg ArchiveProjectParams) 
 		&i.PipelineKind,
 		&i.PipelineConfig,
 		&i.PipelineConfigIntrospectedAt,
+		&i.PipelineConfigProposed,
+		&i.PipelineConfigProposedAt,
+	)
+	return i, err
+}
+
+const clearProjectPipelineProposal = `-- name: ClearProjectPipelineProposal :one
+UPDATE project SET
+    pipeline_config_proposed = NULL,
+    pipeline_config_proposed_at = NULL,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at, pipeline_config_proposed, pipeline_config_proposed_at
+`
+
+// PR8 — clear a pending proposal without touching pipeline_config.
+// Used by Reject (operator declined the change) and by the refresh
+// paths when a fresh introspection finds no diff / an additive diff,
+// which makes any previously-parked proposal stale.
+func (q *Queries) ClearProjectPipelineProposal(ctx context.Context, id pgtype.UUID) (Project, error) {
+	row := q.db.QueryRow(ctx, clearProjectPipelineProposal, id)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Icon,
+		&i.Status,
+		&i.LeadType,
+		&i.LeadID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Priority,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.PipelineKind,
+		&i.PipelineConfig,
+		&i.PipelineConfigIntrospectedAt,
+		&i.PipelineConfigProposed,
+		&i.PipelineConfigProposedAt,
 	)
 	return i, err
 }
@@ -69,7 +152,7 @@ INSERT INTO project (
     lead_type, lead_id, priority
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8
-) RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at
+) RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at, pipeline_config_proposed, pipeline_config_proposed_at
 `
 
 type CreateProjectParams struct {
@@ -112,6 +195,8 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.PipelineKind,
 		&i.PipelineConfig,
 		&i.PipelineConfigIntrospectedAt,
+		&i.PipelineConfigProposed,
+		&i.PipelineConfigProposedAt,
 	)
 	return i, err
 }
@@ -126,7 +211,7 @@ func (q *Queries) DeleteProject(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at FROM project
+SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at, pipeline_config_proposed, pipeline_config_proposed_at FROM project
 WHERE id = $1
 `
 
@@ -150,12 +235,14 @@ func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, erro
 		&i.PipelineKind,
 		&i.PipelineConfig,
 		&i.PipelineConfigIntrospectedAt,
+		&i.PipelineConfigProposed,
+		&i.PipelineConfigProposedAt,
 	)
 	return i, err
 }
 
 const getProjectInWorkspace = `-- name: GetProjectInWorkspace :one
-SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at FROM project
+SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at, pipeline_config_proposed, pipeline_config_proposed_at FROM project
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -184,6 +271,8 @@ func (q *Queries) GetProjectInWorkspace(ctx context.Context, arg GetProjectInWor
 		&i.PipelineKind,
 		&i.PipelineConfig,
 		&i.PipelineConfigIntrospectedAt,
+		&i.PipelineConfigProposed,
+		&i.PipelineConfigProposedAt,
 	)
 	return i, err
 }
@@ -224,7 +313,7 @@ func (q *Queries) GetProjectIssueStats(ctx context.Context, projectIds []pgtype.
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at FROM project
+SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at, pipeline_config_proposed, pipeline_config_proposed_at FROM project
 WHERE workspace_id = $1
   AND ($2::text IS NULL OR status = $2)
   AND ($3::text IS NULL OR priority = $3)
@@ -273,6 +362,8 @@ func (q *Queries) ListProjects(ctx context.Context, arg ListProjectsParams) ([]P
 			&i.PipelineKind,
 			&i.PipelineConfig,
 			&i.PipelineConfigIntrospectedAt,
+			&i.PipelineConfigProposed,
+			&i.PipelineConfigProposedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -290,7 +381,7 @@ SET archived_at = NULL,
     archived_by = NULL,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at
+RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at, pipeline_config_proposed, pipeline_config_proposed_at
 `
 
 // Reverses ArchiveProject. archived_by is cleared so the next archive
@@ -315,6 +406,92 @@ func (q *Queries) RestoreProject(ctx context.Context, id pgtype.UUID) (Project, 
 		&i.PipelineKind,
 		&i.PipelineConfig,
 		&i.PipelineConfigIntrospectedAt,
+		&i.PipelineConfigProposed,
+		&i.PipelineConfigProposedAt,
+	)
+	return i, err
+}
+
+const setProjectPipelineProposal = `-- name: SetProjectPipelineProposal :one
+UPDATE project SET
+    pipeline_config_proposed = $2::jsonb,
+    pipeline_config_proposed_at = now(),
+    pipeline_config_introspected_at = now(),
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at, pipeline_config_proposed, pipeline_config_proposed_at
+`
+
+type SetProjectPipelineProposalParams struct {
+	ID                     pgtype.UUID `json:"id"`
+	PipelineConfigProposed []byte      `json:"pipeline_config_proposed"`
+}
+
+// PR8 of the Ship Hub rebuild — park a destructively-differing
+// introspected config as a pending proposal. Stamps
+// pipeline_config_introspected_at too: the introspector DID run, the
+// operator just hasn't accepted its output yet. `pipeline_config` is
+// deliberately left untouched — the kanban keeps rendering the current
+// (operator-trusted) shape until Accept swaps the proposal in.
+func (q *Queries) SetProjectPipelineProposal(ctx context.Context, arg SetProjectPipelineProposalParams) (Project, error) {
+	row := q.db.QueryRow(ctx, setProjectPipelineProposal, arg.ID, arg.PipelineConfigProposed)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Icon,
+		&i.Status,
+		&i.LeadType,
+		&i.LeadID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Priority,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.PipelineKind,
+		&i.PipelineConfig,
+		&i.PipelineConfigIntrospectedAt,
+		&i.PipelineConfigProposed,
+		&i.PipelineConfigProposedAt,
+	)
+	return i, err
+}
+
+const stampProjectPipelineIntrospectedAt = `-- name: StampProjectPipelineIntrospectedAt :one
+UPDATE project SET
+    pipeline_config_introspected_at = now(),
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at, pipeline_config_proposed, pipeline_config_proposed_at
+`
+
+// PR8 — record that the introspector ran and found nothing to change.
+// Only bumps the audit timestamp; pipeline_config and the proposal
+// columns are left exactly as they were.
+func (q *Queries) StampProjectPipelineIntrospectedAt(ctx context.Context, id pgtype.UUID) (Project, error) {
+	row := q.db.QueryRow(ctx, stampProjectPipelineIntrospectedAt, id)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Icon,
+		&i.Status,
+		&i.LeadType,
+		&i.LeadID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Priority,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.PipelineKind,
+		&i.PipelineConfig,
+		&i.PipelineConfigIntrospectedAt,
+		&i.PipelineConfigProposed,
+		&i.PipelineConfigProposedAt,
 	)
 	return i, err
 }
@@ -331,7 +508,7 @@ UPDATE project SET
     pipeline_kind = COALESCE($9::project_pipeline_kind, pipeline_kind),
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at
+RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at, pipeline_config_proposed, pipeline_config_proposed_at
 `
 
 type UpdateProjectParams struct {
@@ -376,6 +553,8 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 		&i.PipelineKind,
 		&i.PipelineConfig,
 		&i.PipelineConfigIntrospectedAt,
+		&i.PipelineConfigProposed,
+		&i.PipelineConfigProposedAt,
 	)
 	return i, err
 }
@@ -389,7 +568,7 @@ UPDATE project SET
     END,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at
+RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, archived_at, archived_by, pipeline_kind, pipeline_config, pipeline_config_introspected_at, pipeline_config_proposed, pipeline_config_proposed_at
 `
 
 type UpdateProjectPipelineConfigParams struct {
@@ -425,6 +604,8 @@ func (q *Queries) UpdateProjectPipelineConfig(ctx context.Context, arg UpdatePro
 		&i.PipelineKind,
 		&i.PipelineConfig,
 		&i.PipelineConfigIntrospectedAt,
+		&i.PipelineConfigProposed,
+		&i.PipelineConfigProposedAt,
 	)
 	return i, err
 }

@@ -106,8 +106,19 @@ type triggerObservation struct {
 	hasWorkflowRun    bool
 	parentWorkflows   []string // for workflow_run, the parent workflow filenames
 	hasWorkflowDispatch bool
-	// Environment names this workflow declares jobs for.
+	// Environment names this workflow declares jobs for, read from the
+	// job-level `environment:` key.
 	environments []string
+	// deployNamed is true when the workflow's filename OR its `name:`
+	// field reads like a deploy workflow ("deploy", "Deploy
+	// Production", etc.). This is a heuristic backstop for the case a
+	// real deploy workflow doesn't use the job-level `environment:`
+	// key — e.g. prellr/multica's deploy-production.yml does its
+	// production deploy through the GitHub deployments API in a
+	// github-script step, so `environments` stays empty even though
+	// the workflow unambiguously deploys to prod. Without this signal
+	// the detector misreads such a repo as a `library`.
+	deployNamed bool
 }
 
 // IntrospectPipeline scans a repo's workflows + optional `.shiphub.yml`
@@ -224,8 +235,36 @@ func configForShapeName(shape string) (PipelineConfig, bool) {
 	return PipelineConfig{}, false
 }
 
+// isDeployWorkflow reports whether an observation represents a workflow
+// that deploys somewhere — either it declares a job-level `environment:`
+// key, or its name/filename reads like a deploy (the deployNamed
+// backstop for workflows that use the deployments API instead of the
+// declarative key).
+func (o triggerObservation) isDeployWorkflow() bool {
+	return len(o.environments) > 0 || o.deployNamed
+}
+
+// deploysToProd reports whether an observation represents a workflow
+// that targets PRODUCTION specifically — a job-level
+// `environment: production|prod` key, or (backstop) any deploy-named
+// workflow. The backstop can't tell a staging-only deploy workflow
+// from a prod one; that ambiguity is accepted (a repo whose only
+// automatic deploy lands *somewhere* on push to main behaves like
+// direct_to_prod for kanban purposes, and `.shiphub.yml`'s
+// shape_override is the escape hatch for repos that need precision).
+func (o triggerObservation) deploysToProd() bool {
+	return containsAny(o.environments, "production", "prod") || o.deployNamed
+}
+
 // detectShape applies the priority matrix (see file header) to a list
 // of workflow observations and returns the matching shape name.
+//
+// Order matters: direct_to_prod → staged_strict → manual_only →
+// library → fallback. direct_to_prod is checked first because a
+// push-to-main deploy is the most specific signal; library is checked
+// last because "publishes a tagged artifact" is only a library shape
+// when the repo has NO deploy workflow at all — a service repo that
+// also publishes images (prellr/multica) is not a library.
 func detectShape(obs []triggerObservation) string {
 	if len(obs) == 0 {
 		// Workflows dir exists but contains nothing actionable. Treat
@@ -234,57 +273,52 @@ func detectShape(obs []triggerObservation) string {
 		return "manual_compose"
 	}
 
-	// (a) Library: tag-pattern push or workflow named "publish" with
-	// no environment declarations across the whole workflow set. The
-	// "no environment" check distinguishes a library from a staged
-	// project that happens to also publish artifacts.
-	hasAnyEnv := false
 	hasTagPush := false
+	hasWorkflowRun := false
+	hasAnyDeployWorkflow := false
 	for _, o := range obs {
-		if len(o.environments) > 0 {
-			hasAnyEnv = true
-		}
 		if o.hasTags {
 			hasTagPush = true
 		}
-	}
-	if hasTagPush && !hasAnyEnv {
-		return "library"
+		if o.hasWorkflowRun {
+			hasWorkflowRun = true
+		}
+		if o.isDeployWorkflow() {
+			hasAnyDeployWorkflow = true
+		}
 	}
 
-	// (b) Direct-to-prod: any workflow has `push: branches: [main]`
-	// AND declares `environment: production` on a job. The
-	// multica-prod shape.
+	// (1) Direct-to-prod: a workflow that BOTH triggers on push to the
+	// default branch AND deploys to prod. The multica-prod shape —
+	// every merge auto-ships.
 	for _, o := range obs {
-		if containsAny(o.pushBranches, "main", "master") && containsAny(o.environments, "production", "prod") {
+		if containsAny(o.pushBranches, "main", "master") && o.deploysToProd() {
 			return "direct_to_prod"
 		}
 	}
 
-	// (c) Staged-strict: at least one workflow triggered by
-	// `workflow_run` chaining off a "promote" / "main" workflow AND
-	// at least one workflow that's `workflow_dispatch`-only and
-	// declares `environment: production`. The safra-360 shape.
-	hasPromoteChain := false
+	// (2) Staged-strict: a workflow_run chain (promote → staging deploy)
+	// plus a workflow_dispatch-only production workflow. The safra-360
+	// shape — automatic to staging, manual gate to prod.
 	hasManualProd := false
 	for _, o := range obs {
-		if o.hasWorkflowRun {
-			hasPromoteChain = true
-		}
-		if o.hasWorkflowDispatch && !containsAny(o.pushBranches, "main", "master") && containsAny(o.environments, "production", "prod") {
+		if o.hasWorkflowDispatch &&
+			!containsAny(o.pushBranches, "main", "master") &&
+			o.deploysToProd() {
 			hasManualProd = true
 		}
 	}
-	if hasPromoteChain && hasManualProd {
+	if hasWorkflowRun && hasManualProd {
 		return "staged_strict"
 	}
 
-	// (d) Manual-only: every deploy-shaped workflow (any with an
-	// `environment:` declaration) is workflow_dispatch only.
-	if hasAnyEnv {
+	// (3) Manual-only: at least one deploy workflow exists, and EVERY
+	// deploy workflow is workflow_dispatch-only (no automatic trigger).
+	// The control-panel shape — nothing deploys without an operator.
+	if hasAnyDeployWorkflow {
 		allManual := true
 		for _, o := range obs {
-			if len(o.environments) == 0 {
+			if !o.isDeployWorkflow() {
 				continue
 			}
 			if !o.hasWorkflowDispatch || len(o.pushBranches) > 0 {
@@ -297,7 +331,15 @@ func detectShape(obs []triggerObservation) string {
 		}
 	}
 
-	// (e) Fallback. Same bias as the read shim — staged_strict shows
+	// (4) Library: publishes a tagged artifact and has NO deploy
+	// workflow at all. The Hermes-Multi shape. Checked AFTER the deploy
+	// shapes so a service repo that also publishes images isn't
+	// mistaken for a library.
+	if hasTagPush && !hasAnyDeployWorkflow {
+		return "library"
+	}
+
+	// (5) Fallback. Same bias as the read shim — staged_strict shows
 	// the operator more controls than they might need, vs. hiding
 	// ones they do need.
 	return "staged_strict"
@@ -324,6 +366,17 @@ func parseWorkflowForObservation(name, raw string) (triggerObservation, error) {
 		if env := extractEnvironmentName(j.Environment); env != "" {
 			obs.environments = append(obs.environments, env)
 		}
+	}
+	// deployNamed backstop: a workflow whose filename or `name:` reads
+	// like a deploy is treated as deploy-shaped even if it never sets a
+	// job-level `environment:` key. This catches deploy workflows that
+	// drive the GitHub deployments API from a script step rather than
+	// the declarative key. Match "deploy" as a substring of either the
+	// lowercased filename or the lowercased workflow name.
+	lowerName := strings.ToLower(name)
+	lowerWfName := strings.ToLower(wf.Name)
+	if strings.Contains(lowerName, "deploy") || strings.Contains(lowerWfName, "deploy") {
+		obs.deployNamed = true
 	}
 	return obs, nil
 }

@@ -100,6 +100,55 @@ jobs:
 	}
 }
 
+// TestIntrospect_DirectToProd_DeployNamedNoEnvironment → direct_to_prod
+// via the deployNamed backstop. The real prellr/multica shape: a
+// deploy-production.yml triggered by push:main that drives the GitHub
+// deployments API from a github-script step, so it never declares a
+// job-level `environment:` key. A release.yml with tag triggers also
+// exists. Without the backstop the detector would see "tag push + no
+// declared deploy workflow" and misclassify the repo as a `library`.
+func TestIntrospect_DirectToProd_DeployNamedNoEnvironment(t *testing.T) {
+	t.Parallel()
+	deployYAML := `
+name: Deploy to Production
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build-and-deploy:
+    runs-on: mac-mini-prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createDeployment({ ...context.repo, ref: 'main' })
+      - run: ./scripts/deploy.sh
+`
+	releaseYAML := `
+name: Release CLI
+on:
+  push:
+    tags: ['v*']
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps: [{ run: echo release }]
+`
+	gh := withWorkflows("prellr", "multica", map[string]string{
+		"deploy-production.yml": deployYAML,
+		"release.yml":           releaseYAML,
+	})
+	cfg, err := IntrospectPipeline(context.Background(), gh, "prellr", "multica")
+	if err != nil {
+		t.Fatalf("introspect: %v", err)
+	}
+	if cfg.Shape != "direct_to_prod" {
+		t.Errorf("shape: got %q, want direct_to_prod (deployNamed backstop)", cfg.Shape)
+	}
+}
+
 // TestIntrospect_StagedStrict → staged_strict. The safra-360 shape:
 // promote-main-to-dev triggers deploy-staging via workflow_run; deploy-prod
 // is workflow_dispatch only with environment: production.

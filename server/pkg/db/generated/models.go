@@ -1118,6 +1118,7 @@ type PullRequest struct {
 	RiskLevel              RiskLevel          `json:"risk_level"`
 	RiskReasons            []byte             `json:"risk_reasons"`
 	RiskClassifiedAt       pgtype.Timestamptz `json:"risk_classified_at"`
+	MergeCommitSha         string             `json:"merge_commit_sha"`
 }
 
 type PullRequestCheck struct {

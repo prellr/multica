@@ -62,10 +62,10 @@ INSERT INTO pull_request (
     author_login, author_avatar_url, base_ref, head_ref, head_sha, html_url,
     body, mergeable, additions, deletions,
     changed_files, labels, pr_created_at, pr_updated_at, pr_merged_at,
-    pr_closed_at, fetched_at
+    pr_closed_at, merge_commit_sha, fetched_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-    $17, $18, $19, $20, $21, $22, $23, now()
+    $17, $18, $19, $20, $21, $22, $23, $24, now()
 )
 ON CONFLICT (workspace_id, repo_url, pr_number) DO UPDATE SET
     project_id        = EXCLUDED.project_id,
@@ -78,6 +78,7 @@ ON CONFLICT (workspace_id, repo_url, pr_number) DO UPDATE SET
     head_ref          = EXCLUDED.head_ref,
     head_sha          = EXCLUDED.head_sha,
     html_url          = EXCLUDED.html_url,
+    merge_commit_sha  = EXCLUDED.merge_commit_sha,
     body              = EXCLUDED.body,
     -- ci_status and review_decision are intentionally NOT updated here;
     -- see the header comment + UpdatePullRequestCIStatus /

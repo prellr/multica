@@ -132,6 +132,18 @@ func (f *fakeGithub) GetCIStatus(ctx context.Context, owner, repo, sha string) (
 	return "success", nil
 }
 
+// ListRepoDir / GetRepoFile satisfy the introspector slice of the
+// interface. The mapping tests in this package don't exercise pipeline
+// introspection, so both default to gh.ErrNotFound — the documented
+// "shape signal absent" path.
+func (f *fakeGithub) ListRepoDir(_ context.Context, _, _, _ string) ([]gh.RepoContentEntry, error) {
+	return nil, gh.ErrNotFound
+}
+
+func (f *fakeGithub) GetRepoFile(_ context.Context, _, _, _ string) (string, error) {
+	return "", gh.ErrNotFound
+}
+
 func TestMapPRState(t *testing.T) {
 	merged := time.Now()
 	tests := []struct {

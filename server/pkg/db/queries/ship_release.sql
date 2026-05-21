@@ -529,6 +529,25 @@ WHERE workspace_id = $1
 ORDER BY merged_at ASC
 LIMIT 1;
 
+-- name: FindOrphanMergedPRsByMergeCommitSHA :many
+-- PR6 — direct-merge release synthesis. Given a project and the merge
+-- commit SHA pushed to its default branch, return the merged PR(s) that
+-- produced that commit AND are not tracked by any ship_release (the
+-- LEFT JOIN ... WHERE release_id IS NULL anti-join). A non-empty result
+-- is the signal that a developer merged a PR directly to main without
+-- going through Ship Hub's merge train — those merges otherwise never
+-- appear in release history. The `$2 <> ''` guard makes an empty pushed
+-- SHA (branch delete) match nothing.
+SELECT pr.*
+FROM pull_request pr
+LEFT JOIN ship_release_pull_request rpr ON rpr.pull_request_id = pr.id
+WHERE pr.project_id = $1
+  AND pr.state = 'merged'
+  AND pr.merge_commit_sha = $2
+  AND $2 <> ''
+  AND rpr.release_id IS NULL
+ORDER BY pr.pr_merged_at ASC;
+
 -- name: ListReleasesPastMonitoringWindow :many
 -- The release finalizer goroutine reads this every 15 minutes. Returns
 -- in_production releases whose promoted_at is older than the supplied

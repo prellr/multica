@@ -198,6 +198,89 @@ func (q *Queries) DeactivateReleasePullRequests(ctx context.Context, releaseID p
 	return err
 }
 
+const findOrphanMergedPRsByMergeCommitSHA = `-- name: FindOrphanMergedPRsByMergeCommitSHA :many
+SELECT pr.id, pr.workspace_id, pr.project_id, pr.repo_url, pr.pr_number, pr.title, pr.state, pr.is_draft, pr.author_login, pr.author_avatar_url, pr.base_ref, pr.head_ref, pr.head_sha, pr.html_url, pr.body, pr.ci_status, pr.review_decision, pr.mergeable, pr.additions, pr.deletions, pr.changed_files, pr.labels, pr.pr_created_at, pr.pr_updated_at, pr.pr_merged_at, pr.pr_closed_at, pr.fetched_at, pr.originating_issue_id, pr.originating_agent_task_id, pr.auto_close_issue_on_merge, pr.conversation_channel_id, pr.stack_parent_pr_id, pr.source, pr.risk_level, pr.risk_reasons, pr.risk_classified_at, pr.merge_commit_sha
+FROM pull_request pr
+LEFT JOIN ship_release_pull_request rpr ON rpr.pull_request_id = pr.id
+WHERE pr.project_id = $1
+  AND pr.state = 'merged'
+  AND pr.merge_commit_sha = $2
+  AND $2 <> ''
+  AND rpr.release_id IS NULL
+ORDER BY pr.pr_merged_at ASC
+`
+
+type FindOrphanMergedPRsByMergeCommitSHAParams struct {
+	ProjectID      pgtype.UUID `json:"project_id"`
+	MergeCommitSha string      `json:"merge_commit_sha"`
+}
+
+// PR6 — direct-merge release synthesis. Given a project and the merge
+// commit SHA pushed to its default branch, return the merged PR(s) that
+// produced that commit AND are not tracked by any ship_release (the
+// LEFT JOIN ... WHERE release_id IS NULL anti-join). A non-empty result
+// is the signal that a developer merged a PR directly to main without
+// going through Ship Hub's merge train — those merges otherwise never
+// appear in release history. The `$2 <> ”` guard makes an empty pushed
+// SHA (branch delete) match nothing.
+func (q *Queries) FindOrphanMergedPRsByMergeCommitSHA(ctx context.Context, arg FindOrphanMergedPRsByMergeCommitSHAParams) ([]PullRequest, error) {
+	rows, err := q.db.Query(ctx, findOrphanMergedPRsByMergeCommitSHA, arg.ProjectID, arg.MergeCommitSha)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PullRequest{}
+	for rows.Next() {
+		var i PullRequest
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ProjectID,
+			&i.RepoUrl,
+			&i.PrNumber,
+			&i.Title,
+			&i.State,
+			&i.IsDraft,
+			&i.AuthorLogin,
+			&i.AuthorAvatarUrl,
+			&i.BaseRef,
+			&i.HeadRef,
+			&i.HeadSha,
+			&i.HtmlUrl,
+			&i.Body,
+			&i.CiStatus,
+			&i.ReviewDecision,
+			&i.Mergeable,
+			&i.Additions,
+			&i.Deletions,
+			&i.ChangedFiles,
+			&i.Labels,
+			&i.PrCreatedAt,
+			&i.PrUpdatedAt,
+			&i.PrMergedAt,
+			&i.PrClosedAt,
+			&i.FetchedAt,
+			&i.OriginatingIssueID,
+			&i.OriginatingAgentTaskID,
+			&i.AutoCloseIssueOnMerge,
+			&i.ConversationChannelID,
+			&i.StackParentPrID,
+			&i.Source,
+			&i.RiskLevel,
+			&i.RiskReasons,
+			&i.RiskClassifiedAt,
+			&i.MergeCommitSha,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const findReleaseByMergedMainSHA = `-- name: FindReleaseByMergedMainSHA :one
 SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
 WHERE workspace_id = $1
@@ -1195,7 +1278,7 @@ func (q *Queries) ListReleasePRsForMerge(ctx context.Context, releaseID pgtype.U
 
 const listReleasePullRequests = `-- name: ListReleasePullRequests :many
 SELECT
-    pr.id, pr.workspace_id, pr.project_id, pr.repo_url, pr.pr_number, pr.title, pr.state, pr.is_draft, pr.author_login, pr.author_avatar_url, pr.base_ref, pr.head_ref, pr.head_sha, pr.html_url, pr.body, pr.ci_status, pr.review_decision, pr.mergeable, pr.additions, pr.deletions, pr.changed_files, pr.labels, pr.pr_created_at, pr.pr_updated_at, pr.pr_merged_at, pr.pr_closed_at, pr.fetched_at, pr.originating_issue_id, pr.originating_agent_task_id, pr.auto_close_issue_on_merge, pr.conversation_channel_id, pr.stack_parent_pr_id, pr.source, pr.risk_level, pr.risk_reasons, pr.risk_classified_at,
+    pr.id, pr.workspace_id, pr.project_id, pr.repo_url, pr.pr_number, pr.title, pr.state, pr.is_draft, pr.author_login, pr.author_avatar_url, pr.base_ref, pr.head_ref, pr.head_sha, pr.html_url, pr.body, pr.ci_status, pr.review_decision, pr.mergeable, pr.additions, pr.deletions, pr.changed_files, pr.labels, pr.pr_created_at, pr.pr_updated_at, pr.pr_merged_at, pr.pr_closed_at, pr.fetched_at, pr.originating_issue_id, pr.originating_agent_task_id, pr.auto_close_issue_on_merge, pr.conversation_channel_id, pr.stack_parent_pr_id, pr.source, pr.risk_level, pr.risk_reasons, pr.risk_classified_at, pr.merge_commit_sha,
     rpr.position AS membership_position,
     rpr.merged_sha AS membership_merged_sha,
     rpr.merged_at AS membership_merged_at,
@@ -1246,6 +1329,7 @@ type ListReleasePullRequestsRow struct {
 	RiskLevel              RiskLevel          `json:"risk_level"`
 	RiskReasons            []byte             `json:"risk_reasons"`
 	RiskClassifiedAt       pgtype.Timestamptz `json:"risk_classified_at"`
+	MergeCommitSha         string             `json:"merge_commit_sha"`
 	MembershipPosition     int32              `json:"membership_position"`
 	MembershipMergedSha    pgtype.Text        `json:"membership_merged_sha"`
 	MembershipMergedAt     pgtype.Timestamptz `json:"membership_merged_at"`
@@ -1305,6 +1389,7 @@ func (q *Queries) ListReleasePullRequests(ctx context.Context, releaseID pgtype.
 			&i.RiskLevel,
 			&i.RiskReasons,
 			&i.RiskClassifiedAt,
+			&i.MergeCommitSha,
 			&i.MembershipPosition,
 			&i.MembershipMergedSha,
 			&i.MembershipMergedAt,

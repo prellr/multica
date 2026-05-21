@@ -224,6 +224,16 @@ export function ShipKanban({
     [pullRequests, snapshot],
   );
 
+  // PR9 — a `direct_to_prod` project deploys to production on every
+  // merge to the default branch, with no manual promote step. Derive
+  // that once here and let each card render the "merging auto-deploys"
+  // warning. Prefer the structured pipeline_config shape; fall back to
+  // the legacy pipelineKind for projects not yet introspected.
+  const autoDeploysOnMerge = useMemo(() => {
+    if (pipelineConfig) return pipelineConfig.shape === "direct_to_prod";
+    return pipelineKind === "direct_to_prod";
+  }, [pipelineConfig, pipelineKind]);
+
   return (
     <div className="space-y-3">
       {/* Failing / blocked rail. Surfaces the same PRs that ALSO show up in
@@ -245,6 +255,7 @@ export function ShipKanban({
                 key={`fail-${pr.id}`}
                 pr={pr}
                 stagingEnv={snapshot.staging}
+                autoDeploysOnMerge={autoDeploysOnMerge}
               />
             ))}
           </div>
@@ -275,7 +286,12 @@ export function ShipKanban({
                     </div>
                   ) : (
                     colPRs.map((pr) => (
-                      <ShipPRCard key={pr.id} pr={pr} stagingEnv={snapshot.staging} />
+                      <ShipPRCard
+                        key={pr.id}
+                        pr={pr}
+                        stagingEnv={snapshot.staging}
+                        autoDeploysOnMerge={autoDeploysOnMerge}
+                      />
                     ))
                   )}
                 </div>

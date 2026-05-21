@@ -98,6 +98,7 @@
     "ci_failing": "CI failing",
     "ci_pending": "CI pending",
     "ci_unknown": "CI unknown",
+    "auto_deploy_warning": "Merging auto-deploys to production",
     "stale_indicator": "Stale",
     "stale_indicator_tooltip": "Last refreshed {{when}}. Click Sync Now if values look wrong.",
     "review_required": "Review needed",

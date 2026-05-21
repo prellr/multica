@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -18,6 +18,7 @@ import {
   User,
   UserMinus,
   UserPen,
+  X,
 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
@@ -506,9 +507,9 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
   };
 
   return (
-    <div className="flex h-12 shrink-0 items-center justify-between gap-2 px-2 sm:px-4">
+    <div className="flex h-12 shrink-0 items-center gap-2 px-2 sm:px-4">
       {/* Left: scope buttons */}
-      <div className="flex min-w-0 items-center gap-1">
+      <div className="flex min-w-0 shrink-0 items-center gap-1">
         {SCOPE_VALUES.map((s) => (
           <Tooltip key={s}>
             <TooltipTrigger
@@ -587,10 +588,188 @@ export function IssueDisplayControls({ scopedIssues }: { scopedIssues: Issue[] }
     childProgress: "card_child_progress",
   };
   const sortLabel = t(($) => $.display[SORT_LABEL_KEY[sortBy]]);
+  const desktopFilterButton = (icon: ReactNode, label: string, activeCount: number) => (
+    <Button
+      variant="outline"
+      size="sm"
+      className="h-8 min-w-0 justify-start gap-1.5 px-2.5 text-xs text-muted-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
+    >
+      {icon}
+      <span className="min-w-0 truncate">{label}</span>
+      {activeCount > 0 && (
+        <span className="ml-auto rounded-full bg-brand px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+          {activeCount}
+        </span>
+      )}
+    </Button>
+  );
 
   return (
-    <div className="flex shrink-0 items-center gap-1">
+    <div className="flex min-w-0 flex-1 items-center gap-1">
+        <div className="hidden min-w-0 flex-1 grid-cols-6 gap-1.5 pr-2 lg:grid">
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={desktopFilterButton(
+                <CircleDot className="size-3.5 shrink-0" />,
+                t(($) => $.filters.section_status),
+                statusFilters.length,
+              )}
+            />
+            <DropdownMenuContent align="start" className="w-auto min-w-48">
+              {ALL_STATUSES.map((s) => {
+                const checked = statusFilters.includes(s);
+                const count = counts.status.get(s) ?? 0;
+                return (
+                  <DropdownMenuCheckboxItem
+                    key={s}
+                    checked={checked}
+                    onCheckedChange={() => act.toggleStatusFilter(s)}
+                    className={FILTER_ITEM_CLASS}
+                  >
+                    <HoverCheck checked={checked} />
+                    <StatusIcon status={s} className="h-3.5 w-3.5" />
+                    {t(($) => $.status[s])}
+                    {count > 0 && (
+                      <span className="ml-auto text-xs text-muted-foreground">
+                        {t(($) => $.filters.issue_count, { count })}
+                      </span>
+                    )}
+                  </DropdownMenuCheckboxItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={desktopFilterButton(
+                <SignalHigh className="size-3.5 shrink-0" />,
+                t(($) => $.filters.section_priority),
+                priorityFilters.length,
+              )}
+            />
+            <DropdownMenuContent align="start" className="w-auto min-w-44">
+              {PRIORITY_ORDER.map((p) => {
+                const checked = priorityFilters.includes(p);
+                const count = counts.priority.get(p) ?? 0;
+                return (
+                  <DropdownMenuCheckboxItem
+                    key={p}
+                    checked={checked}
+                    onCheckedChange={() => act.togglePriorityFilter(p)}
+                    className={FILTER_ITEM_CLASS}
+                  >
+                    <HoverCheck checked={checked} />
+                    <PriorityIcon priority={p} />
+                    {t(($) => $.priority[p])}
+                    {count > 0 && (
+                      <span className="ml-auto text-xs text-muted-foreground">
+                        {t(($) => $.filters.issue_count, { count })}
+                      </span>
+                    )}
+                  </DropdownMenuCheckboxItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={desktopFilterButton(
+                <User className="size-3.5 shrink-0" />,
+                t(($) => $.filters.section_assignee),
+                assigneeFilters.length + (includeNoAssignee ? 1 : 0),
+              )}
+            />
+            <DropdownMenuContent align="start" className="w-auto min-w-52 p-0">
+              <ActorSubContent
+                counts={counts.assignee}
+                selected={assigneeFilters}
+                onToggle={act.toggleAssigneeFilter}
+                showNoAssignee
+                includeNoAssignee={includeNoAssignee}
+                onToggleNoAssignee={act.toggleNoAssignee}
+                noAssigneeCount={counts.noAssignee}
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={desktopFilterButton(
+                <UserPen className="size-3.5 shrink-0" />,
+                t(($) => $.filters.section_creator),
+                creatorFilters.length,
+              )}
+            />
+            <DropdownMenuContent align="start" className="w-auto min-w-52 p-0">
+              <ActorSubContent
+                counts={counts.creator}
+                selected={creatorFilters}
+                onToggle={act.toggleCreatorFilter}
+                showSquads={false}
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={desktopFilterButton(
+                <FolderKanban className="size-3.5 shrink-0" />,
+                t(($) => $.filters.section_project),
+                projectFilters.length + (includeNoProject ? 1 : 0),
+              )}
+            />
+            <DropdownMenuContent align="start" className="w-auto min-w-52 p-0">
+              <ProjectSubContent
+                counts={counts.project}
+                selected={projectFilters}
+                onToggle={act.toggleProjectFilter}
+                includeNoProject={includeNoProject}
+                onToggleNoProject={act.toggleNoProject}
+                noProjectCount={counts.noProject}
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={desktopFilterButton(
+                <Tag className="size-3.5 shrink-0" />,
+                t(($) => $.filters.section_label),
+                labelFilters.length,
+              )}
+            />
+            <DropdownMenuContent align="start" className="w-auto min-w-52 p-0">
+              <LabelSubContent
+                counts={counts.label}
+                selected={labelFilters}
+                onToggle={act.toggleLabelFilter}
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        {hasActiveFilters && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="hidden text-muted-foreground lg:inline-flex"
+                  onClick={act.clearFilters}
+                >
+                  <X className="size-4" />
+                </Button>
+              }
+            />
+            <TooltipContent side="bottom">{t(($) => $.filters.reset)}</TooltipContent>
+          </Tooltip>
+        )}
+
         {/* Filter */}
+        <div className="lg:hidden">
         <DropdownMenu>
           <Tooltip>
             <DropdownMenuTrigger
@@ -788,7 +967,9 @@ export function IssueDisplayControls({ scopedIssues }: { scopedIssues: Issue[] }
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
 
+        <div className="ml-auto flex shrink-0 items-center gap-1">
         {/* Display settings */}
         {!isMobile && (
         <Popover>
@@ -938,6 +1119,7 @@ export function IssueDisplayControls({ scopedIssues }: { scopedIssues: Issue[] }
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
     </div>
   );
 }

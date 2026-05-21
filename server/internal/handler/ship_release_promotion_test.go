@@ -699,7 +699,7 @@ func TestReleaseResponseShape_Phase7d(t *testing.T) {
 		Stage:             db.ReleaseStageInProduction,
 		ProductionMainSha: pgtype.Text{String: "prod-1234", Valid: true},
 		PromotedBy:        pgtype.UUID{Bytes: [16]byte{2}, Valid: true},
-	}, 0)
+	}, 0, nil)
 	out, err := json.Marshal(resp)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

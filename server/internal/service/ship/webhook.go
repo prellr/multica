@@ -979,9 +979,11 @@ func isZeroSHA(sha string) bool {
 //     merged PRs whose merge_commit_sha == After and that no release
 //     tracks. Most pushes are merge-train merges (already tracked) or
 //     non-PR commits — both yield zero rows and we return cleanly.
-//  3. Create the release, attach each orphan PR, stamp merged_main_sha
-//     so deploy webhooks can link production deploys back to it, and
-//     record a synthesis event on the release timeline.
+//  3. Create the release — born advanced (is_direct_merge=true, stage
+//     in_production, merged_at/promoted_at stamped, merged_main_sha set
+//     so deploy webhooks can link a production deploy back to it) since
+//     a direct merge is an already-completed ship — then attach each
+//     orphan PR and record a synthesis event on the release timeline.
 func (s *Service) synthesizeDirectMergeRelease(
 	ctx context.Context,
 	workspaceID pgtype.UUID,
@@ -1012,17 +1014,22 @@ func (s *Service) synthesizeDirectMergeRelease(
 	title := directMergeReleaseTitle(payload)
 	risk := highestRisk(orphans)
 
-	release, err := s.Q.CreateRelease(ctx, db.CreateReleaseParams{
-		WorkspaceID: workspaceID,
-		ProjectID:   project.ID,
-		Title:       title,
-		RiskLevel:   risk,
+	// ROA-311 — a direct merge to the default branch is an
+	// already-completed ship. CreateDirectMergeRelease writes the
+	// release born advanced: is_direct_merge=true, stage='in_production',
+	// merged_at/promoted_at stamped now(), and merged_main_sha set in the
+	// same INSERT. Without the ladder stamps the release would derive to
+	// `assembling` forever and flood the Active Releases rail.
+	release, err := s.Q.CreateDirectMergeRelease(ctx, db.CreateDirectMergeReleaseParams{
+		WorkspaceID:   workspaceID,
+		ProjectID:     project.ID,
+		Title:         title,
+		RiskLevel:     risk,
+		MergedMainSha: pgtype.Text{String: payload.After, Valid: true},
 		Description: pgtype.Text{
 			String: "Auto-synthesized by Ship Hub for a direct merge to the default branch.",
 			Valid:  true,
 		},
-		// created_by NULL — this release has no human author; it was
-		// synthesized by the webhook path.
 	})
 	if err != nil {
 		slog.Warn("ship webhook: direct-merge release create failed",
@@ -1046,17 +1053,6 @@ func (s *Service) synthesizeDirectMergeRelease(
 			continue
 		}
 		prIDs = append(prIDs, uuidString(pr.ID))
-	}
-
-	// Stamp merged_main_sha so the deployment webhook handlers can match
-	// a production deploy's sha back to this release.
-	if _, err := s.Q.SetReleaseMergedMainSHA(ctx, db.SetReleaseMergedMainSHAParams{
-		ID:            release.ID,
-		MergedMainSha: pgtype.Text{String: payload.After, Valid: true},
-	}); err != nil {
-		slog.Warn("ship webhook: direct-merge set merged_main_sha failed",
-			"release_id", uuidString(release.ID),
-			"error", err)
 	}
 
 	if _, err := s.insertReleaseEvent(ctx, release.ID, "synthesized_direct_merge", pgtype.UUID{}, map[string]any{

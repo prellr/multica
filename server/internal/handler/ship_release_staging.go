@@ -192,7 +192,7 @@ func (h *Handler) RunSmokeTestsForRelease(w http.ResponseWriter, r *http.Request
 	// 202 Accepted — the workflow is now queued; the smoke_status
 	// will flip via webhook in a few seconds.
 	count, _ := h.Queries.CountActiveReleasePullRequests(r.Context(), updated.ID)
-	writeJSON(w, http.StatusAccepted, releaseToResponse(updated, int(count)))
+	writeJSON(w, http.StatusAccepted, h.releaseToResponseWithStates(r.Context(), updated, int(count)))
 }
 
 // MarkSmokePass — POST /api/releases/{id}/mark_smoke_pass. Owner/admin only.
@@ -227,7 +227,7 @@ func (h *Handler) MarkSmokePass(w http.ResponseWriter, r *http.Request) {
 		"release_id":   uuidToString(updated.ID),
 		"smoke_status": ship.SmokeStatusManualPass,
 	})
-	writeJSON(w, http.StatusOK, releaseToResponse(updated, int(count)))
+	writeJSON(w, http.StatusOK, h.releaseToResponseWithStates(r.Context(), updated, int(count)))
 }
 
 // MarkReleaseVerified — POST /api/releases/{id}/mark_verified.
@@ -267,7 +267,7 @@ func (h *Handler) MarkReleaseVerified(w http.ResponseWriter, r *http.Request) {
 				"stage":      string(rel.Stage),
 			})
 			count, _ := h.Queries.CountActiveReleasePullRequests(r.Context(), rel.ID)
-			writeJSON(w, http.StatusAccepted, releaseToResponse(rel, int(count)))
+			writeJSON(w, http.StatusAccepted, h.releaseToResponseWithStates(r.Context(), rel, int(count)))
 			return
 		default:
 			writeError(w, http.StatusInternalServerError, "failed to verify release: "+err.Error())
@@ -279,7 +279,7 @@ func (h *Handler) MarkReleaseVerified(w http.ResponseWriter, r *http.Request) {
 		"release_id": uuidToString(updated.ID),
 		"stage":      string(updated.Stage),
 	})
-	writeJSON(w, http.StatusOK, releaseToResponse(updated, int(count)))
+	writeJSON(w, http.StatusOK, h.releaseToResponseWithStates(r.Context(), updated, int(count)))
 }
 
 // buildApprovalContext picks the workspace's configured rule for the
@@ -358,7 +358,7 @@ func (h *Handler) UnverifyRelease(w http.ResponseWriter, r *http.Request) {
 		"release_id": uuidToString(updated.ID),
 		"stage":      string(updated.Stage),
 	})
-	writeJSON(w, http.StatusOK, releaseToResponse(updated, int(count)))
+	writeJSON(w, http.StatusOK, h.releaseToResponseWithStates(r.Context(), updated, int(count)))
 }
 
 // MarkReleaseStagingDeployed is the manual escape-hatch when GitHub
@@ -482,7 +482,7 @@ func (h *Handler) MarkReleaseStagingDeployed(w http.ResponseWriter, r *http.Requ
 		"release_id": uuidToString(updated.ID),
 		"stage":      string(updated.Stage),
 	})
-	writeJSON(w, http.StatusOK, releaseToResponse(updated, int(count)))
+	writeJSON(w, http.StatusOK, h.releaseToResponseWithStates(r.Context(), updated, int(count)))
 }
 
 // ----- webhook integration --------------------------------------------------

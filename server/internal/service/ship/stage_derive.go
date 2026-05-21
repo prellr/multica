@@ -17,18 +17,20 @@
 // will display as "done" and drop off the Active rail on the next page
 // load, with no operator intervention.
 //
-// Phase 1 (this file): derivation reads from ship_release's own timestamp
-// ladder (merged_at, staged_at, promoted_at, done_at, rollback_reason)
-// plus the stored stage for sticky-terminal classification. This is enough
-// to fix Bug 3 from the audit (Active Releases doesn't clear) without
-// needing to thread PR-membership and deploy-environment data through
-// every read path.
+// Phase 1: derivation reads from ship_release's own timestamp ladder
+// (merged_at, staged_at, promoted_at, done_at, rollback_reason) plus the
+// stored stage for sticky-terminal classification.
 //
-// Phase 2 (follow-up): extend the derivation to consult PR merge state +
-// deploy environments + deploy_preflight.qa_verified_at so we can detect
-// edge cases the timestamp ladder alone misses (e.g. a promoted_at stamp
-// without a matching successful production deploy means "promoting", not
-// "in_production").
+// Phase 2 (ROA-311): the derivation now also consults member-PR merge
+// state. A release whose PRs all merged outside Ship Hub's merge train
+// (a direct GitHub merge, or a merge-train goroutine that died after the
+// merge landed) never gets merged_at stamped, so the timestamp ladder
+// alone strands it in `assembling` forever and floods the Active
+// Releases rail. The PR-membership step derives such a release to
+// in_staging instead. Direct-merge releases additionally satisfy the
+// 24h auto-done rule without a linked production deploy row (the merge
+// is the evidence the deploy fired). Both fixes drop stuck releases off
+// the Active rail without operator intervention.
 package ship
 
 import (
@@ -47,7 +49,14 @@ const stageDoneAfterPromote = 24 * time.Hour
 // DeriveReleaseStage returns the stage a release SHOULD be in given the
 // observable facts on the release row. Terminal stages and the explicit
 // rollback signal are sticky; everything else is derived from the
-// timestamp ladder.
+// timestamp ladder, with PR merge state consulted as a final fallback.
+//
+// prMergeStates carries the pull_request.state value of every member PR
+// of the release (the caller fetches them — see GetReleasePRStates).
+// It is used only by the Phase 2 step that rescues a release whose PRs
+// merged outside the merge train: such a release never gets merged_at
+// stamped and would otherwise strand in `assembling`. Pass an empty
+// slice when the release has no member PRs.
 //
 // The function is pure: same input → same output, no I/O, no clock skew
 // risk beyond the time.Now() call for the 24-hour auto-done rule (which
@@ -59,7 +68,7 @@ const stageDoneAfterPromote = 24 * time.Hour
 // release has reached" check rather than a "what was the last writer
 // trying to do" check. The latter is what the stored column does and is
 // exactly what we're moving away from.
-func DeriveReleaseStage(r db.ShipRelease, now time.Time) db.ReleaseStage {
+func DeriveReleaseStage(r db.ShipRelease, prMergeStates []db.PullRequestState, now time.Time) db.ReleaseStage {
 	// (1) Sticky terminals from the stored column. These represent
 	// explicit operator intent (Cancel button, Rollback button, Mark
 	// Done button) that no observable fact can override. A user who
@@ -93,11 +102,16 @@ func DeriveReleaseStage(r db.ShipRelease, now time.Time) db.ReleaseStage {
 	// effectively shipped — keeping it on the Active rail clutters the
 	// UI and confuses operators reviewing "what's still in flight".
 	//
-	// Defensive: we only auto-graduate when production_deploy_id is
-	// non-NULL. Without that link there's no evidence the deploy
-	// actually fired, so we leave the release at in_production and
-	// require a manual Mark Done.
-	if r.PromotedAt.Valid && r.ProductionDeployID.Valid {
+	// Defensive: we auto-graduate when production_deploy_id is non-NULL
+	// (a deploy webhook linked a real deploy row). For a direct-merge
+	// release (ROA-311) the deploy webhook may never link a deploy row —
+	// but the merge itself is the evidence the deploy fired, since
+	// Multica auto-deploys on every merge to the default branch. So a
+	// direct-merge release also satisfies the rule: before 24h it
+	// derives in_production, after it derives done and drops off the
+	// Active rail. A non-direct-merge release with no production deploy
+	// link still requires a manual Mark Done (falls through to step 5).
+	if r.PromotedAt.Valid && (r.ProductionDeployID.Valid || r.IsDirectMerge) {
 		if now.Sub(r.PromotedAt.Time) > stageDoneAfterPromote {
 			return db.ReleaseStageDone
 		}
@@ -143,7 +157,34 @@ func DeriveReleaseStage(r db.ShipRelease, now time.Time) db.ReleaseStage {
 		return db.ReleaseStageMerging
 	}
 
-	// (9) Default: still assembling. The release exists, no PR has
+	// (9) PR-membership consultation (Phase 2). The timestamp ladder
+	// missed this release: nothing stamped merged_at, so steps (4)-(8)
+	// all fell through. But if every member PR has actually merged, the
+	// release IS past assembling — its PRs merged outside Ship Hub's
+	// merge train (a direct GitHub merge, a server restart that killed
+	// the merge-train goroutine after the merge landed, etc.) so no
+	// writer ever stamped the ladder.
+	//
+	// release_stage has no `merged` value; in_staging is the post-merge
+	// pre-deploy stage, so that's what an all-PRs-merged release derives
+	// to. This is the durable fix for ROA-311: a release whose PRs
+	// merged outside the merge train can never strand in `assembling`
+	// again. A release with NO member PRs, or with any unmerged member
+	// PR, keeps the existing behavior and falls through to step (10).
+	if len(prMergeStates) > 0 {
+		allMerged := true
+		for _, st := range prMergeStates {
+			if st != db.PullRequestStateMerged {
+				allMerged = false
+				break
+			}
+		}
+		if allMerged {
+			return db.ReleaseStageInStaging
+		}
+	}
+
+	// (10) Default: still assembling. The release exists, no PR has
 	// merged yet, no merge train started.
 	return db.ReleaseStageAssembling
 }

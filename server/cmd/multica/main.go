@@ -72,6 +72,7 @@ func init() {
 	rootCmd.AddCommand(mcpRegistryCmd)
 	rootCmd.AddCommand(workspaceCmd)
 	rootCmd.AddCommand(repoCmd)
+	rootCmd.AddCommand(shipCmd)
 	rootCmd.AddCommand(skillCmd)
 	rootCmd.AddCommand(channelCmd)
 	rootCmd.AddCommand(memoryCmd)

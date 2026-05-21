@@ -784,11 +784,17 @@ func (s *Service) completeMergeTrain(
 		MergedAt: pgtype.Timestamptz{Time: now, Valid: true},
 	}
 	if directToProd {
-		// Backfill staged_at so the timeline reads "merged → staged →
-		// promoting" rather than "merged → ???". COALESCE in the SQL
-		// preserves this synthetic value if a real deploy later writes
-		// a different timestamp.
-		updateParams.StagedAt = pgtype.Timestamptz{Time: now, Valid: true}
+		// A direct_to_prod project has no staging environment and no
+		// separate Promote step — the merge train completing IS the
+		// promotion. Stamp promoted_at so DeriveReleaseStage reports
+		// `promoting` (then `in_production` once the production deploy
+		// links, then auto-`done`).
+		//
+		// We deliberately do NOT stamp staged_at: there is no staging
+		// stage, and a synthetic staged_at made DeriveReleaseStage step
+		// (6) misreport a direct_to_prod release as `in_staging` —
+		// "IN STAGING" on a repo that has no staging (ROA-31x).
+		updateParams.PromotedAt = pgtype.Timestamptz{Time: now, Valid: true}
 	}
 	updated, err := s.Q.UpdateReleaseStage(ctx, updateParams)
 	if err != nil {

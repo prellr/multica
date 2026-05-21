@@ -126,17 +126,25 @@ func DeriveReleaseStage(r db.ShipRelease, prMergeStates []db.PullRequestState, n
 		return db.ReleaseStagePromoting
 	}
 
-	// (6) staged_at stamped => verifying or in_staging. We don't have
-	// qa_verified_at on the release row (it's on deploy_preflight,
-	// keyed by (env, sha)). Without joining that table here, fall back
-	// to the stored stage to distinguish: if the writer last set
-	// "verifying" we honor it, otherwise default to "in_staging".
-	// This is the one branch where Phase 1 still consults the stored
-	// stage as a tiebreaker. Phase 2 will replace this with a real
-	// deploy_preflight lookup.
+	// (6) staged_at stamped => the release reached staging; the exact
+	// stage is a tiebreaker on the stored column. staged_at alone can't
+	// distinguish in_staging / verifying / promoting / in_production, so
+	// we honor an advanced stored stage and otherwise default to
+	// in_staging.
+	//
+	// Honoring promoting / in_production here matters for direct_to_prod
+	// projects: they have no staging environment, and a release that
+	// reached `promoting` must not be pinned back to `in_staging` just
+	// because a staged_at timestamp is present (a legacy synthetic
+	// staged_at from an older completeMergeTrain, or any later writer).
+	// Showing "IN STAGING" for a repo with no staging is the ROA-31x
+	// report this branch fixes.
 	if r.StagedAt.Valid {
-		if r.Stage == db.ReleaseStageVerifying {
-			return db.ReleaseStageVerifying
+		switch r.Stage {
+		case db.ReleaseStageVerifying,
+			db.ReleaseStagePromoting,
+			db.ReleaseStageInProduction:
+			return r.Stage
 		}
 		return db.ReleaseStageInStaging
 	}

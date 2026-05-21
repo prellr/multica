@@ -954,6 +954,12 @@ export function useRealtimeSync(
       if (!wsId) return;
       qc.invalidateQueries({ queryKey: shipKeys.workspaceActiveReleases(wsId) });
       qc.invalidateQueries({ queryKey: shipKeys.allPullRequests(wsId) });
+      // Invalidate per-project release lists so the history widget picks up
+      // newly terminal releases in real time. The payload doesn't carry
+      // project_id, so use the workspace-scoped "by_project" prefix.
+      qc.invalidateQueries({
+        queryKey: [...shipKeys.releases(wsId), "by_project"] as const,
+      });
       if (payload?.release_id) {
         qc.invalidateQueries({
           queryKey: shipKeys.releaseDetail(wsId, payload.release_id),

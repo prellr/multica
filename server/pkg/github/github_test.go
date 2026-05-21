@@ -226,22 +226,47 @@ func TestGetCIStatus_CombinesLegacyAndCheckRuns(t *testing.T) {
 }
 
 func TestGetCombinedStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/commits/abc/status") {
-			t.Errorf("unexpected path: %s", r.URL.Path)
-		}
-		w.Write([]byte(`{"state":"success"}`))
-	}))
-	defer srv.Close()
-
-	c := NewClient("")
-	c.BaseURL = srv.URL
-	state, err := c.GetCombinedStatus(context.Background(), "o", "r", "abc")
-	if err != nil {
-		t.Fatalf("GetCombinedStatus: %v", err)
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			// A repo with real legacy statuses — state is reported verbatim.
+			name: "has statuses → state passes through",
+			body: `{"state":"success","total_count":2}`,
+			want: "success",
+		},
+		{
+			// Actions-only repo: GitHub reports state "pending" purely
+			// because there are zero legacy statuses. total_count==0 maps
+			// that phantom pending to "" so it can't mask a check-run
+			// rollup downstream in GetCIStatus.
+			name: "zero statuses → empty, not phantom pending",
+			body: `{"state":"pending","total_count":0}`,
+			want: "",
+		},
 	}
-	if state != "success" {
-		t.Errorf("state: got %q", state)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasSuffix(r.URL.Path, "/commits/abc/status") {
+					t.Errorf("unexpected path: %s", r.URL.Path)
+				}
+				w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			c := NewClient("")
+			c.BaseURL = srv.URL
+			state, err := c.GetCombinedStatus(context.Background(), "o", "r", "abc")
+			if err != nil {
+				t.Fatalf("GetCombinedStatus: %v", err)
+			}
+			if state != tc.want {
+				t.Errorf("state: got %q, want %q", state, tc.want)
+			}
+		})
 	}
 }
 

@@ -131,6 +131,22 @@ func runShipHubReleaseFinalizerOnce(
 		}
 	}
 
+	doneIssueReleases, err := queries.ListDoneIssueReleasesWithMergedPRs(ctx)
+	if err != nil {
+		slog.Warn("ship hub release finalizer: list done-issue releases failed", "error", err)
+	} else {
+		for _, rel := range doneIssueReleases {
+			if _, done, err := svc.MarkReleaseDoneIfTrackingIssueDone(ctx, rel.ID, deps); err != nil {
+				slog.Warn("ship hub release finalizer: close done-issue release failed",
+					"release_id", util.UUIDToString(rel.ID), "error", err)
+			} else if done {
+				slog.Info("ship hub release finalizer: closed release whose tracking issue was already done",
+					"release_id", util.UUIDToString(rel.ID),
+					"stage", string(rel.Stage))
+			}
+		}
+	}
+
 	mergeTrainDeps := &ship.MergeTrainDeps{
 		ParentCtx: ctx,
 		Publisher: finalizerMergePublisher{bus: bus},

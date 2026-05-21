@@ -554,6 +554,63 @@ func TestFinalizer_ClosesInProductionWhenAllPRsMerged(t *testing.T) {
 	}
 }
 
+func TestDoneIssueReconciliation_ClosesAssemblingRelease(t *testing.T) {
+	enablePromotionTest(t)
+	projectID := createShipProject(t, "https://github.com/multica-ai/done-issue-reconcile")
+	issueID := seedReleaseTrackingIssue(t, projectID, "- [ ] #1 — Already merged (@tester)\n")
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE issue SET status = 'done' WHERE id = $1`,
+		issueID); err != nil {
+		t.Fatalf("seed done issue: %v", err)
+	}
+
+	var releaseID string
+	if err := testPool.QueryRow(context.Background(),
+		`INSERT INTO ship_release
+			(workspace_id, project_id, title, risk_level, stage, issue_id)
+		 VALUES ($1, $2, 'stuck assembling release', 'low', 'assembling', $3)
+		 RETURNING id`,
+		testWorkspaceID, projectID, issueID).Scan(&releaseID); err != nil {
+		t.Fatalf("seed assembling release: %v", err)
+	}
+	prID := seedReleasePRState(t, projectID, releaseID, 1, "merged", "queued")
+
+	candidates, err := testHandler.Queries.ListDoneIssueReleasesWithMergedPRs(context.Background())
+	if err != nil {
+		t.Fatalf("ListDoneIssueReleasesWithMergedPRs: %v", err)
+	}
+	found := false
+	for _, candidate := range candidates {
+		if uuidToString(candidate.ID) == releaseID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected stuck assembling release to be a done-issue reconciliation candidate")
+	}
+
+	svc := &ship.Service{Q: testHandler.Queries}
+	deps := &ship.StagingDeps{Publisher: &recordingPublisher{}, ParentCtx: context.Background()}
+	updated, done, err := svc.MarkReleaseDoneIfTrackingIssueDone(context.Background(), parseUUID(releaseID), deps)
+	if err != nil {
+		t.Fatalf("MarkReleaseDoneIfTrackingIssueDone: %v", err)
+	}
+	if !done || updated.Stage != db.ReleaseStageDone {
+		t.Fatalf("expected done release, done=%v stage=%q", done, updated.Stage)
+	}
+
+	var active bool
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT is_active FROM ship_release_pull_request WHERE release_id = $1 AND pull_request_id = $2`,
+		releaseID, prID).Scan(&active); err != nil {
+		t.Fatalf("read release membership: %v", err)
+	}
+	if active {
+		t.Fatalf("expected release PR membership inactive after reconciliation")
+	}
+}
+
 func TestReconcileStalledMergeTrain_SyncsAndCompletes(t *testing.T) {
 	enablePromotionTest(t)
 	projectID := createShipProject(t, "https://github.com/multica-ai/stalled-train")

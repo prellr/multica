@@ -464,6 +464,48 @@ func (s *Service) MarkReleaseDone(
 		return release, nil // idempotent no-op
 	}
 
+	return s.finalizeReleaseDone(ctx, release, releaseID, deps)
+}
+
+// MarkReleaseDoneIfTrackingIssueDone closes active releases that already
+// have a done tracking issue and whose PR set is fully merged. This is a
+// reconciliation path for issue-status updates that bypassed Ship's release
+// stage writer.
+func (s *Service) MarkReleaseDoneIfTrackingIssueDone(
+	ctx context.Context,
+	releaseID pgtype.UUID,
+	deps *StagingDeps,
+) (db.ShipRelease, bool, error) {
+	release, err := s.Q.GetRelease(ctx, releaseID)
+	if err != nil {
+		return db.ShipRelease{}, false, fmt.Errorf("get release: %w", err)
+	}
+	if isTerminalReleaseStage(release.Stage) {
+		return release, false, nil
+	}
+	if !release.IssueID.Valid {
+		return release, false, nil
+	}
+	issue, err := s.Q.GetIssue(ctx, release.IssueID)
+	if err != nil {
+		return release, false, fmt.Errorf("get tracking issue: %w", err)
+	}
+	if issue.Status != "done" {
+		return release, false, nil
+	}
+	if !releasePRsAllMerged(ctx, s.Q, releaseID) {
+		return release, false, nil
+	}
+	flipped, err := s.finalizeReleaseDone(ctx, release, releaseID, deps)
+	return flipped, err == nil, err
+}
+
+func (s *Service) finalizeReleaseDone(
+	ctx context.Context,
+	release db.ShipRelease,
+	releaseID pgtype.UUID,
+	deps *StagingDeps,
+) (db.ShipRelease, error) {
 	now := pgtype.Timestamptz{Time: deps.now(), Valid: true}
 	flipped, err := s.Q.UpdateReleaseStage(ctx, db.UpdateReleaseStageParams{
 		ID:     releaseID,
@@ -504,6 +546,12 @@ func (s *Service) MarkReleaseDone(
 	postReleaseChannelStaging(deps, ctx, flipped.ChannelID,
 		"Release closed · production deployed and all release PRs are merged")
 	return flipped, nil
+}
+
+func isTerminalReleaseStage(stage db.ReleaseStage) bool {
+	return stage == db.ReleaseStageDone ||
+		stage == db.ReleaseStageRolledBack ||
+		stage == db.ReleaseStageCancelled
 }
 
 // TryMarkReleaseDoneIfAllMerged closes an in-production release once

@@ -1067,6 +1067,8 @@ type Project struct {
 	PipelineKind                 ProjectPipelineKind `json:"pipeline_kind"`
 	PipelineConfig               []byte              `json:"pipeline_config"`
 	PipelineConfigIntrospectedAt pgtype.Timestamptz  `json:"pipeline_config_introspected_at"`
+	PipelineConfigProposed       []byte              `json:"pipeline_config_proposed"`
+	PipelineConfigProposedAt     pgtype.Timestamptz  `json:"pipeline_config_proposed_at"`
 }
 
 type ProjectResource struct {

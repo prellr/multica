@@ -872,7 +872,77 @@ func (s *Service) processPush(ctx context.Context, ev WebhookEvent) (WebhookOutc
 	// the pushed merge commit's PR row already carries merge_commit_sha.
 	// Best-effort: a synthesis failure must never fail the webhook.
 	s.synthesizeDirectMergeRelease(ctx, ev.WorkspaceID, project, payload)
+
+	// PR8 — if this push touched a CI/CD workflow file or `.shiphub.yml`,
+	// the repo's deploy story may have changed; re-run the pipeline
+	// introspector. Best-effort: a refresh failure must never fail the
+	// webhook (mirrors synthesizeDirectMergeRelease's wiring).
+	s.maybeRefreshPipelineFromPush(ctx, project, payload)
+
 	return WebhookOutcome{Kind: "noop"}, nil
+}
+
+// pushTouchesPipelineFiles reports whether a push's head commit changed
+// any file that affects the pipeline shape: a workflow YAML under
+// `.github/workflows/`, or the repo-root `.shiphub.yml` override. The
+// added / modified / removed lists are all scanned — a deleted workflow
+// changes the shape just as much as a new one.
+func pushTouchesPipelineFiles(payload gh.PushEvent) bool {
+	if payload.HeadCommit == nil {
+		return false
+	}
+	for _, group := range [][]string{
+		payload.HeadCommit.Added,
+		payload.HeadCommit.Modified,
+		payload.HeadCommit.Removed,
+	} {
+		for _, path := range group {
+			if isPipelineRelevantPath(path) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isPipelineRelevantPath reports whether a repo-relative path is one the
+// introspector reads: a `.yml` / `.yaml` file directly under
+// `.github/workflows/`, or the repo-root `.shiphub.yml`.
+func isPipelineRelevantPath(path string) bool {
+	p := strings.TrimPrefix(strings.TrimSpace(path), "./")
+	if p == ".shiphub.yml" {
+		return true
+	}
+	if strings.HasPrefix(p, ".github/workflows/") {
+		lower := strings.ToLower(p)
+		return strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".yaml")
+	}
+	return false
+}
+
+// maybeRefreshPipelineFromPush runs the pipeline introspector when a
+// push changed a workflow file or `.shiphub.yml`. Entirely best-effort:
+// every failure path logs and returns, never affecting the webhook
+// outcome. The diff/apply classification lives in RefreshProjectPipeline.
+func (s *Service) maybeRefreshPipelineFromPush(ctx context.Context, project db.Project, payload gh.PushEvent) {
+	if !pushTouchesPipelineFiles(payload) {
+		return
+	}
+	if s.Github == nil {
+		// Webhook deliveries can arrive before the workspace's GH client
+		// is wired; the daily poller will catch the change.
+		slog.Debug("ship webhook: pipeline-file change but no github client, deferring to poller",
+			"project_id", uuidString(project.ID))
+		return
+	}
+	outcome, err := s.RefreshProjectPipeline(ctx, project)
+	if err != nil {
+		slog.Warn("ship webhook: post-push pipeline refresh failed",
+			"project_id", uuidString(project.ID), "error", err)
+		return
+	}
+	slog.Info("ship webhook: post-push pipeline refresh",
+		"project_id", uuidString(project.ID), "outcome", outcome.Kind)
 }
 
 // directMergeReleaseTitleCap bounds the synthesized release title so a

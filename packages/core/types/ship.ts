@@ -8,6 +8,11 @@
 //  - Optional fields that the server may omit on older builds are
 //    explicitly nullable so the consumer can default-render.
 
+// PR8 — the accept-proposal response echoes the project's new
+// pipeline_config; the structured PipelineConfig type lives in
+// project.ts alongside the Project.pipeline_config field.
+import type { PipelineConfig } from "./project";
+
 export type PullRequestState = "open" | "closed" | "merged";
 
 export type DeployEnvironmentKind = "staging" | "production";
@@ -910,4 +915,74 @@ export interface WebhookSecretResponse {
   webhook_secret: string;
   webhook_url: string;
   webhook_secret_set: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// PR8 — pipeline auto-refresh. The introspector re-runs on demand / on a
+// workflow-file push / daily, diffs its output against the project's
+// stored pipeline_config, and either auto-applies an additive change or
+// parks a destructive one as a pending proposal.
+// ---------------------------------------------------------------------------
+
+/** Classification of a pipeline-config diff. `none` = equivalent;
+ *  `additive` = only appended stages / added triggers (auto-applied);
+ *  `destructive` = a stage renamed/dropped/reordered, a trigger
+ *  removed, or the shape changed (parked for operator review). */
+export type PipelineDiffKind = "none" | "additive" | "destructive";
+
+/** What a RefreshProjectPipeline call did. */
+export type PipelineRefreshKind =
+  | "unchanged"
+  | "applied_additive"
+  | "proposed_destructive"
+  | "skipped_no_repo";
+
+export interface PipelineDiffStageRef {
+  id: string;
+  name: string;
+}
+
+export interface PipelineDiffRename {
+  id: string;
+  old_name: string;
+  new_name: string;
+}
+
+/** Structured description of how a proposed config differs from the
+ *  current one. Rendered by the proposal banner so the operator sees
+ *  exactly what changed before accepting. */
+export interface PipelineDiff {
+  kind: PipelineDiffKind | string;
+  shape_changed: boolean;
+  old_shape?: string;
+  new_shape?: string;
+  added_stages: PipelineDiffStageRef[];
+  removed_stages: PipelineDiffStageRef[];
+  renamed_stages: PipelineDiffRename[];
+  reordered_stages: string[];
+  triggers_added_stages: string[];
+  triggers_removed_stages: string[];
+}
+
+/** Response of POST /api/projects/{id}/pipeline/refresh. */
+export interface PipelineRefreshResponse {
+  project_id: string;
+  kind: PipelineRefreshKind | string;
+  /** Present for applied_additive / proposed_destructive. */
+  diff?: PipelineDiff | null;
+  shape?: string;
+}
+
+/** Response of POST /api/projects/{id}/pipeline/proposal/accept. */
+export interface AcceptPipelineProposalResponse {
+  project_id: string;
+  applied: boolean;
+  pipeline_config?: PipelineConfig | null;
+  diff?: PipelineDiff | null;
+}
+
+/** Response of POST /api/projects/{id}/pipeline/proposal/reject. */
+export interface RejectPipelineProposalResponse {
+  project_id: string;
+  rejected: boolean;
 }

@@ -472,6 +472,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/api/projects/{id}/pull_requests", h.ListProjectPullRequests)
 			r.Post("/api/projects/{id}/pull_requests/sync", h.SyncProjectPullRequests)
 			r.Post("/api/workspaces/{id}/ship/introspect-pipelines", h.IntrospectWorkspacePipelines)
+			// PR8 — auto-refresh pipeline config from repo state.
+			r.Post("/api/projects/{id}/pipeline/refresh", h.RefreshProjectPipeline)
+			r.Post("/api/projects/{id}/pipeline/proposal/accept", h.AcceptPipelineProposal)
+			r.Post("/api/projects/{id}/pipeline/proposal/reject", h.RejectPipelineProposal)
 			r.Get("/api/projects/{id}/deploy_environments", h.ListProjectDeployEnvironments)
 			r.Post("/api/projects/{id}/deploy_environments", h.CreateProjectDeployEnvironment)
 			r.Patch("/api/deploy_environments/{id}", h.UpdateDeployEnvironment)

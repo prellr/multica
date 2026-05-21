@@ -26,8 +26,8 @@ import (
 	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	gh "github.com/multica-ai/multica/server/pkg/github"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	gh "github.com/multica-ai/multica/server/pkg/github"
 )
 
 // ProjectIntrospectionResult captures one project's outcome from a
@@ -91,47 +91,65 @@ func (s *Service) IntrospectProjectPipeline(ctx context.Context, project db.Proj
 	return s.introspectOneProject(ctx, project)
 }
 
-// introspectOneProject is the per-project workhorse. Finds the primary
-// github_repo resource, parses it, calls the introspector, and writes
-// the result back via UpdateProjectPipelineConfig.
+// findProjectRepo resolves a project's primary github_repo resource and
+// returns its (owner, repo) pair. Multiple github_repo resources are
+// handled by taking the FIRST one — matching what the rest of Ship Hub
+// does in SyncProject (primary repo = first in resource order).
 //
-// Multiple github_repo resources on a project are handled by taking
-// the FIRST one (matching what the rest of Ship Hub does in
-// SyncProject — primary repo = first in resource order). A project
-// with no github_repo resource at all is skipped with a clear status.
-func (s *Service) introspectOneProject(ctx context.Context, project db.Project) ProjectIntrospectionResult {
-	result := ProjectIntrospectionResult{
-		ProjectID: uuidString(project.ID),
-	}
+// foundRepo is false when the project has no github_repo resource at
+// all (a valid "skip this project" outcome, not an error). err is
+// non-nil only for a real failure (DB error, unparseable repo URL).
+//
+// PR8 shares this with introspectOneProject so the refresh paths don't
+// duplicate the resource-finding logic.
+func (s *Service) findProjectRepo(ctx context.Context, project db.Project) (owner, repo, repoURL string, foundRepo bool, err error) {
 	resources, err := s.Q.ListProjectResources(ctx, project.ID)
 	if err != nil {
-		result.Status = "error"
-		result.Error = fmt.Sprintf("list project resources: %v", err)
-		return result
+		return "", "", "", false, fmt.Errorf("list project resources: %w", err)
 	}
-	repoURL := ""
 	for _, res := range resources {
 		if res.ResourceType != "github_repo" {
 			continue
 		}
-		u, err := repoURLFromResource(res.ResourceRef)
-		if err != nil {
+		u, urlErr := repoURLFromResource(res.ResourceRef)
+		if urlErr != nil {
 			continue
 		}
 		repoURL = u
 		break
 	}
 	if repoURL == "" {
+		return "", "", "", false, nil
+	}
+	o, r, parseErr := gh.ParseRepoURL(repoURL)
+	if parseErr != nil {
+		return "", "", repoURL, true, fmt.Errorf("parse repo url: %w", parseErr)
+	}
+	return o, r, repoURL, true, nil
+}
+
+// introspectOneProject is the per-project workhorse. Finds the primary
+// github_repo resource, parses it, calls the introspector, and writes
+// the result back via UpdateProjectPipelineConfig.
+//
+// A project with no github_repo resource at all is skipped with a clear
+// status.
+func (s *Service) introspectOneProject(ctx context.Context, project db.Project) ProjectIntrospectionResult {
+	result := ProjectIntrospectionResult{
+		ProjectID: uuidString(project.ID),
+	}
+	owner, repo, repoURL, foundRepo, err := s.findProjectRepo(ctx, project)
+	if err != nil {
+		result.Status = "error"
+		result.Error = err.Error()
+		result.RepoURL = repoURL
+		return result
+	}
+	if !foundRepo {
 		result.Status = "skipped_no_repo"
 		return result
 	}
 	result.RepoURL = repoURL
-	owner, repo, err := gh.ParseRepoURL(repoURL)
-	if err != nil {
-		result.Status = "error"
-		result.Error = fmt.Sprintf("parse repo url: %v", err)
-		return result
-	}
 	cfg, err := IntrospectPipeline(ctx, s.Github, owner, repo)
 	if err != nil {
 		result.Status = "error"

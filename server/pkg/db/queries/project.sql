@@ -61,6 +61,58 @@ UPDATE project SET
 WHERE id = $1
 RETURNING *;
 
+-- name: SetProjectPipelineProposal :one
+-- PR8 of the Ship Hub rebuild — park a destructively-differing
+-- introspected config as a pending proposal. Stamps
+-- pipeline_config_introspected_at too: the introspector DID run, the
+-- operator just hasn't accepted its output yet. `pipeline_config` is
+-- deliberately left untouched — the kanban keeps rendering the current
+-- (operator-trusted) shape until Accept swaps the proposal in.
+UPDATE project SET
+    pipeline_config_proposed = sqlc.arg('pipeline_config_proposed')::jsonb,
+    pipeline_config_proposed_at = now(),
+    pipeline_config_introspected_at = now(),
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ClearProjectPipelineProposal :one
+-- PR8 — clear a pending proposal without touching pipeline_config.
+-- Used by Reject (operator declined the change) and by the refresh
+-- paths when a fresh introspection finds no diff / an additive diff,
+-- which makes any previously-parked proposal stale.
+UPDATE project SET
+    pipeline_config_proposed = NULL,
+    pipeline_config_proposed_at = NULL,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ApplyProjectPipelineProposal :one
+-- PR8 — Accept: swap the pending proposal into pipeline_config, stamp
+-- introspected_at, and clear the proposal columns in one statement so
+-- there is no window where both the live config and the proposal are
+-- visible. No-ops cleanly if no proposal is pending (the COALESCE keeps
+-- pipeline_config as-is and the proposal columns are already NULL).
+UPDATE project SET
+    pipeline_config = COALESCE(pipeline_config_proposed, pipeline_config),
+    pipeline_config_introspected_at = now(),
+    pipeline_config_proposed = NULL,
+    pipeline_config_proposed_at = NULL,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: StampProjectPipelineIntrospectedAt :one
+-- PR8 — record that the introspector ran and found nothing to change.
+-- Only bumps the audit timestamp; pipeline_config and the proposal
+-- columns are left exactly as they were.
+UPDATE project SET
+    pipeline_config_introspected_at = now(),
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
 -- name: ArchiveProject :one
 -- Soft-delete: stamps archived_at + archived_by. Idempotent — re-archiving
 -- a row that's already archived just refreshes the timestamp.

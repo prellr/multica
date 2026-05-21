@@ -52,6 +52,15 @@ type ProjectResponse struct {
 	// JSONB column is still NULL — the shim synthesizes a sensible
 	// default from PipelineKind.
 	PipelineConfig ship.PipelineConfig `json:"pipeline_config"`
+	// PipelineConfigProposed is a pending introspected config awaiting
+	// operator Accept / Reject (PR8 — pipeline auto-refresh). Non-null
+	// only when the introspector detected a destructive shape change
+	// the operator hasn't resolved yet; the Ship UI's proposal banner
+	// renders off this field. Stays nil for the common no-proposal case.
+	PipelineConfigProposed *ship.PipelineConfig `json:"pipeline_config_proposed,omitempty"`
+	// PipelineConfigProposedAt is when the pending proposal was
+	// recorded. Non-nil iff PipelineConfigProposed is non-nil.
+	PipelineConfigProposedAt *string `json:"pipeline_config_proposed_at,omitempty"`
 	// ResourceCount is a breadcrumb pointing at the sub-collection at
 	// /api/projects/{id}/resources. Resources themselves stay out of this
 	// payload to keep parent metadata and child collections separate; clients
@@ -75,22 +84,38 @@ func projectToResponse(p db.Project) ProjectResponse {
 			"error", err)
 		pipelineConfig = ship.DefaultStagedStrictConfig()
 	}
+	// PR8 — surface a pending proposal when one is parked. A malformed
+	// proposal blob (shouldn't happen — it was written through ToJSON)
+	// is dropped rather than failing the whole project response.
+	var proposed *ship.PipelineConfig
+	var proposedAt *string
+	if len(p.PipelineConfigProposed) > 0 && p.PipelineConfigProposedAt.Valid {
+		if cfg, parseErr := ship.FromJSON(p.PipelineConfigProposed); parseErr == nil {
+			proposed = &cfg
+			proposedAt = timestampToPtr(p.PipelineConfigProposedAt)
+		} else {
+			slog.Warn("ship: pipeline_config_proposed unparseable; omitting from response",
+				"project_id", uuidToString(p.ID), "error", parseErr)
+		}
+	}
 	return ProjectResponse{
-		ID:             uuidToString(p.ID),
-		WorkspaceID:    uuidToString(p.WorkspaceID),
-		Title:          p.Title,
-		Description:    textToPtr(p.Description),
-		Icon:           textToPtr(p.Icon),
-		Status:         p.Status,
-		Priority:       p.Priority,
-		LeadType:       textToPtr(p.LeadType),
-		LeadID:         uuidToPtr(p.LeadID),
-		ArchivedAt:     timestampToPtr(p.ArchivedAt),
-		ArchivedBy:     uuidToPtr(p.ArchivedBy),
-		CreatedAt:      timestampToString(p.CreatedAt),
-		UpdatedAt:      timestampToString(p.UpdatedAt),
-		PipelineKind:   string(p.PipelineKind),
-		PipelineConfig: pipelineConfig,
+		ID:                       uuidToString(p.ID),
+		WorkspaceID:              uuidToString(p.WorkspaceID),
+		Title:                    p.Title,
+		Description:              textToPtr(p.Description),
+		Icon:                     textToPtr(p.Icon),
+		Status:                   p.Status,
+		Priority:                 p.Priority,
+		LeadType:                 textToPtr(p.LeadType),
+		LeadID:                   uuidToPtr(p.LeadID),
+		ArchivedAt:               timestampToPtr(p.ArchivedAt),
+		ArchivedBy:               uuidToPtr(p.ArchivedBy),
+		CreatedAt:                timestampToString(p.CreatedAt),
+		UpdatedAt:                timestampToString(p.UpdatedAt),
+		PipelineKind:             string(p.PipelineKind),
+		PipelineConfig:           pipelineConfig,
+		PipelineConfigProposed:   proposed,
+		PipelineConfigProposedAt: proposedAt,
 	}
 }
 

@@ -192,6 +192,15 @@ export type {
   TalkToAgentResponse,
   PullRequestStackNode,
   ListPullRequestStacksResponse,
+  // PR8 — pipeline auto-refresh
+  PipelineDiffKind,
+  PipelineRefreshKind,
+  PipelineDiffStageRef,
+  PipelineDiffRename,
+  PipelineDiff,
+  PipelineRefreshResponse,
+  AcceptPipelineProposalResponse,
+  RejectPipelineProposalResponse,
   // Phase 5
   RiskLevel,
   ShipHubSummary,

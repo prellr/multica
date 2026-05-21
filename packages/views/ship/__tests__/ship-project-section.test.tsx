@@ -45,6 +45,11 @@ vi.mock("@multica/core/ship", () => ({
   }),
   useUpsertDeployEnvironment: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useLogDeploy: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  // PR8 — pipeline auto-refresh hooks consumed by PipelineProposalBanner,
+  // which the project section mounts above the repo list.
+  useRefreshPipeline: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useAcceptPipelineProposal: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useRejectPipelineProposal: () => ({ mutateAsync: vi.fn(), isPending: false }),
   // Phase 6 — adapter hooks. The dialog is rendered behind the swimlane
   // edit button; the section mounts the swimlane so we need stubs even
   // when the section's tests don't open the dialog.

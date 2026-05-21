@@ -262,6 +262,71 @@ describe("ApiClient schema fallback", () => {
       expect(pr.mergeable).toBe("");
     });
   });
+
+  // PR8 — pipeline auto-refresh. The refresh endpoint's response carries
+  // a nested diff object the proposal banner renders from; a malformed
+  // response must degrade to a safe "unchanged" shape, never throw.
+  describe("refreshProjectPipeline", () => {
+    it("returns the diff outcome on a well-formed response", async () => {
+      stubFetchJson({
+        project_id: "proj-1",
+        kind: "proposed_destructive",
+        shape: "staged_strict",
+        diff: {
+          kind: "destructive",
+          shape_changed: false,
+          removed_stages: [{ id: "in_staging", name: "In Staging" }],
+        },
+      });
+      const client = new ApiClient("https://api.example.test");
+      const out = await client.refreshProjectPipeline("proj-1");
+      expect(out.kind).toBe("proposed_destructive");
+      expect(out.diff?.removed_stages[0]?.id).toBe("in_staging");
+      // Array fields the server omitted default to [] rather than
+      // undefined, so the banner can map over them unconditionally.
+      expect(out.diff?.added_stages).toEqual([]);
+    });
+
+    it("falls back to an 'unchanged' outcome when the body is null", async () => {
+      stubFetchJson(null);
+      const client = new ApiClient("https://api.example.test");
+      const out = await client.refreshProjectPipeline("proj-1");
+      expect(out.kind).toBe("unchanged");
+      expect(out.project_id).toBe("");
+    });
+
+    it("falls back when a required field has the wrong type", async () => {
+      // `kind` must be a string; an object is the classic drift case.
+      stubFetchJson({ project_id: "proj-1", kind: { wrong: "shape" } });
+      const client = new ApiClient("https://api.example.test");
+      const out = await client.refreshProjectPipeline("proj-1");
+      expect(out.kind).toBe("unchanged");
+    });
+
+    it("tolerates an unknown diff kind (enum drift downgrades)", async () => {
+      stubFetchJson({
+        project_id: "proj-1",
+        kind: "some_future_outcome",
+        diff: { kind: "some_future_diff_kind", shape_changed: false },
+      });
+      const client = new ApiClient("https://api.example.test");
+      const out = await client.refreshProjectPipeline("proj-1");
+      // Unknown enum values parse through (z.string()) so the UI can
+      // render a generic fallback rather than white-screening.
+      expect(out.kind).toBe("some_future_outcome");
+      expect(out.diff?.kind).toBe("some_future_diff_kind");
+    });
+  });
+
+  describe("rejectPipelineProposal", () => {
+    it("falls back to a safe shape when the body is malformed", async () => {
+      stubFetchJson({ rejected: "not a boolean" });
+      const client = new ApiClient("https://api.example.test");
+      const out = await client.rejectPipelineProposal("proj-1");
+      expect(out.rejected).toBe(false);
+      expect(out.project_id).toBe("");
+    });
+  });
 });
 
 // Direct tests for the helper, decoupled from any specific endpoint —

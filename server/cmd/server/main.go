@@ -364,6 +364,14 @@ func main() {
 	// fire GitHub deployment_status webhooks.
 	go runShipHubDeployWorkflowPoller(sweepCtx, queries, bus)
 
+	// PR8 — daily pipeline-config refresh. The push webhook is the
+	// primary trigger (workflow-file edits are picked up within
+	// seconds); this sweep is the backstop for repos with unreliable
+	// webhook delivery. Re-introspects every project and auto-applies
+	// additive shape changes / parks destructive ones for operator
+	// review.
+	go runShipHubPipelineRefreshPoller(sweepCtx, queries)
+
 	if metricsServer != nil {
 		go func() {
 			slog.Info("metrics server starting", "addr", metricsConfig.Addr)

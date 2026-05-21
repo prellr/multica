@@ -705,5 +705,28 @@
       "no_signal": "—",
       "awaiting_first_snapshot": "Monitoring will begin once this release reaches production."
     }
+  },
+  "pipeline_proposal": {
+    "title": "Pipeline change detected",
+    "description": "Multica re-read this repo's deploy workflows and found a change to the pipeline shape. Review it before it's applied.",
+    "shape_changed": "Pipeline shape: {{from}} → {{to}}",
+    "added_stage": "Adds stage “{{name}}”",
+    "removed_stage": "Removes stage “{{name}}”",
+    "renamed_stage": "Renames “{{from}}” to “{{to}}”",
+    "reordered": "Reorders existing stages",
+    "triggers_changed": "Changes how stages advance",
+    "accept": "Accept",
+    "reject": "Reject",
+    "accepting": "Accepting…",
+    "rejecting": "Rejecting…",
+    "refresh": "Refresh pipeline from repo",
+    "refreshing": "Refreshing…",
+    "refresh_unchanged": "Pipeline already matches the repo.",
+    "refresh_applied": "Applied additive pipeline changes from the repo.",
+    "refresh_skipped": "This project has no linked GitHub repo to introspect.",
+    "blocked_title": "Can't apply yet",
+    "blocked_description": "{{count}} in-flight release(s) sit at a stage this change would remove. Finish or roll those back first.",
+    "error_title": "Pipeline refresh failed",
+    "error_description": "{{message}}"
   }
 }

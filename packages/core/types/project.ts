@@ -116,6 +116,14 @@ export interface Project {
    *  populates this (synthesizing from pipeline_kind when the JSONB
    *  column is NULL) so consumers can render unconditionally. */
   pipeline_config: PipelineConfig;
+  /** PR8 — a pending introspected pipeline config awaiting operator
+   *  Accept / Reject. Non-null only when the introspector detected a
+   *  destructive shape change the operator hasn't resolved yet. The
+   *  proposal banner renders off this field. */
+  pipeline_config_proposed?: PipelineConfig | null;
+  /** PR8 — when the pending proposal was recorded. Non-null iff
+   *  pipeline_config_proposed is non-null. */
+  pipeline_config_proposed_at?: string | null;
 }
 
 export interface CreateProjectRequest {

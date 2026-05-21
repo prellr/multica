@@ -80,6 +80,10 @@ export {
   usePullRequestDetails,
   // PR7 — per-PR live refresh (mergeable=UNKNOWN polling).
   useRefreshPullRequest,
+  // PR8 — pipeline auto-refresh
+  useRefreshPipeline,
+  useAcceptPipelineProposal,
+  useRejectPipelineProposal,
 } from "./queries";
 
 // Phase 7a — multi-select store. Lives next to the queries because

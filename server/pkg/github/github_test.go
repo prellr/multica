@@ -145,40 +145,57 @@ func TestListPullRequests_ErrorMapping(t *testing.T) {
 // rollup. Also covers the CI-less ("" + "" → "") and pending cases.
 func TestGetCIStatus_CombinesLegacyAndCheckRuns(t *testing.T) {
 	cases := []struct {
-		name        string
-		legacyState string
-		checkRuns   string // JSON body for the check-runs endpoint
-		want        string
+		name string
+		// legacyBody is the raw JSON the combined-status endpoint
+		// returns. GitHub reports `state:"pending", total_count:0` for a
+		// commit with NO legacy statuses — every commit in an
+		// Actions-only repo — so the realistic Actions-only body is NOT
+		// `{"state":""}`.
+		legacyBody string
+		checkRuns  string // JSON body for the check-runs endpoint
+		want       string
 	}{
 		{
-			name:        "actions failure with empty legacy → failure",
-			legacyState: "",
-			checkRuns:   `{"total_count":2,"check_runs":[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"failure"}]}`,
-			want:        "failure",
+			name:       "actions failure, Actions-only repo (legacy pending/0) → failure",
+			legacyBody: `{"state":"pending","total_count":0}`,
+			checkRuns:  `{"total_count":2,"check_runs":[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"failure"}]}`,
+			want:       "failure",
 		},
 		{
-			name:        "actions all green, no legacy → success",
-			legacyState: "",
-			checkRuns:   `{"total_count":1,"check_runs":[{"status":"completed","conclusion":"success"}]}`,
-			want:        "success",
+			// Regression for the prellr/multica bug: an Actions-only repo
+			// with all check-runs green. The legacy endpoint says
+			// "pending" purely because total_count==0 — that must NOT
+			// mask the green rollup.
+			name:       "actions all green, Actions-only repo (legacy pending/0) → success",
+			legacyBody: `{"state":"pending","total_count":0}`,
+			checkRuns:  `{"total_count":1,"check_runs":[{"status":"completed","conclusion":"success"}]}`,
+			want:       "success",
 		},
 		{
-			name:        "actions still running → pending",
-			legacyState: "",
-			checkRuns:   `{"total_count":1,"check_runs":[{"status":"in_progress","conclusion":""}]}`,
-			want:        "pending",
+			name:       "actions still running → pending",
+			legacyBody: `{"state":"pending","total_count":0}`,
+			checkRuns:  `{"total_count":1,"check_runs":[{"status":"in_progress","conclusion":""}]}`,
+			want:       "pending",
 		},
 		{
-			name:        "CI-less repo (no legacy, no checks) → empty",
-			legacyState: "",
-			checkRuns:   `{"total_count":0,"check_runs":[]}`,
-			want:        "",
+			name:       "CI-less repo (no legacy, no checks) → empty",
+			legacyBody: `{"state":"pending","total_count":0}`,
+			checkRuns:  `{"total_count":0,"check_runs":[]}`,
+			want:       "",
 		},
 		{
-			name:        "legacy failure dominates green checks → failure",
-			legacyState: "failure",
-			checkRuns:   `{"total_count":1,"check_runs":[{"status":"completed","conclusion":"success"}]}`,
-			want:        "failure",
+			name:       "legacy failure dominates green checks → failure",
+			legacyBody: `{"state":"failure","total_count":1}`,
+			checkRuns:  `{"total_count":1,"check_runs":[{"status":"completed","conclusion":"success"}]}`,
+			want:       "failure",
+		},
+		{
+			// A genuine in-flight legacy status (total_count>0) must
+			// still dominate a green check-run rollup as pending.
+			name:       "real in-flight legacy status (pending/1) → pending",
+			legacyBody: `{"state":"pending","total_count":1}`,
+			checkRuns:  `{"total_count":1,"check_runs":[{"status":"completed","conclusion":"success"}]}`,
+			want:       "pending",
 		},
 	}
 	for _, tc := range cases {
@@ -186,7 +203,7 @@ func TestGetCIStatus_CombinesLegacyAndCheckRuns(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case strings.HasSuffix(r.URL.Path, "/commits/abc/status"):
-					w.Write([]byte(`{"state":"` + tc.legacyState + `"}`))
+					w.Write([]byte(tc.legacyBody))
 				case strings.HasSuffix(r.URL.Path, "/commits/abc/check-runs"):
 					w.Write([]byte(tc.checkRuns))
 				default:

@@ -232,10 +232,12 @@ func (c *Client) ListPullRequestFiles(ctx context.Context, owner, repo string, p
 }
 
 // CombinedStatus is the wire shape returned by /repos/.../commits/{sha}/status.
-// We only project the State field today; the per-context list and total_count
-// are useful in a richer UI but not for the Ship Hub badge.
+// TotalCount matters: GitHub reports `state: "pending"` for a commit that
+// has ZERO legacy statuses, identical to a commit with a status genuinely
+// in flight. TotalCount == 0 is the only way to tell the two apart.
 type CombinedStatus struct {
-	State string `json:"state"` // "pending" | "success" | "failure" | ""
+	State      string `json:"state"` // "pending" | "success" | "failure" | ""
+	TotalCount int    `json:"total_count"`
 }
 
 // GetCombinedStatus returns the combined status string for a SHA. Empty
@@ -246,6 +248,18 @@ func (c *Client) GetCombinedStatus(ctx context.Context, owner, repo, sha string)
 	var out CombinedStatus
 	if err := c.do(ctx, "GET", path, &out); err != nil {
 		return "", err
+	}
+	// GitHub's combined-status `state` is "pending" both when a real
+	// legacy status is in flight AND when the commit has NO legacy
+	// statuses at all — the latter being every commit in a repo that
+	// reports CI exclusively through GitHub Actions check-runs (no
+	// legacy status integrations). total_count == 0 is the discriminator:
+	// treat "no statuses" as an absent legacy signal ("") so a phantom
+	// "pending" can't mask a green check-run rollup in combineCIStates.
+	// Without this, ci_status is "pending" forever for every PR in an
+	// Actions-only repo and the merge-train gate never opens.
+	if out.TotalCount == 0 {
+		return "", nil
 	}
 	return out.State, nil
 }
@@ -268,10 +282,12 @@ type CheckRunsResponse struct {
 // Why this exists (ROA-274): the merge-train sync used to leave
 // ci_status blank, so PRs with red CI merged anyway. GetCombinedStatus
 // alone is insufficient because GitHub Actions reports as check-runs,
-// NOT legacy commit statuses — that endpoint returns "" on an
-// Actions-only repo and the gate silently passes. We must consult both
-// surfaces and reduce them to one verdict so the eligibility check can
-// actually block.
+// NOT legacy commit statuses. On an Actions-only repo the combined-
+// status endpoint reports `state: "pending", total_count: 0` —
+// GetCombinedStatus maps that zero-status case to "" so it doesn't
+// masquerade as a real in-flight status. We consult both surfaces and
+// reduce them to one verdict so the eligibility check can actually
+// block.
 //
 // A CI-less repo (no statuses, no check-runs) yields "" and stays
 // mergeable by design — releaseEligibilityReason only blocks a

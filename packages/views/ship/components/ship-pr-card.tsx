@@ -45,7 +45,21 @@ interface ShipPRCardProps {
    *  Apps wire this to their issue navigation; if absent, the chip
    *  renders as plain text. */
   onOpenIssue?: (issueId: string) => void;
+  /** PR9 of the Ship Hub rebuild — true when the project's pipeline is
+   *  `direct_to_prod`, i.e. a merge to the default branch triggers a
+   *  production deploy with no manual gate. When set, an open PR
+   *  targeting main/master renders a "Merging auto-deploys to
+   *  production" warning so the operator isn't surprised by CD firing
+   *  on merge. The kanban derives this once from `pipelineConfig.shape`
+   *  and passes it to every card. */
+  autoDeploysOnMerge?: boolean;
 }
+
+/** Default-branch names a `direct_to_prod` pipeline's push trigger
+ *  watches. Mirrors the introspector's own main/master assumption
+ *  (server/internal/service/ship/pipeline_introspect.go) — a PR whose
+ *  base is one of these auto-deploys on merge. */
+const DEFAULT_BRANCH_NAMES = ["main", "master"];
 
 /** Source icon — derived from `pr.source` per CLAUDE.md "API Response
  *  Compatibility". An unrecognized string downgrades to the generic
@@ -227,9 +241,20 @@ export function ShipPRCard({
   stagingEnv,
   onOpenConversationChannel,
   onOpenIssue,
+  autoDeploysOnMerge,
 }: ShipPRCardProps) {
   const { t, i18n } = useT("ship");
   const risk = deriveRiskHint(pr);
+  // PR9 — surface the production-CD mental-model gap. For a
+  // `direct_to_prod` project, merging an open PR to the default branch
+  // fires a production deploy with no manual promote step. Warn on the
+  // card so the operator isn't surprised. Only meaningful for open PRs
+  // targeting main/master — a merged/closed PR has already deployed (or
+  // won't), and a PR targeting a feature branch doesn't trigger CD.
+  const showAutoDeployWarning =
+    autoDeploysOnMerge === true &&
+    pr.state === "open" &&
+    DEFAULT_BRANCH_NAMES.includes(pr.base_ref);
   // PR7 — while GitHub is still computing this PR's mergeability
   // (mergeable === "UNKNOWN"), poll the per-PR refresh endpoint so the
   // card resolves on its own instead of showing "computing" until a
@@ -528,6 +553,21 @@ export function ShipPRCard({
           `useShipCardActions(pr.id)`. Skipped in v3 because the backend
           list endpoint isn't registered yet — the hook is in place
           (disabled by default) and ready to enable once the route lands. */}
+      {/* PR9 — production-CD warning. Rendered above the chip row so it
+          sits right next to the Merge chip the operator is about to
+          click. amber, not destructive-red: CD-on-merge is the intended
+          behavior for direct_to_prod repos, this is a heads-up, not an
+          error. */}
+      {showAutoDeployWarning && (
+        <div
+          className="mt-1.5 inline-flex items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-400"
+          data-testid="ship-pr-card-auto-deploy-warning"
+        >
+          <AlertTriangle className="size-3" />
+          {t(($) => $.card.auto_deploy_warning)}
+        </div>
+      )}
+
       <PrChipRow pr={pr} stagingEnv={stagingEnv ?? null} />
 
       {/* Phase 4 — open the per-PR Multica channel. Renders only when

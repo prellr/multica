@@ -202,4 +202,42 @@ describe("ShipPRCard", () => {
       expect(document.querySelector('[data-stale="true"]')).toBeNull();
     });
   });
+
+  // PR9 — production-CD warning.
+  describe("auto-deploy warning", () => {
+    const WARNING = '[data-testid="ship-pr-card-auto-deploy-warning"]';
+
+    it("warns on an open PR to main when the project auto-deploys", () => {
+      render(
+        <ShipPRCard pr={makePR({ state: "open", base_ref: "main" })} autoDeploysOnMerge />,
+        { wrapper: I18nWrapper },
+      );
+      expect(document.querySelector(WARNING)).not.toBeNull();
+    });
+
+    it("does not warn when the project does not auto-deploy", () => {
+      // autoDeploysOnMerge omitted (undefined) — staged / manual repos.
+      render(<ShipPRCard pr={makePR({ state: "open", base_ref: "main" })} />, {
+        wrapper: I18nWrapper,
+      });
+      expect(document.querySelector(WARNING)).toBeNull();
+    });
+
+    it("does not warn on a merged PR — it has already deployed", () => {
+      render(
+        <ShipPRCard pr={makePR({ state: "merged", base_ref: "main" })} autoDeploysOnMerge />,
+        { wrapper: I18nWrapper },
+      );
+      expect(document.querySelector(WARNING)).toBeNull();
+    });
+
+    it("does not warn on a PR targeting a non-default branch", () => {
+      // A PR into a feature branch doesn't trigger production CD.
+      render(
+        <ShipPRCard pr={makePR({ state: "open", base_ref: "develop" })} autoDeploysOnMerge />,
+        { wrapper: I18nWrapper },
+      );
+      expect(document.querySelector(WARNING)).toBeNull();
+    });
+  });
 });

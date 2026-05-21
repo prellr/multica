@@ -255,6 +255,14 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
+// isCheckViolation reports whether err is a PostgreSQL CHECK constraint
+// violation (SQLSTATE 23514). Used to translate column-level CHECK failures
+// into a 4xx instead of a generic 500.
+func isCheckViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23514"
+}
+
 func requestUserID(r *http.Request) string {
 	return r.Header.Get("X-User-ID")
 }

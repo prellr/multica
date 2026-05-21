@@ -44,8 +44,12 @@ type IssueResponse struct {
 	DueDate       *string                 `json:"due_date"`
 	CreatedAt     string                  `json:"created_at"`
 	UpdatedAt     string                  `json:"updated_at"`
-	Reactions     []IssueReactionResponse `json:"reactions,omitempty"`
-	Attachments   []AttachmentResponse    `json:"attachments,omitempty"`
+	// Metadata is the per-issue KV map (see issue_metadata.go). Always emitted
+	// (empty object when unset) so frontend code can `issue.metadata[key]`
+	// without nil-guarding the parent field.
+	Metadata    map[string]any          `json:"metadata"`
+	Reactions   []IssueReactionResponse `json:"reactions,omitempty"`
+	Attachments []AttachmentResponse    `json:"attachments,omitempty"`
 	// Labels are bulk-attached by list/detail endpoints so the client can render
 	// chips without an N+1 round-trip per row. Pointer + omitempty so paths that
 	// don't load labels (e.g. UpdateIssue, batch UpdateIssues, the issue:updated
@@ -76,6 +80,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		DueDate:       timestampToPtr(i.DueDate),
 		CreatedAt:     timestampToString(i.CreatedAt),
 		UpdatedAt:     timestampToString(i.UpdatedAt),
+		Metadata:      parseIssueMetadata(i.Metadata),
 	}
 }
 
@@ -101,6 +106,7 @@ func issueListRowToResponse(i db.ListIssuesRow, issuePrefix string) IssueRespons
 		DueDate:       timestampToPtr(i.DueDate),
 		CreatedAt:     timestampToString(i.CreatedAt),
 		UpdatedAt:     timestampToString(i.UpdatedAt),
+		Metadata:      parseIssueMetadata(i.Metadata),
 	}
 }
 
@@ -156,6 +162,7 @@ func openIssueRowToResponse(i db.ListOpenIssuesRow, issuePrefix string) IssueRes
 		DueDate:       timestampToPtr(i.DueDate),
 		CreatedAt:     timestampToString(i.CreatedAt),
 		UpdatedAt:     timestampToString(i.UpdatedAt),
+		Metadata:      parseIssueMetadata(i.Metadata),
 	}
 }
 
@@ -653,15 +660,36 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		projectFilter = id
 	}
 
+	metadataFilter, ok := parseMetadataFilterParam(w, r.URL.Query().Get("metadata"))
+	if !ok {
+		return
+	}
+
+	var involvesUserFilter pgtype.UUID
+	if iu := r.URL.Query().Get("involves_user_id"); iu != "" {
+		id, ok := parseUUIDOrBadRequest(w, iu, "involves_user_id")
+		if !ok {
+			return
+		}
+		involvesUserFilter = id
+	}
+
+	var scheduledFilter pgtype.Bool
+	if s := r.URL.Query().Get("scheduled"); s == "true" {
+		scheduledFilter = pgtype.Bool{Bool: true, Valid: true}
+	}
+
 	// open_only=true returns all non-done/cancelled issues (no limit).
 	if r.URL.Query().Get("open_only") == "true" {
 		issues, err := h.Queries.ListOpenIssues(ctx, db.ListOpenIssuesParams{
-			WorkspaceID: wsUUID,
-			Priority:    priorityFilter,
-			AssigneeID:  assigneeFilter,
-			AssigneeIds: assigneeIdsFilter,
-			CreatorID:   creatorFilter,
-			ProjectID:   projectFilter,
+			WorkspaceID:    wsUUID,
+			Priority:       priorityFilter,
+			AssigneeID:     assigneeFilter,
+			AssigneeIds:    assigneeIdsFilter,
+			CreatorID:      creatorFilter,
+			ProjectID:      projectFilter,
+			InvolvesUserID: involvesUserFilter,
+			MetadataFilter: metadataFilter,
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list issues")
@@ -710,15 +738,18 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	issues, err := h.Queries.ListIssues(ctx, db.ListIssuesParams{
-		WorkspaceID: wsUUID,
-		Limit:       int32(limit),
-		Offset:      int32(offset),
-		Status:      statusFilter,
-		Priority:    priorityFilter,
-		AssigneeID:  assigneeFilter,
-		AssigneeIds: assigneeIdsFilter,
-		CreatorID:   creatorFilter,
-		ProjectID:   projectFilter,
+		WorkspaceID:    wsUUID,
+		Limit:          int32(limit),
+		Offset:         int32(offset),
+		Status:         statusFilter,
+		Priority:       priorityFilter,
+		AssigneeID:     assigneeFilter,
+		AssigneeIds:    assigneeIdsFilter,
+		CreatorID:      creatorFilter,
+		ProjectID:      projectFilter,
+		InvolvesUserID: involvesUserFilter,
+		Scheduled:      scheduledFilter,
+		MetadataFilter: metadataFilter,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list issues")
@@ -727,13 +758,16 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 
 	// Get the true total count for pagination awareness.
 	total, err := h.Queries.CountIssues(ctx, db.CountIssuesParams{
-		WorkspaceID: wsUUID,
-		Status:      statusFilter,
-		Priority:    priorityFilter,
-		AssigneeID:  assigneeFilter,
-		AssigneeIds: assigneeIdsFilter,
-		CreatorID:   creatorFilter,
-		ProjectID:   projectFilter,
+		WorkspaceID:    wsUUID,
+		Status:         statusFilter,
+		Priority:       priorityFilter,
+		AssigneeID:     assigneeFilter,
+		AssigneeIds:    assigneeIdsFilter,
+		CreatorID:      creatorFilter,
+		ProjectID:      projectFilter,
+		InvolvesUserID: involvesUserFilter,
+		Scheduled:      scheduledFilter,
+		MetadataFilter: metadataFilter,
 	})
 	if err != nil {
 		total = int64(len(issues))
@@ -760,6 +794,70 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		"total":  total,
 	})
 }
+
+type issueActorFilter struct {
+	actorType string
+	actorID   pgtype.UUID
+}
+
+func splitCommaParam(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func isIssueActorType(s string) bool {
+	return s == "member" || s == "agent" || s == "squad"
+}
+
+func parseUUIDParamList(w http.ResponseWriter, raw, fieldName string) ([]pgtype.UUID, bool) {
+	parts := splitCommaParam(raw)
+	if len(parts) == 0 {
+		return nil, true
+	}
+	ids := make([]pgtype.UUID, 0, len(parts))
+	for _, part := range parts {
+		id, ok := parseUUIDOrBadRequest(w, part, fieldName)
+		if !ok {
+			return nil, false
+		}
+		ids = append(ids, id)
+	}
+	return ids, true
+}
+
+func parseActorFilterList(w http.ResponseWriter, raw, fieldName string) ([]issueActorFilter, bool) {
+	parts := splitCommaParam(raw)
+	if len(parts) == 0 {
+		return nil, true
+	}
+	filters := make([]issueActorFilter, 0, len(parts))
+	for _, part := range parts {
+		pieces := strings.SplitN(part, ":", 2)
+		if len(pieces) != 2 || !isIssueActorType(pieces[0]) || strings.TrimSpace(pieces[1]) == "" {
+			writeError(w, http.StatusBadRequest, "invalid "+fieldName)
+			return nil, false
+		}
+		id, ok := parseUUIDOrBadRequest(w, strings.TrimSpace(pieces[1]), fieldName)
+		if !ok {
+			return nil, false
+		}
+		filters = append(filters, issueActorFilter{
+			actorType: pieces[0],
+			actorID:   id,
+		})
+	}
+	return filters, true
+}
+
 
 func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

@@ -334,7 +334,14 @@ multica issue list --full-id
 multica issue list --limit 20 --output json
 ```
 
-Table output shows a routable issue `KEY` such as `MUL-123`; copy that key into follow-up commands like `issue get`, `issue comment list`, `issue status`, or `--parent`. Add `--full-id` when you need canonical UUIDs. Available filters: `--status`, `--priority`, `--assignee` / `--assignee-id`, `--project`, `--limit`. Use `--assignee-id <uuid>` for unambiguous filtering when names overlap.
+Table output shows a routable issue `KEY` such as `MUL-123`; copy that key into follow-up commands like `issue get`, `issue comment list`, `issue status`, or `--parent`. Add `--full-id` when you need canonical UUIDs. Available filters: `--status`, `--priority`, `--assignee` / `--assignee-id`, `--project`, `--metadata`, `--limit`. Use `--assignee-id <uuid>` for unambiguous filtering when names overlap.
+
+Use `--metadata key=value` (repeatable; combined with AND) to filter by per-issue metadata. The value is JSON-parsed: `true`/`false` become bool, numbers become numbers, anything else is a string. Wrap as `'"42"'` to force a string when the value would otherwise sniff as a number:
+
+```bash
+multica issue list --metadata pipeline_status=waiting_review
+multica issue list --metadata pr_number=482 --metadata is_blocked=true
+```
 
 ### Get Issue
 
@@ -391,6 +398,56 @@ multica issue comment add <issue-id> --parent <comment-id> --content "Thanks!"
 # Delete a comment
 multica issue comment delete <comment-id>
 ```
+
+**`--before` / `--before-id` semantics depend on the paging mode**, by
+design — same flag, different scope:
+
+| Mode | What the cursor walks | stderr label |
+| --- | --- | --- |
+| `--recent N` | Older *threads* (last_activity_at, root_id) | `Next thread cursor` |
+| `--thread <id> --tail N` | Older *replies* inside that thread (created_at, id) | `Next reply cursor` |
+
+Outside those two modes (`--thread` without `--tail`, or no `--thread`
+and no `--recent`) the cursor flags are rejected so they cannot silently
+no-op. The server emits the cursor headers (`X-Multica-Next-Before` /
+`X-Multica-Next-Before-Id`) only when an older page actually exists —
+exact-boundary pages (e.g. `--tail 3` on a thread with exactly 3
+replies) intentionally return no cursor so callers stop paginating.
+
+When `--since` is combined with `--recent` or `--thread --tail`, the
+server additionally suppresses the cursor once the cursor target itself
+is older than `since`. Older pages walk strictly older rows, so they
+cannot satisfy `> since` either — emitting a cursor there would just
+hand back root-only pages until the caller reaches the start of the
+thread / issue. Incremental polling stops at the first page whose
+cursor target falls before the watermark.
+
+### Metadata
+
+Per-issue metadata is a small KV map agents use to track pipeline state (PR number, pipeline status, waiting_on, ...). Keys match `^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$`, values are primitives (string / number / bool), max 50 keys per issue, blob capped at 8KB.
+
+Don't pin runtime bookkeeping like `attempts`, large logs, secrets/tokens, or description/comment copies — see the agent runtime prompt for the full anti-pattern list.
+
+```bash
+# List every key on an issue
+multica issue metadata list <issue-id>
+
+# Read a single key
+multica issue metadata get <issue-id> --key pipeline_status
+
+# Write a single key — value auto-typed (true/false → bool, numbers → number, else string)
+multica issue metadata set <issue-id> --key pipeline_status --value waiting_review
+multica issue metadata set <issue-id> --key pr_number --value 482
+multica issue metadata set <issue-id> --key is_blocked --value true
+
+# Force a specific type when sniffing would pick the wrong one
+multica issue metadata set <issue-id> --key code --value 42 --type string
+
+# Remove a key
+multica issue metadata delete <issue-id> --key pipeline_status
+```
+
+All writes are single-key atomic — concurrent agents writing different keys do not lose each other's updates. To query, use `multica issue list --metadata key=value` (see *List Issues* above).
 
 ### Subscribers
 

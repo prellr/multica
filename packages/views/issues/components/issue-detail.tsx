@@ -419,6 +419,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [parentIssueOpen, setParentIssueOpen] = useState(true);
   const [pullRequestsOpen, setPullRequestsOpen] = useState(true);
+  const [metadataOpen, setMetadataOpen] = useState(true);
   const [tokenUsageOpen, setTokenUsageOpen] = useState(true);
   const githubSettings = useGitHubSettings();
   // Virtuoso's `customScrollParent` wants the HTMLElement, not a ref. A plain
@@ -930,6 +931,33 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${pullRequestsOpen ? "rotate-90" : ""}`} />
           </button>
           {pullRequestsOpen && <div className="pl-2"><PullRequestList issueId={id} /></div>}
+        </div>
+      )}
+
+      {/* Metadata — read-only KV strip. Agents write via the CLI / metadata
+          API; UI editing is intentionally not in V1. Section hides itself
+          when the issue has no keys to keep the sidebar quiet for the
+          common case where metadata is never set. */}
+      {Object.keys(issue.metadata ?? {}).length > 0 && (
+        <div>
+          <button
+            className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors mb-2 hover:bg-accent/70 ${metadataOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
+            onClick={() => setMetadataOpen(!metadataOpen)}
+          >
+            {t(($) => $.detail.section_metadata)}
+            <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${metadataOpen ? "rotate-90" : ""}`} />
+          </button>
+          {metadataOpen && (
+            <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 pl-2">
+              {Object.entries(issue.metadata ?? {}).map(([k, v]) => (
+                <PropRow key={k} label={k} interactive={false}>
+                  <span className="truncate text-muted-foreground">
+                    {typeof v === "boolean" ? (v ? "true" : "false") : String(v)}
+                  </span>
+                </PropRow>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

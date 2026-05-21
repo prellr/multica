@@ -298,6 +298,48 @@ func (h *Handler) ClosePullRequest(w http.ResponseWriter, r *http.Request) {
 	h.dispatchAction(w, r, ship.ActionClosePR)
 }
 
+// RefreshPullRequest — POST /api/pull_requests/{id}/refresh
+//
+// PR7 of the Ship Hub rebuild — per-PR live refresh. GitHub returns
+// mergeable: null ("still computing") right after a PR opens; Ship maps
+// that to mergeable = "UNKNOWN" and never re-polls. This endpoint does a
+// live GetPullRequest from GitHub and persists the mutable PR fields
+// (title/state/draft/refs/head_sha/body/mergeable/timestamps) through
+// the targeted UpdatePullRequestStateFromWebhook writer. It does NOT run
+// through the dispatchAction chip pipeline because it isn't a card
+// action — it's a read-and-cache refresh — so it has its own handler.
+//
+// Any workspace member may refresh; refreshing is a non-destructive read
+// (the frontend's useMergeablePoll hook polls this while a PR's
+// mergeable is UNKNOWN). The shared loader still gates on
+// ship_hub_enabled and resolves the GitHub-token-equipped service.
+func (h *Handler) RefreshPullRequest(w http.ResponseWriter, r *http.Request) {
+	svc, pr, wsID, _, ok := h.loadPullRequestForAction(w, r)
+	if !ok {
+		return
+	}
+	wsIDStr := uuidToString(wsID)
+	if _, memberOK := h.requireWorkspaceMember(w, r, wsIDStr, "workspace not found"); !memberOK {
+		return
+	}
+
+	updated, err := svc.RefreshPullRequest(r.Context(), pr.ID)
+	if err != nil {
+		writeError(w, mapActionError(err), "failed to refresh pull request")
+		return
+	}
+
+	// Publish so other clients re-fetch the card the moment mergeable
+	// settles, not just the client that triggered the poll.
+	h.publish(protocol.EventPullRequestStateChanged, wsIDStr, "system", "", map[string]any{
+		"pull_request_id": uuidToString(updated.ID),
+	})
+
+	resp := pullRequestToResponse(updated)
+	h.attachActiveReleaseToPRList(r.Context(), []pullRequestResponse{resp}, []db.PullRequest{updated})
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // SubmitPullRequestReview — POST /api/pull_requests/{id}/review (Phase 6.5).
 // Posts a GitHub PR review (APPROVE / REQUEST_CHANGES / COMMENT) without
 // leaving Multica. Workspace-member auth (same as comment); the destructive

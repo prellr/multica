@@ -78,6 +78,8 @@ export {
   // PR detail drawer — bundled per-PR query.
   pullRequestDetailsOptions,
   usePullRequestDetails,
+  // PR7 — per-PR live refresh (mergeable=UNKNOWN polling).
+  useRefreshPullRequest,
 } from "./queries";
 
 // Phase 7a — multi-select store. Lives next to the queries because

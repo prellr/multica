@@ -126,6 +126,7 @@ import type {
   RollbackDeployRequest,
   ListShipProjectsResponse,
   ListPullRequestsResponse,
+  PullRequest,
   SyncPullRequestsResult,
   ListDeployEnvironmentsResponse,
   ListDeploysResponse,
@@ -251,6 +252,8 @@ import {
   EMPTY_MERGE_STATE_RESPONSE,
   PullRequestDetailsResponseSchema,
   EMPTY_PULL_REQUEST_DETAILS_RESPONSE,
+  RefreshPullRequestResponseSchema,
+  EMPTY_PULL_REQUEST,
   AgentTagListSchema,
   EMPTY_AGENT_TAG_LIST,
   ListMCPServersResponseSchema,
@@ -2926,6 +2929,27 @@ export class ApiClient {
       PullRequestDetailsResponseSchema,
       EMPTY_PULL_REQUEST_DETAILS_RESPONSE as PullRequestDetailsResponse,
       { endpoint: "GET /api/pull_requests/:id/details" },
+    );
+  }
+
+  /** POST /api/pull_requests/{id}/refresh — PR7 per-PR live refresh.
+   *  The backend does a live GetPullRequest from GitHub and persists the
+   *  mutable PR fields, then returns the refreshed PR row. The frontend's
+   *  useMergeablePoll hook calls this while a PR's mergeable is UNKNOWN
+   *  ("computing") so the card resolves without a manual project sync.
+   *  Parsed through RefreshPullRequestResponseSchema per CLAUDE.md
+   *  "API Response Compatibility" — a malformed body downgrades to the
+   *  empty-PR fallback rather than throwing into the polling loop. */
+  async refreshPullRequest(prId: string): Promise<PullRequest> {
+    const raw = await this.fetch<unknown>(
+      `/api/pull_requests/${prId}/refresh`,
+      { method: "POST" },
+    );
+    return parseWithFallback(
+      raw,
+      RefreshPullRequestResponseSchema,
+      EMPTY_PULL_REQUEST as PullRequest,
+      { endpoint: "POST /api/pull_requests/:id/refresh" },
     );
   }
 

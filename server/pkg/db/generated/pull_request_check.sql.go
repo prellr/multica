@@ -12,7 +12,7 @@ import (
 )
 
 const listChecksForPRHead = `-- name: ListChecksForPRHead :many
-SELECT id, workspace_id, pull_request_id, head_sha, name, conclusion, status, details_url, started_at, completed_at, updated_at FROM pull_request_check
+SELECT id, workspace_id, pull_request_id, head_sha, name, conclusion, status, details_url, started_at, completed_at, updated_at, ever_succeeded FROM pull_request_check
 WHERE pull_request_id = $1 AND head_sha = $2
 ORDER BY name ASC
 `
@@ -45,6 +45,7 @@ func (q *Queries) ListChecksForPRHead(ctx context.Context, arg ListChecksForPRHe
 			&i.StartedAt,
 			&i.CompletedAt,
 			&i.UpdatedAt,
+			&i.EverSucceeded,
 		); err != nil {
 			return nil, err
 		}
@@ -57,7 +58,7 @@ func (q *Queries) ListChecksForPRHead(ctx context.Context, arg ListChecksForPRHe
 }
 
 const listChecksForPullRequest = `-- name: ListChecksForPullRequest :many
-SELECT id, workspace_id, pull_request_id, head_sha, name, conclusion, status, details_url, started_at, completed_at, updated_at FROM pull_request_check
+SELECT id, workspace_id, pull_request_id, head_sha, name, conclusion, status, details_url, started_at, completed_at, updated_at, ever_succeeded FROM pull_request_check
 WHERE pull_request_id = $1
 ORDER BY started_at DESC NULLS LAST, name ASC
 `
@@ -88,6 +89,7 @@ func (q *Queries) ListChecksForPullRequest(ctx context.Context, pullRequestID pg
 			&i.StartedAt,
 			&i.CompletedAt,
 			&i.UpdatedAt,
+			&i.EverSucceeded,
 		); err != nil {
 			return nil, err
 		}
@@ -315,18 +317,19 @@ func (q *Queries) UpdatePullRequestStateFromWebhook(ctx context.Context, arg Upd
 const upsertPullRequestCheck = `-- name: UpsertPullRequestCheck :one
 INSERT INTO pull_request_check (
     workspace_id, pull_request_id, head_sha, name, conclusion, status,
-    details_url, started_at, completed_at
+    details_url, started_at, completed_at, ever_succeeded
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, ($5 = 'success')
 )
 ON CONFLICT (pull_request_id, head_sha, name) DO UPDATE SET
-    conclusion   = EXCLUDED.conclusion,
-    status       = EXCLUDED.status,
-    details_url  = EXCLUDED.details_url,
-    started_at   = EXCLUDED.started_at,
-    completed_at = EXCLUDED.completed_at,
-    updated_at   = now()
-RETURNING id, workspace_id, pull_request_id, head_sha, name, conclusion, status, details_url, started_at, completed_at, updated_at
+    conclusion     = EXCLUDED.conclusion,
+    status         = EXCLUDED.status,
+    details_url    = EXCLUDED.details_url,
+    started_at     = EXCLUDED.started_at,
+    completed_at   = EXCLUDED.completed_at,
+    ever_succeeded = pull_request_check.ever_succeeded OR (EXCLUDED.conclusion = 'success'),
+    updated_at     = now()
+RETURNING id, workspace_id, pull_request_id, head_sha, name, conclusion, status, details_url, started_at, completed_at, updated_at, ever_succeeded
 `
 
 type UpsertPullRequestCheckParams struct {
@@ -344,6 +347,12 @@ type UpsertPullRequestCheckParams struct {
 // Each (pr, head_sha, check name) folds to one row — the latest payload
 // wins. We bump updated_at so a debug query "what did GitHub say last"
 // has a sortable column.
+//
+// ever_succeeded is sticky: it is true whenever the INCOMING conclusion
+// is 'success', and on conflict it stays true once true. This lets the
+// best-ever CI rollup (recomputeCIStatus) treat a check that passed once
+// as passing even if a later flaky rerun mutated its conclusion back to
+// a failure variant — PR7 of the Ship Hub rebuild.
 func (q *Queries) UpsertPullRequestCheck(ctx context.Context, arg UpsertPullRequestCheckParams) (PullRequestCheck, error) {
 	row := q.db.QueryRow(ctx, upsertPullRequestCheck,
 		arg.WorkspaceID,
@@ -369,6 +378,7 @@ func (q *Queries) UpsertPullRequestCheck(ctx context.Context, arg UpsertPullRequ
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.UpdatedAt,
+		&i.EverSucceeded,
 	)
 	return i, err
 }

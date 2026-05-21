@@ -28,6 +28,7 @@ import { useCurrentWorkspace } from "@multica/core/paths";
 import { useT } from "../../i18n";
 import { AppLink } from "../../navigation";
 import { deriveRiskHint } from "../hooks/use-pr-state";
+import { useMergeablePoll } from "../hooks/use-mergeable-poll";
 import { PrChipRow } from "./pr-chip-row";
 
 interface ShipPRCardProps {
@@ -229,6 +230,11 @@ export function ShipPRCard({
 }: ShipPRCardProps) {
   const { t, i18n } = useT("ship");
   const risk = deriveRiskHint(pr);
+  // PR7 — while GitHub is still computing this PR's mergeability
+  // (mergeable === "UNKNOWN"), poll the per-PR refresh endpoint so the
+  // card resolves on its own instead of showing "computing" until a
+  // manual sync. The hook no-ops once mergeable settles.
+  useMergeablePoll(pr.id, pr.mergeable);
   // Phase 7a — multi-select. The checkbox is hidden by default and
   // revealed on hover (see CSS) OR when at least one PR is already
   // selected (so the user can see what's selected at a glance).

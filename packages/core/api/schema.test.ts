@@ -219,6 +219,49 @@ describe("ApiClient schema fallback", () => {
       expect(resp.reused_skill_ids).toEqual([]);
     });
   });
+
+  // PR7 — POST /api/pull_requests/{id}/refresh. The polling hook calls
+  // this on a 10s interval; a malformed body must NOT throw into the
+  // loop. parseWithFallback degrades to the empty-PR fallback instead.
+  describe("refreshPullRequest", () => {
+    it("returns the refreshed PR on a well-formed response", async () => {
+      stubFetchJson({
+        id: "pr-1",
+        workspace_id: "ws-1",
+        number: 42,
+        mergeable: "MERGEABLE",
+      });
+      const client = new ApiClient("https://api.example.test");
+      const pr = await client.refreshPullRequest("pr-1");
+      expect(pr.id).toBe("pr-1");
+      expect(pr.mergeable).toBe("MERGEABLE");
+    });
+
+    it("falls back to an empty PR when the body is null", async () => {
+      stubFetchJson(null);
+      const client = new ApiClient("https://api.example.test");
+      const pr = await client.refreshPullRequest("pr-1");
+      // Empty-PR fallback — id is "" and mergeable degrades to "".
+      expect(pr.id).toBe("");
+      expect(pr.mergeable).toBe("");
+    });
+
+    it("falls back when a required field has the wrong type", async () => {
+      // `id` must be a string; a number is the classic drift case.
+      stubFetchJson({ id: 12345, workspace_id: "ws-1" });
+      const client = new ApiClient("https://api.example.test");
+      const pr = await client.refreshPullRequest("pr-1");
+      expect(pr.id).toBe("");
+    });
+
+    it("defaults a missing mergeable field rather than crashing", async () => {
+      stubFetchJson({ id: "pr-1", workspace_id: "ws-1", number: 7 });
+      const client = new ApiClient("https://api.example.test");
+      const pr = await client.refreshPullRequest("pr-1");
+      expect(pr.id).toBe("pr-1");
+      expect(pr.mergeable).toBe("");
+    });
+  });
 });
 
 // Direct tests for the helper, decoupled from any specific endpoint —

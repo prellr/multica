@@ -463,7 +463,7 @@ func (s *Service) processCheckRun(ctx context.Context, ev WebhookEvent) (Webhook
 		}); err != nil {
 			return WebhookOutcome{}, fmt.Errorf("upsert check: %w", err)
 		}
-		ciStatus, err := s.recomputeCIStatus(ctx, prRow.ID, prRow.HeadSha)
+		ciStatus, err := s.recomputeCIStatus(ctx, prRow.ID, prRow.HeadSha, true)
 		if err != nil {
 			return WebhookOutcome{}, err
 		}
@@ -534,7 +534,7 @@ func (s *Service) processStatus(ctx context.Context, ev WebhookEvent) (WebhookOu
 		}); err != nil {
 			return WebhookOutcome{}, fmt.Errorf("upsert status check: %w", err)
 		}
-		ciStatus, err := s.recomputeCIStatus(ctx, pr.ID, payload.SHA)
+		ciStatus, err := s.recomputeCIStatus(ctx, pr.ID, payload.SHA, true)
 		if err != nil {
 			return WebhookOutcome{}, err
 		}
@@ -576,7 +576,16 @@ func mapStatusToConclusion(state string) string {
 // recomputeCIStatus folds every check on the PR's current head_sha.
 // failure dominates; otherwise all-success is success; otherwise
 // pending. Matches GitHub's own "checks summary" UI.
-func (s *Service) recomputeCIStatus(ctx context.Context, prID pgtype.UUID, headSha string) (string, error) {
+//
+// bestEver fixes the flaky-CI case (PR7 of the Ship Hub rebuild). A
+// check that ran, passed, and then had a late-arriving rerun row mutate
+// its `conclusion` back to a failure variant would otherwise dominate
+// the rollup as a failure even though CI did pass. When bestEver is
+// true, a check whose current conclusion is a failure variant but whose
+// `ever_succeeded` flag is set counts as a success (the retry-passed
+// case) rather than failing the whole PR. A check that has never
+// succeeded still fails the rollup.
+func (s *Service) recomputeCIStatus(ctx context.Context, prID pgtype.UUID, headSha string, bestEver bool) (string, error) {
 	rows, err := s.Q.ListChecksForPRHead(ctx, db.ListChecksForPRHeadParams{
 		PullRequestID: prID,
 		HeadSha:       headSha,
@@ -592,6 +601,12 @@ func (s *Service) recomputeCIStatus(ctx context.Context, prID pgtype.UUID, headS
 		concl := strings.ToLower(textValue(r.Conclusion))
 		switch concl {
 		case "failure", "cancelled", "timed_out":
+			// Best-ever: a check that has succeeded at least once on
+			// this head_sha is a retry-passed check — treat it as
+			// success rather than letting a flaky rerun dominate.
+			if bestEver && r.EverSucceeded {
+				continue
+			}
 			return "failure", nil
 		case "success", "neutral", "skipped":
 			// ok

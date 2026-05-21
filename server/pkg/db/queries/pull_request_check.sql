@@ -2,19 +2,26 @@
 -- Each (pr, head_sha, check name) folds to one row — the latest payload
 -- wins. We bump updated_at so a debug query "what did GitHub say last"
 -- has a sortable column.
+--
+-- ever_succeeded is sticky: it is true whenever the INCOMING conclusion
+-- is 'success', and on conflict it stays true once true. This lets the
+-- best-ever CI rollup (recomputeCIStatus) treat a check that passed once
+-- as passing even if a later flaky rerun mutated its conclusion back to
+-- a failure variant — PR7 of the Ship Hub rebuild.
 INSERT INTO pull_request_check (
     workspace_id, pull_request_id, head_sha, name, conclusion, status,
-    details_url, started_at, completed_at
+    details_url, started_at, completed_at, ever_succeeded
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, ($5 = 'success')
 )
 ON CONFLICT (pull_request_id, head_sha, name) DO UPDATE SET
-    conclusion   = EXCLUDED.conclusion,
-    status       = EXCLUDED.status,
-    details_url  = EXCLUDED.details_url,
-    started_at   = EXCLUDED.started_at,
-    completed_at = EXCLUDED.completed_at,
-    updated_at   = now()
+    conclusion     = EXCLUDED.conclusion,
+    status         = EXCLUDED.status,
+    details_url    = EXCLUDED.details_url,
+    started_at     = EXCLUDED.started_at,
+    completed_at   = EXCLUDED.completed_at,
+    ever_succeeded = pull_request_check.ever_succeeded OR (EXCLUDED.conclusion = 'success'),
+    updated_at     = now()
 RETURNING *;
 
 -- name: ListChecksForPRHead :many

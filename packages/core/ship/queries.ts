@@ -1080,3 +1080,35 @@ export function usePullRequestDetails(prId: string, enabled = true) {
   const wsId = useWorkspaceId();
   return useQuery(pullRequestDetailsOptions(wsId, prId, enabled && !!prId));
 }
+
+// ---------------------------------------------------------------------------
+// PR7 — per-PR live refresh.
+//
+// POST /api/pull_requests/{id}/refresh does a live GetPullRequest from
+// GitHub and persists the mutable PR fields. GitHub returns
+// mergeable: null right after a PR opens; Ship maps that to
+// mergeable = "UNKNOWN" and the card shows "computing" forever until a
+// manual sync. The useMergeablePoll view hook calls this mutation while a
+// PR's mergeable is UNKNOWN; the mutation patches the refreshed row into
+// every cached pull_requests list so the card updates without waiting
+// for the broad invalidation roundtrip.
+// ---------------------------------------------------------------------------
+
+export function useRefreshPullRequest(prId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: () => api.refreshPullRequest(prId),
+    onSuccess: (pr) => {
+      // The response IS the refreshed PR row — patch it straight into
+      // every cached list slice so mergeable settles immediately.
+      patchPullRequestInCache(qc, wsId, prId, pr);
+    },
+    onSettled: () => {
+      // Belt-and-suspenders: a refresh can flip state (open → merged) so
+      // the per-state slices need a re-fetch too.
+      qc.invalidateQueries({ queryKey: shipKeys.allPullRequests(wsId) });
+      qc.invalidateQueries({ queryKey: shipKeys.pullRequestDetails(wsId, prId) });
+    },
+  });
+}

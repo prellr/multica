@@ -1049,6 +1049,19 @@ export const EMPTY_PULL_REQUEST_DETAILS_RESPONSE = {
   stack_children: [] as never[],
 };
 
+// PR7 — POST /api/pull_requests/{id}/refresh returns the refreshed PR row
+// (the same shape every other Ship PR endpoint serves). Reusing
+// PullRequestSchema keeps the contract single-sourced — per CLAUDE.md
+// "API Response Compatibility", the refresh endpoint must parse, not cast.
+export const RefreshPullRequestResponseSchema = PullRequestSchema;
+
+// Defensive empty PR used by parseWithFallback when the refresh response
+// goes off the rails (missing field / wrong type / null body). Every
+// PullRequestSchema field has a default so a structurally empty object
+// satisfies the parser; this constant just gives the client a concrete
+// fallback object the polling hook can hold without crashing.
+export const EMPTY_PULL_REQUEST = EMPTY_PULL_REQUEST_DETAILS_RESPONSE.pull_request;
+
 // ---------------------------------------------------------------------------
 // Agent template catalog — `/api/agent-templates*` and the
 // create-from-template response. The desktop app's create-agent picker

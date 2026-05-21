@@ -104,7 +104,7 @@ UPDATE pull_request SET
     ci_status  = $2,
     fetched_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, repo_url, pr_number, title, state, is_draft, author_login, author_avatar_url, base_ref, head_ref, head_sha, html_url, body, ci_status, review_decision, mergeable, additions, deletions, changed_files, labels, pr_created_at, pr_updated_at, pr_merged_at, pr_closed_at, fetched_at, originating_issue_id, originating_agent_task_id, auto_close_issue_on_merge, conversation_channel_id, stack_parent_pr_id, source, risk_level, risk_reasons, risk_classified_at
+RETURNING id, workspace_id, project_id, repo_url, pr_number, title, state, is_draft, author_login, author_avatar_url, base_ref, head_ref, head_sha, html_url, body, ci_status, review_decision, mergeable, additions, deletions, changed_files, labels, pr_created_at, pr_updated_at, pr_merged_at, pr_closed_at, fetched_at, originating_issue_id, originating_agent_task_id, auto_close_issue_on_merge, conversation_channel_id, stack_parent_pr_id, source, risk_level, risk_reasons, risk_classified_at, merge_commit_sha
 `
 
 type UpdatePullRequestCIStatusParams struct {
@@ -154,6 +154,7 @@ func (q *Queries) UpdatePullRequestCIStatus(ctx context.Context, arg UpdatePullR
 		&i.RiskLevel,
 		&i.RiskReasons,
 		&i.RiskClassifiedAt,
+		&i.MergeCommitSha,
 	)
 	return i, err
 }
@@ -163,7 +164,7 @@ UPDATE pull_request SET
     review_decision = $2,
     fetched_at      = now()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, repo_url, pr_number, title, state, is_draft, author_login, author_avatar_url, base_ref, head_ref, head_sha, html_url, body, ci_status, review_decision, mergeable, additions, deletions, changed_files, labels, pr_created_at, pr_updated_at, pr_merged_at, pr_closed_at, fetched_at, originating_issue_id, originating_agent_task_id, auto_close_issue_on_merge, conversation_channel_id, stack_parent_pr_id, source, risk_level, risk_reasons, risk_classified_at
+RETURNING id, workspace_id, project_id, repo_url, pr_number, title, state, is_draft, author_login, author_avatar_url, base_ref, head_ref, head_sha, html_url, body, ci_status, review_decision, mergeable, additions, deletions, changed_files, labels, pr_created_at, pr_updated_at, pr_merged_at, pr_closed_at, fetched_at, originating_issue_id, originating_agent_task_id, auto_close_issue_on_merge, conversation_channel_id, stack_parent_pr_id, source, risk_level, risk_reasons, risk_classified_at, merge_commit_sha
 `
 
 type UpdatePullRequestReviewDecisionParams struct {
@@ -211,6 +212,7 @@ func (q *Queries) UpdatePullRequestReviewDecision(ctx context.Context, arg Updat
 		&i.RiskLevel,
 		&i.RiskReasons,
 		&i.RiskClassifiedAt,
+		&i.MergeCommitSha,
 	)
 	return i, err
 }
@@ -230,7 +232,7 @@ UPDATE pull_request SET
     pr_closed_at  = $12,
     fetched_at    = now()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, repo_url, pr_number, title, state, is_draft, author_login, author_avatar_url, base_ref, head_ref, head_sha, html_url, body, ci_status, review_decision, mergeable, additions, deletions, changed_files, labels, pr_created_at, pr_updated_at, pr_merged_at, pr_closed_at, fetched_at, originating_issue_id, originating_agent_task_id, auto_close_issue_on_merge, conversation_channel_id, stack_parent_pr_id, source, risk_level, risk_reasons, risk_classified_at
+RETURNING id, workspace_id, project_id, repo_url, pr_number, title, state, is_draft, author_login, author_avatar_url, base_ref, head_ref, head_sha, html_url, body, ci_status, review_decision, mergeable, additions, deletions, changed_files, labels, pr_created_at, pr_updated_at, pr_merged_at, pr_closed_at, fetched_at, originating_issue_id, originating_agent_task_id, auto_close_issue_on_merge, conversation_channel_id, stack_parent_pr_id, source, risk_level, risk_reasons, risk_classified_at, merge_commit_sha
 `
 
 type UpdatePullRequestStateFromWebhookParams struct {
@@ -305,6 +307,7 @@ func (q *Queries) UpdatePullRequestStateFromWebhook(ctx context.Context, arg Upd
 		&i.RiskLevel,
 		&i.RiskReasons,
 		&i.RiskClassifiedAt,
+		&i.MergeCommitSha,
 	)
 	return i, err
 }

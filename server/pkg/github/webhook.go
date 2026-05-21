@@ -195,8 +195,19 @@ type DeploymentStatus struct {
 type PushEvent struct {
 	Ref        string     `json:"ref"` // e.g. "refs/heads/main"
 	Before     string     `json:"before"`
-	After      string     `json:"after"`
+	After      string     `json:"after"` // new branch-tip SHA — the merge commit for a merge to main
 	Repository Repository `json:"repository"`
+	// HeadCommit is the commit at the new branch tip. Its Message is the
+	// merge-commit subject Ship Hub uses to title a synthesized
+	// direct-merge release. Null on a branch delete.
+	HeadCommit *PushCommit `json:"head_commit"`
+}
+
+// PushCommit is the slice of GitHub's commit object the push handler
+// needs — the SHA (mirrors PushEvent.After) and the commit message.
+type PushCommit struct {
+	ID      string `json:"id"`
+	Message string `json:"message"`
 }
 
 // Repository is the slice of GitHub's repo object we extract URLs from.

@@ -852,7 +852,166 @@ func (s *Service) processPush(ctx context.Context, ev WebhookEvent) (WebhookOutc
 			"project_id", uuidString(project.ID),
 			"error", err)
 	}
+	// PR6 — synthesize a release record for direct merges to the default
+	// branch so release history stays complete. Runs AFTER SyncProject so
+	// the pushed merge commit's PR row already carries merge_commit_sha.
+	// Best-effort: a synthesis failure must never fail the webhook.
+	s.synthesizeDirectMergeRelease(ctx, ev.WorkspaceID, project, payload)
 	return WebhookOutcome{Kind: "noop"}, nil
+}
+
+// directMergeReleaseTitleCap bounds the synthesized release title so a
+// pathological multi-line commit message can't blow up the rail UI.
+const directMergeReleaseTitleCap = 120
+
+// isZeroSHA reports whether a git SHA is empty or the all-zeros sentinel
+// GitHub sends for a branch delete. Either case means "no commit to
+// synthesize a release from".
+func isZeroSHA(sha string) bool {
+	sha = strings.TrimSpace(sha)
+	if sha == "" {
+		return true
+	}
+	for _, c := range sha {
+		if c != '0' {
+			return false
+		}
+	}
+	return true
+}
+
+// synthesizeDirectMergeRelease creates a "direct merge" ship_release for
+// a PR merged straight to the default branch without going through Ship
+// Hub's merge train. Without this, direct merges — which still trigger
+// production CD — never appear in Ship's release history (audit Bug 4).
+//
+// The whole method is best-effort: every failure path logs a warning and
+// returns. processPush already returns a noop outcome regardless.
+//
+// Flow:
+//  1. Skip branch deletes (After empty / all-zeros).
+//  2. Anti-join pull_request against ship_release_pull_request to find
+//     merged PRs whose merge_commit_sha == After and that no release
+//     tracks. Most pushes are merge-train merges (already tracked) or
+//     non-PR commits — both yield zero rows and we return cleanly.
+//  3. Create the release, attach each orphan PR, stamp merged_main_sha
+//     so deploy webhooks can link production deploys back to it, and
+//     record a synthesis event on the release timeline.
+func (s *Service) synthesizeDirectMergeRelease(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+	project db.Project,
+	payload gh.PushEvent,
+) {
+	if isZeroSHA(payload.After) {
+		return
+	}
+	orphans, err := s.Q.FindOrphanMergedPRsByMergeCommitSHA(ctx, db.FindOrphanMergedPRsByMergeCommitSHAParams{
+		ProjectID:      project.ID,
+		MergeCommitSha: payload.After,
+	})
+	if err != nil {
+		slog.Warn("ship webhook: direct-merge orphan lookup failed",
+			"project_id", uuidString(project.ID),
+			"merge_commit_sha", payload.After,
+			"error", err)
+		return
+	}
+	if len(orphans) == 0 {
+		// Expected for the common case: merge-train merges are already
+		// tracked, and pushes with no associated PR have nothing to
+		// synthesize. Nothing to do.
+		return
+	}
+
+	title := directMergeReleaseTitle(payload)
+	risk := highestRisk(orphans)
+
+	release, err := s.Q.CreateRelease(ctx, db.CreateReleaseParams{
+		WorkspaceID: workspaceID,
+		ProjectID:   project.ID,
+		Title:       title,
+		RiskLevel:   risk,
+		Description: pgtype.Text{
+			String: "Auto-synthesized by Ship Hub for a direct merge to the default branch.",
+			Valid:  true,
+		},
+		// created_by NULL — this release has no human author; it was
+		// synthesized by the webhook path.
+	})
+	if err != nil {
+		slog.Warn("ship webhook: direct-merge release create failed",
+			"project_id", uuidString(project.ID),
+			"merge_commit_sha", payload.After,
+			"error", err)
+		return
+	}
+
+	prIDs := make([]string, 0, len(orphans))
+	for i, pr := range orphans {
+		if _, err := s.Q.AddPullRequestToRelease(ctx, db.AddPullRequestToReleaseParams{
+			ReleaseID:     release.ID,
+			PullRequestID: pr.ID,
+			Position:      int32(i),
+		}); err != nil {
+			slog.Warn("ship webhook: direct-merge attach PR failed",
+				"release_id", uuidString(release.ID),
+				"pr_id", uuidString(pr.ID),
+				"error", err)
+			continue
+		}
+		prIDs = append(prIDs, uuidString(pr.ID))
+	}
+
+	// Stamp merged_main_sha so the deployment webhook handlers can match
+	// a production deploy's sha back to this release.
+	if _, err := s.Q.SetReleaseMergedMainSHA(ctx, db.SetReleaseMergedMainSHAParams{
+		ID:            release.ID,
+		MergedMainSha: pgtype.Text{String: payload.After, Valid: true},
+	}); err != nil {
+		slog.Warn("ship webhook: direct-merge set merged_main_sha failed",
+			"release_id", uuidString(release.ID),
+			"error", err)
+	}
+
+	if _, err := s.insertReleaseEvent(ctx, release.ID, "synthesized_direct_merge", pgtype.UUID{}, map[string]any{
+		"merge_commit_sha": payload.After,
+		"pull_request_ids": prIDs,
+		"source":           "push_webhook",
+	}); err != nil {
+		slog.Warn("ship webhook: direct-merge release event insert failed",
+			"release_id", uuidString(release.ID),
+			"error", err)
+	}
+
+	slog.Info("ship webhook: synthesized direct-merge release",
+		"release_id", uuidString(release.ID),
+		"project_id", uuidString(project.ID),
+		"merge_commit_sha", payload.After,
+		"pr_count", len(prIDs))
+}
+
+// directMergeReleaseTitle builds a release title from the pushed merge
+// commit's subject (first line of the commit message), prefixed and
+// capped. Falls back to a generic title when the head commit or its
+// message is missing.
+func directMergeReleaseTitle(payload gh.PushEvent) string {
+	subject := ""
+	if payload.HeadCommit != nil {
+		subject = payload.HeadCommit.Message
+	}
+	if idx := strings.IndexByte(subject, '\n'); idx >= 0 {
+		subject = subject[:idx]
+	}
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return "Direct merge to main"
+	}
+	title := "Direct merge: " + subject
+	if len(title) > directMergeReleaseTitleCap {
+		title = strings.TrimSpace(title[:directMergeReleaseTitleCap-1]) + "…"
+	}
+	return title
 }
 
 // resolveProject looks up a project in the workspace by its github_repo

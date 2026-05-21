@@ -302,6 +302,7 @@ func (s *Service) upsertPR(
 		PrUpdatedAt:     pgTime(pr.UpdatedAt),
 		PrMergedAt:      pgTimePtr(pr.MergedAt),
 		PrClosedAt:      pgTimePtr(pr.ClosedAt),
+		MergeCommitSha:  pr.MergeCommitSHA,
 	}
 	_, err = s.Q.UpsertPullRequest(ctx, params)
 	return err

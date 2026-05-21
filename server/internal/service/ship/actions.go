@@ -691,13 +691,12 @@ func translateReviewSubmitError(err error, event gh.ReviewEvent) string {
 	}
 	msg := err.Error()
 	low := strings.ToLower(msg)
-	if strings.Contains(low, "your own pull request") ||
-		strings.Contains(low, "your own pr") {
+	if isOwnPullRequestReviewError(err) {
 		switch event {
 		case gh.ReviewEventApprove:
-			return "GitHub doesn't let you approve your own pull request. Ask a teammate to review."
+			return "GitHub rejected this approval because the reviewer is also the PR author."
 		case gh.ReviewEventRequestChanges:
-			return "GitHub doesn't let you request changes on your own pull request. Ask a teammate to review, or use Comment only to leave notes."
+			return "GitHub rejected this change request because the reviewer is also the PR author. Use Comment only to leave notes."
 		default:
 			return "GitHub rejected this review on your own pull request."
 		}
@@ -707,6 +706,23 @@ func translateReviewSubmitError(err error, event gh.ReviewEvent) string {
 	}
 	// Fall back to the raw error — better some signal than none.
 	return msg
+}
+
+func isOwnPullRequestReviewError(err error) bool {
+	if err == nil {
+		return false
+	}
+	low := strings.ToLower(err.Error())
+	return strings.Contains(low, "your own pull request") ||
+		strings.Contains(low, "your own pr")
+}
+
+func selfApprovalFallbackComment(body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return "Approved in Multica."
+	}
+	return "Approved in Multica.\n\n" + body
 }
 
 // actionSubmitReview posts a PR review to GitHub then (best-effort) drops a
@@ -749,6 +765,27 @@ func (s *Service) actionSubmitReview(
 
 	rev, err := s.Github.SubmitReview(ctx, owner, repo, int(pr.PrNumber), event, body)
 	if err != nil {
+		if event == gh.ReviewEventApprove && isOwnPullRequestReviewError(err) {
+			commentBody := selfApprovalFallbackComment(body)
+			cm, commentErr := s.Github.CreatePullRequestComment(ctx, owner, repo, int(pr.PrNumber), commentBody)
+			if commentErr != nil {
+				s.finishAction(ctx, row.ID, StatusFailed, map[string]any{
+					"error":          commentErr.Error(),
+					"original_error": err.Error(),
+				})
+				result.Error = commentErr.Error()
+				return result, commentErr
+			}
+			result.Status = StatusSucceeded
+			result.Comment = cm
+			s.finishAction(ctx, row.ID, StatusSucceeded, map[string]any{
+				"strategy":       "self-approval-comment-fallback",
+				"comment_id":     cm.ID,
+				"comment_url":    cm.HTMLURL,
+				"original_error": err.Error(),
+			})
+			return result, nil
+		}
 		// Translate the most-hit GitHub 422 into a clean human message.
 		// "Cannot request changes / approve on your own pull request" is
 		// GitHub's default response when the reviewer is the author —

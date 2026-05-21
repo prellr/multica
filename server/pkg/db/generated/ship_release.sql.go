@@ -990,6 +990,87 @@ func (q *Queries) ListActiveReleasesForPullRequests(ctx context.Context, dollar_
 	return items, nil
 }
 
+const listDoneIssueReleasesWithMergedPRs = `-- name: ListDoneIssueReleasesWithMergedPRs :many
+SELECT r.id, r.workspace_id, r.project_id, r.title, r.description, r.stage, r.risk_level, r.channel_id, r.issue_id, r.approver_id, r.second_approver_id, r.staging_deploy_id, r.production_deploy_id, r.created_by, r.created_at, r.updated_at, r.merged_at, r.staged_at, r.promoted_at, r.done_at, r.rollback_reason, r.merge_paused, r.merge_method, r.smoke_run_id, r.smoke_run_url, r.smoke_status, r.smoke_completed_at, r.qa_verified_at, r.qa_verified_by, r.merged_main_sha, r.promoted_by, r.production_main_sha, r.rolled_back_by, r.rolled_back_completed_at
+FROM ship_release r
+JOIN issue i ON i.id = r.issue_id
+WHERE r.stage NOT IN ('done', 'rolled_back', 'cancelled')
+  AND i.status = 'done'
+  AND EXISTS (
+      SELECT 1
+      FROM ship_release_pull_request rpr
+      WHERE rpr.release_id = r.id
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM ship_release_pull_request rpr
+      JOIN pull_request pr ON pr.id = rpr.pull_request_id
+      WHERE rpr.release_id = r.id
+        AND pr.state <> 'merged'
+        AND rpr.merge_state <> 'merged'
+  )
+ORDER BY r.updated_at ASC
+`
+
+// Reconciliation sweep for releases whose Multica tracking issue was
+// already marked done while the Ship release.stage stayed active. This
+// catches old channel/CLI/manual issue-status paths that bypassed the
+// release-stage transition.
+func (q *Queries) ListDoneIssueReleasesWithMergedPRs(ctx context.Context) ([]ShipRelease, error) {
+	rows, err := q.db.Query(ctx, listDoneIssueReleasesWithMergedPRs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ShipRelease{}
+	for rows.Next() {
+		var i ShipRelease
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ProjectID,
+			&i.Title,
+			&i.Description,
+			&i.Stage,
+			&i.RiskLevel,
+			&i.ChannelID,
+			&i.IssueID,
+			&i.ApproverID,
+			&i.SecondApproverID,
+			&i.StagingDeployID,
+			&i.ProductionDeployID,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.MergedAt,
+			&i.StagedAt,
+			&i.PromotedAt,
+			&i.DoneAt,
+			&i.RollbackReason,
+			&i.MergePaused,
+			&i.MergeMethod,
+			&i.SmokeRunID,
+			&i.SmokeRunUrl,
+			&i.SmokeStatus,
+			&i.SmokeCompletedAt,
+			&i.QaVerifiedAt,
+			&i.QaVerifiedBy,
+			&i.MergedMainSha,
+			&i.PromotedBy,
+			&i.ProductionMainSha,
+			&i.RolledBackBy,
+			&i.RolledBackCompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInProductionReleases = `-- name: ListInProductionReleases :many
 SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
 WHERE stage = 'in_production'

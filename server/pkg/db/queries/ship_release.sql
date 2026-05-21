@@ -567,6 +567,31 @@ SELECT * FROM ship_release
 WHERE stage = 'in_production'
 ORDER BY promoted_at DESC NULLS LAST;
 
+-- name: ListDoneIssueReleasesWithMergedPRs :many
+-- Reconciliation sweep for releases whose Multica tracking issue was
+-- already marked done while the Ship release.stage stayed active. This
+-- catches old channel/CLI/manual issue-status paths that bypassed the
+-- release-stage transition.
+SELECT r.*
+FROM ship_release r
+JOIN issue i ON i.id = r.issue_id
+WHERE r.stage NOT IN ('done', 'rolled_back', 'cancelled')
+  AND i.status = 'done'
+  AND EXISTS (
+      SELECT 1
+      FROM ship_release_pull_request rpr
+      WHERE rpr.release_id = r.id
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM ship_release_pull_request rpr
+      JOIN pull_request pr ON pr.id = rpr.pull_request_id
+      WHERE rpr.release_id = r.id
+        AND pr.state <> 'merged'
+        AND rpr.merge_state <> 'merged'
+  )
+ORDER BY r.updated_at ASC;
+
 -- name: ListActiveMergingReleases :many
 -- Used by the release finalizer to detect orphaned merge trains.
 -- Returns merging releases that are not paused. These are candidates

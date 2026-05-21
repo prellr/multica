@@ -148,7 +148,7 @@ func (h *Handler) PromoteRelease(w http.ResponseWriter, r *http.Request) {
 		"release_id": uuidToString(updated.ID),
 		"stage":      string(updated.Stage),
 	})
-	writeJSON(w, http.StatusAccepted, releaseToResponse(updated, int(count)))
+	writeJSON(w, http.StatusAccepted, h.releaseToResponseWithStates(r.Context(), updated, int(count)))
 }
 
 // MarkReleaseProductionDeployed is the manual escape-hatch when GitHub
@@ -288,7 +288,7 @@ func (h *Handler) MarkReleaseProductionDeployed(w http.ResponseWriter, r *http.R
 		"release_id": uuidToString(updated.ID),
 		"stage":      string(updated.Stage),
 	})
-	writeJSON(w, http.StatusOK, releaseToResponse(updated, int(count)))
+	writeJSON(w, http.StatusOK, h.releaseToResponseWithStates(r.Context(), updated, int(count)))
 }
 
 // RollbackRelease — POST /api/releases/{id}/rollback. Owner/admin OR
@@ -359,7 +359,7 @@ func (h *Handler) RollbackRelease(w http.ResponseWriter, r *http.Request) {
 		"release_id": uuidToString(updated.ID),
 		"stage":      string(updated.Stage),
 	})
-	writeJSON(w, http.StatusOK, releaseToResponse(updated, int(count)))
+	writeJSON(w, http.StatusOK, h.releaseToResponseWithStates(r.Context(), updated, int(count)))
 }
 
 // recordConfirmationAudit writes an `agent_confirmation_recorded`
@@ -424,7 +424,7 @@ func (h *Handler) MarkReleaseDone(w http.ResponseWriter, r *http.Request) {
 		"release_id": uuidToString(updated.ID),
 		"stage":      string(updated.Stage),
 	})
-	writeJSON(w, http.StatusOK, releaseToResponse(updated, int(count)))
+	writeJSON(w, http.StatusOK, h.releaseToResponseWithStates(r.Context(), updated, int(count)))
 }
 
 // ----- health rollup --------------------------------------------------------
@@ -433,13 +433,13 @@ func (h *Handler) MarkReleaseDone(w http.ResponseWriter, r *http.Request) {
 // fields default to zero/empty when no rollup has been written yet
 // (pre-promote releases) — the UI renders an empty state.
 type releaseHealthResponse struct {
-	ReleaseID                string   `json:"release_id"`
-	OverallStatus            string   `json:"overall_status"`
-	SnapshotAt               string   `json:"snapshot_at"`
-	ErrorRateDelta           *float64 `json:"error_rate_delta"`
-	P99LatencyDeltaMs        *float64 `json:"p99_latency_delta_ms"`
-	InboxIssuesSincePromote  int32    `json:"inbox_issues_since_promote"`
-	AgentFailureRateDelta    *float64 `json:"agent_failure_rate_delta"`
+	ReleaseID               string   `json:"release_id"`
+	OverallStatus           string   `json:"overall_status"`
+	SnapshotAt              string   `json:"snapshot_at"`
+	ErrorRateDelta          *float64 `json:"error_rate_delta"`
+	P99LatencyDeltaMs       *float64 `json:"p99_latency_delta_ms"`
+	InboxIssuesSincePromote int32    `json:"inbox_issues_since_promote"`
+	AgentFailureRateDelta   *float64 `json:"agent_failure_rate_delta"`
 }
 
 // GetReleaseHealth — GET /api/releases/{id}/health. Returns the

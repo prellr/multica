@@ -201,53 +201,65 @@ type releaseResponse struct {
 	RolledBackCompletedAt *string `json:"rolled_back_completed_at"`
 }
 
-func releaseToResponse(r db.ShipRelease, prCount int) releaseResponse {
+func releaseToResponse(r db.ShipRelease, prCount int, prMergeStates []db.PullRequestState) releaseResponse {
 	// PR4 of the Ship Hub rebuild: derive the displayed stage at read
 	// time rather than trusting the stored column. The stored stage is
 	// written by multiple producers (merge train, staging promotion,
 	// production promotion, rollback, cancel) and a failed mid-train
 	// write or a missed webhook can leave it stale forever; derivation
 	// reconciles against the observable timestamp ladder + the sticky
-	// operator-intent terminals. See server/internal/service/ship/stage_derive.go
-	// for the full algorithm + invariants.
-	derivedStage := ship.DeriveReleaseStage(r, time.Now())
+	// operator-intent terminals + member-PR merge state (ROA-311).
+	// See server/internal/service/ship/stage_derive.go for the full
+	// algorithm + invariants.
+	derivedStage := ship.DeriveReleaseStage(r, prMergeStates, time.Now())
 	return releaseResponse{
-		ID:                 uuidToString(r.ID),
-		WorkspaceID:        uuidToString(r.WorkspaceID),
-		ProjectID:          uuidToString(r.ProjectID),
-		Title:              r.Title,
-		Description:        textToPtr(r.Description),
-		Stage:              string(derivedStage),
-		RiskLevel:          string(r.RiskLevel),
-		ChannelID:          uuidToPtr(r.ChannelID),
-		IssueID:            uuidToPtr(r.IssueID),
-		ApproverID:         uuidToPtr(r.ApproverID),
-		SecondApproverID:   uuidToPtr(r.SecondApproverID),
-		StagingDeployID:    uuidToPtr(r.StagingDeployID),
-		ProductionDeployID: uuidToPtr(r.ProductionDeployID),
-		CreatedBy:          uuidToPtr(r.CreatedBy),
-		CreatedAt:          timestampToString(r.CreatedAt),
-		UpdatedAt:          timestampToString(r.UpdatedAt),
-		MergedAt:           timestampToPtr(r.MergedAt),
-		StagedAt:           timestampToPtr(r.StagedAt),
-		PromotedAt:         timestampToPtr(r.PromotedAt),
-		DoneAt:             timestampToPtr(r.DoneAt),
-		RollbackReason:     textToPtr(r.RollbackReason),
-		PRCount:          prCount,
-		MergePaused:      r.MergePaused,
-		MergeMethod:      r.MergeMethod,
-		SmokeRunID:       textToPtr(r.SmokeRunID),
-		SmokeRunURL:      textToPtr(r.SmokeRunUrl),
-		SmokeStatus:      textToPtr(r.SmokeStatus),
-		SmokeCompletedAt: timestampToPtr(r.SmokeCompletedAt),
-		QAVerifiedAt:     timestampToPtr(r.QaVerifiedAt),
-		QAVerifiedBy:     uuidToPtr(r.QaVerifiedBy),
-		MergedMainSHA:    textToPtr(r.MergedMainSha),
+		ID:                    uuidToString(r.ID),
+		WorkspaceID:           uuidToString(r.WorkspaceID),
+		ProjectID:             uuidToString(r.ProjectID),
+		Title:                 r.Title,
+		Description:           textToPtr(r.Description),
+		Stage:                 string(derivedStage),
+		RiskLevel:             string(r.RiskLevel),
+		ChannelID:             uuidToPtr(r.ChannelID),
+		IssueID:               uuidToPtr(r.IssueID),
+		ApproverID:            uuidToPtr(r.ApproverID),
+		SecondApproverID:      uuidToPtr(r.SecondApproverID),
+		StagingDeployID:       uuidToPtr(r.StagingDeployID),
+		ProductionDeployID:    uuidToPtr(r.ProductionDeployID),
+		CreatedBy:             uuidToPtr(r.CreatedBy),
+		CreatedAt:             timestampToString(r.CreatedAt),
+		UpdatedAt:             timestampToString(r.UpdatedAt),
+		MergedAt:              timestampToPtr(r.MergedAt),
+		StagedAt:              timestampToPtr(r.StagedAt),
+		PromotedAt:            timestampToPtr(r.PromotedAt),
+		DoneAt:                timestampToPtr(r.DoneAt),
+		RollbackReason:        textToPtr(r.RollbackReason),
+		PRCount:               prCount,
+		MergePaused:           r.MergePaused,
+		MergeMethod:           r.MergeMethod,
+		SmokeRunID:            textToPtr(r.SmokeRunID),
+		SmokeRunURL:           textToPtr(r.SmokeRunUrl),
+		SmokeStatus:           textToPtr(r.SmokeStatus),
+		SmokeCompletedAt:      timestampToPtr(r.SmokeCompletedAt),
+		QAVerifiedAt:          timestampToPtr(r.QaVerifiedAt),
+		QAVerifiedBy:          uuidToPtr(r.QaVerifiedBy),
+		MergedMainSHA:         textToPtr(r.MergedMainSha),
 		PromotedBy:            uuidToPtr(r.PromotedBy),
 		ProductionMainSHA:     textToPtr(r.ProductionMainSha),
 		RolledBackBy:          uuidToPtr(r.RolledBackBy),
 		RolledBackCompletedAt: timestampToPtr(r.RolledBackCompletedAt),
 	}
+}
+
+// releaseToResponseWithStates is the mutation-response convenience
+// wrapper. Callers that have just mutated a release and don't already
+// hold its member-PR rows use this to fetch the lean PR-state list
+// (GetReleasePRStates) so the derived stage in the echoed response
+// reflects the Phase 2 PR-membership rule (ROA-311). A query failure
+// degrades gracefully to Phase 1 derivation (nil states).
+func (h *Handler) releaseToResponseWithStates(ctx context.Context, rel db.ShipRelease, prCount int) releaseResponse {
+	prStates, _ := h.Queries.GetReleasePRStates(ctx, rel.ID)
+	return releaseToResponse(rel, prCount, prStates)
 }
 
 // releaseSignoffResponse is the wire shape for ship_release_signoff
@@ -327,12 +339,12 @@ func releasePRRowToResponse(row db.ListReleasePullRequestsRow) releasePullReques
 }
 
 type releaseEventResponse struct {
-	ID          string `json:"id"`
-	ReleaseID   string `json:"release_id"`
-	EventType   string `json:"event_type"`
+	ID          string  `json:"id"`
+	ReleaseID   string  `json:"release_id"`
+	EventType   string  `json:"event_type"`
 	ActorUserID *string `json:"actor_user_id"`
-	Payload     any    `json:"payload"`
-	CreatedAt   string `json:"created_at"`
+	Payload     any     `json:"payload"`
+	CreatedAt   string  `json:"created_at"`
 }
 
 func releaseEventToResponse(e db.ShipReleaseEvent) releaseEventResponse {
@@ -473,7 +485,11 @@ func (h *Handler) CreateRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := releaseToResponse(result.Release, len(result.PRs))
+	createdPRStates := make([]db.PullRequestState, len(result.PRs))
+	for i, pr := range result.PRs {
+		createdPRStates[i] = pr.State
+	}
+	resp := releaseToResponse(result.Release, len(result.PRs), createdPRStates)
 	body := map[string]any{
 		"release":  resp,
 		"warnings": result.Warnings,
@@ -510,8 +526,10 @@ func (h *Handler) GetRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prs := make([]releasePullRequestResponse, len(prRows))
+	prStates := make([]db.PullRequestState, len(prRows))
 	for i, row := range prRows {
 		prs[i] = releasePRRowToResponse(row)
+		prStates[i] = row.State
 	}
 
 	// Bounded event tail. 100 covers a full release lifecycle even
@@ -544,7 +562,7 @@ func (h *Handler) GetRelease(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := map[string]any{
-		"release":       releaseToResponse(rel, len(prRows)),
+		"release":       releaseToResponse(rel, len(prRows), prStates),
 		"pull_requests": prs,
 		"events":        events,
 		"signoffs":      signoffs,
@@ -587,7 +605,8 @@ func (h *Handler) ListProjectReleases(w http.ResponseWriter, r *http.Request) {
 	out := make([]releaseResponse, len(rows))
 	for i, r := range rows {
 		count, _ := h.Queries.CountActiveReleasePullRequests(context.Background(), r.ID)
-		out[i] = releaseToResponse(r, int(count))
+		prStates, _ := h.Queries.GetReleasePRStates(context.Background(), r.ID)
+		out[i] = releaseToResponse(r, int(count), prStates)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"releases": out})
 }
@@ -615,11 +634,18 @@ func (h *Handler) ListWorkspaceActiveReleases(w http.ResponseWriter, r *http.Req
 	now := time.Now()
 	out := make([]releaseResponse, 0, len(rows))
 	for _, rel := range rows {
-		if ship.IsTerminalDerivedStage(ship.DeriveReleaseStage(rel, now)) {
+		// ROA-311 — fetch member-PR states so the derivation's Phase 2
+		// PR-membership step can rescue a release whose PRs merged
+		// outside the merge train (it never got merged_at stamped and
+		// would otherwise strand in `assembling` on the rail forever).
+		// N+1 over the small active-release list is acceptable — it
+		// mirrors the per-release CountActiveReleasePullRequests call.
+		prStates, _ := h.Queries.GetReleasePRStates(r.Context(), rel.ID)
+		if ship.IsTerminalDerivedStage(ship.DeriveReleaseStage(rel, prStates, now)) {
 			continue
 		}
 		count, _ := h.Queries.CountActiveReleasePullRequests(r.Context(), rel.ID)
-		out = append(out, releaseToResponse(rel, int(count)))
+		out = append(out, releaseToResponse(rel, int(count), prStates))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"releases": out})
 }
@@ -707,7 +733,7 @@ func (h *Handler) UpdateRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	count, _ := h.Queries.CountActiveReleasePullRequests(r.Context(), updated.ID)
-	resp := releaseToResponse(updated, int(count))
+	resp := h.releaseToResponseWithStates(r.Context(), updated, int(count))
 	h.publish(protocol.EventReleaseUpdated, uuidToString(wsID), "member", userID, map[string]any{
 		"release_id": uuidToString(updated.ID),
 		"stage":      string(updated.Stage),
@@ -880,6 +906,5 @@ func (h *Handler) CancelRelease(w http.ResponseWriter, r *http.Request) {
 	h.publish(protocol.EventReleaseCancelled, uuidToString(wsID), "member", userID, map[string]any{
 		"release_id": uuidToString(updated.ID),
 	})
-	writeJSON(w, http.StatusOK, releaseToResponse(updated, int(count)))
+	writeJSON(w, http.StatusOK, h.releaseToResponseWithStates(r.Context(), updated, int(count)))
 }
-

@@ -102,6 +102,86 @@ func (q *Queries) CountReleasePRsByMergeState(ctx context.Context, releaseID pgt
 	return items, nil
 }
 
+const createDirectMergeRelease = `-- name: CreateDirectMergeRelease :one
+INSERT INTO ship_release (
+    workspace_id, project_id, title, description, risk_level,
+    is_direct_merge, stage, merged_at, promoted_at, merged_main_sha
+) VALUES (
+    $1, $2, $3, $6, $4,
+    TRUE, 'in_production', NOW(), NOW(), $5
+)
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
+`
+
+type CreateDirectMergeReleaseParams struct {
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	ProjectID     pgtype.UUID `json:"project_id"`
+	Title         string      `json:"title"`
+	RiskLevel     RiskLevel   `json:"risk_level"`
+	MergedMainSha pgtype.Text `json:"merged_main_sha"`
+	Description   pgtype.Text `json:"description"`
+}
+
+// ROA-311 — synthesis path for a PR merged directly to the default
+// branch (no merge train). A direct merge is an already-completed ship,
+// so the release is born advanced: is_direct_merge=true, stage at
+// 'in_production' (so the production deployment_status webhook's
+// FindReleaseByProductionMainSHA lookup, which filters
+// stage IN ('verifying','promoting','in_production'), can still link the
+// real deploy), and the merged_at / promoted_at ladder stamped now() so
+// DeriveReleaseStage can run its 24h auto-done rule. merged_main_sha is
+// stamped here too so deploy webhooks can match a production deploy back
+// to this release.
+func (q *Queries) CreateDirectMergeRelease(ctx context.Context, arg CreateDirectMergeReleaseParams) (ShipRelease, error) {
+	row := q.db.QueryRow(ctx, createDirectMergeRelease,
+		arg.WorkspaceID,
+		arg.ProjectID,
+		arg.Title,
+		arg.RiskLevel,
+		arg.MergedMainSha,
+		arg.Description,
+	)
+	var i ShipRelease
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Title,
+		&i.Description,
+		&i.Stage,
+		&i.RiskLevel,
+		&i.ChannelID,
+		&i.IssueID,
+		&i.ApproverID,
+		&i.SecondApproverID,
+		&i.StagingDeployID,
+		&i.ProductionDeployID,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.MergedAt,
+		&i.StagedAt,
+		&i.PromotedAt,
+		&i.DoneAt,
+		&i.RollbackReason,
+		&i.MergePaused,
+		&i.MergeMethod,
+		&i.SmokeRunID,
+		&i.SmokeRunUrl,
+		&i.SmokeStatus,
+		&i.SmokeCompletedAt,
+		&i.QaVerifiedAt,
+		&i.QaVerifiedBy,
+		&i.MergedMainSha,
+		&i.PromotedBy,
+		&i.ProductionMainSha,
+		&i.RolledBackBy,
+		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
+	)
+	return i, err
+}
+
 const createRelease = `-- name: CreateRelease :one
 
 INSERT INTO ship_release (
@@ -111,7 +191,7 @@ INSERT INTO ship_release (
     $1, $2, $3, $5, $4,
     $6, $7, $8
 )
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type CreateReleaseParams struct {
@@ -180,6 +260,7 @@ func (q *Queries) CreateRelease(ctx context.Context, arg CreateReleaseParams) (S
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -282,7 +363,7 @@ func (q *Queries) FindOrphanMergedPRsByMergeCommitSHA(ctx context.Context, arg F
 }
 
 const findReleaseByMergedMainSHA = `-- name: FindReleaseByMergedMainSHA :one
-SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE workspace_id = $1
   AND merged_main_sha = $2
   AND merged_main_sha <> ''
@@ -339,12 +420,13 @@ func (q *Queries) FindReleaseByMergedMainSHA(ctx context.Context, arg FindReleas
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
 
 const findReleaseByProductionMainSHA = `-- name: FindReleaseByProductionMainSHA :one
-SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE workspace_id = $1
   AND (
       production_main_sha = $2
@@ -406,12 +488,13 @@ func (q *Queries) FindReleaseByProductionMainSHA(ctx context.Context, arg FindRe
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
 
 const findReleaseBySmokeRunID = `-- name: FindReleaseBySmokeRunID :one
-SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE workspace_id = $1
   AND smoke_run_id = $2
   AND smoke_run_id <> ''
@@ -464,12 +547,13 @@ func (q *Queries) FindReleaseBySmokeRunID(ctx context.Context, arg FindReleaseBy
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
 
 const findStuckPromotingReleaseForProject = `-- name: FindStuckPromotingReleaseForProject :one
-SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE workspace_id = $1
   AND project_id = $2
   AND stage = 'promoting'
@@ -554,12 +638,13 @@ func (q *Queries) FindStuckPromotingReleaseForProject(ctx context.Context, arg F
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
 
 const getActiveReleaseForPullRequest = `-- name: GetActiveReleaseForPullRequest :one
-SELECT r.id, r.workspace_id, r.project_id, r.title, r.description, r.stage, r.risk_level, r.channel_id, r.issue_id, r.approver_id, r.second_approver_id, r.staging_deploy_id, r.production_deploy_id, r.created_by, r.created_at, r.updated_at, r.merged_at, r.staged_at, r.promoted_at, r.done_at, r.rollback_reason, r.merge_paused, r.merge_method, r.smoke_run_id, r.smoke_run_url, r.smoke_status, r.smoke_completed_at, r.qa_verified_at, r.qa_verified_by, r.merged_main_sha, r.promoted_by, r.production_main_sha, r.rolled_back_by, r.rolled_back_completed_at
+SELECT r.id, r.workspace_id, r.project_id, r.title, r.description, r.stage, r.risk_level, r.channel_id, r.issue_id, r.approver_id, r.second_approver_id, r.staging_deploy_id, r.production_deploy_id, r.created_by, r.created_at, r.updated_at, r.merged_at, r.staged_at, r.promoted_at, r.done_at, r.rollback_reason, r.merge_paused, r.merge_method, r.smoke_run_id, r.smoke_run_url, r.smoke_status, r.smoke_completed_at, r.qa_verified_at, r.qa_verified_by, r.merged_main_sha, r.promoted_by, r.production_main_sha, r.rolled_back_by, r.rolled_back_completed_at, r.is_direct_merge
 FROM ship_release_pull_request rpr
 JOIN ship_release r ON r.id = rpr.release_id
 WHERE rpr.pull_request_id = $1 AND rpr.is_active = TRUE
@@ -608,6 +693,7 @@ func (q *Queries) GetActiveReleaseForPullRequest(ctx context.Context, pullReques
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -652,7 +738,7 @@ func (q *Queries) GetLastMergedReleasePR(ctx context.Context, releaseID pgtype.U
 }
 
 const getRelease = `-- name: GetRelease :one
-SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE id = $1
 `
 
@@ -694,6 +780,7 @@ func (q *Queries) GetRelease(ctx context.Context, id pgtype.UUID) (ShipRelease, 
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -722,7 +809,7 @@ func (q *Queries) GetReleaseHealth(ctx context.Context, releaseID pgtype.UUID) (
 }
 
 const getReleaseInWorkspace = `-- name: GetReleaseInWorkspace :one
-SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -769,8 +856,40 @@ func (q *Queries) GetReleaseInWorkspace(ctx context.Context, arg GetReleaseInWor
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
+}
+
+const getReleasePRStates = `-- name: GetReleasePRStates :many
+SELECT pr.state
+FROM ship_release_pull_request rpr
+JOIN pull_request pr ON pr.id = rpr.pull_request_id
+WHERE rpr.release_id = $1
+`
+
+// ROA-311 — lean lookup of every member PR's pull_request.state for one
+// release. DeriveReleaseStage's Phase 2 PR-membership step needs only
+// the state column; this avoids the heavy ListReleasePullRequests join
+// when the active-release loop just needs "did every PR merge?".
+func (q *Queries) GetReleasePRStates(ctx context.Context, releaseID pgtype.UUID) ([]PullRequestState, error) {
+	rows, err := q.db.Query(ctx, getReleasePRStates, releaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []PullRequestState{}
+	for rows.Next() {
+		var state PullRequestState
+		if err := rows.Scan(&state); err != nil {
+			return nil, err
+		}
+		items = append(items, state)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const insertReleaseEvent = `-- name: InsertReleaseEvent :one
@@ -809,7 +928,7 @@ func (q *Queries) InsertReleaseEvent(ctx context.Context, arg InsertReleaseEvent
 }
 
 const listActiveMergingReleases = `-- name: ListActiveMergingReleases :many
-SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE stage = 'merging'
   AND merge_paused = FALSE
 ORDER BY created_at ASC
@@ -864,6 +983,7 @@ func (q *Queries) ListActiveMergingReleases(ctx context.Context) ([]ShipRelease,
 			&i.ProductionMainSha,
 			&i.RolledBackBy,
 			&i.RolledBackCompletedAt,
+			&i.IsDirectMerge,
 		); err != nil {
 			return nil, err
 		}
@@ -876,7 +996,7 @@ func (q *Queries) ListActiveMergingReleases(ctx context.Context) ([]ShipRelease,
 }
 
 const listActiveReleasesByWorkspace = `-- name: ListActiveReleasesByWorkspace :many
-SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE workspace_id = $1
   AND stage NOT IN ('done', 'rolled_back', 'cancelled')
 ORDER BY COALESCE(promoted_at, staged_at, created_at) DESC
@@ -929,6 +1049,7 @@ func (q *Queries) ListActiveReleasesByWorkspace(ctx context.Context, workspaceID
 			&i.ProductionMainSha,
 			&i.RolledBackBy,
 			&i.RolledBackCompletedAt,
+			&i.IsDirectMerge,
 		); err != nil {
 			return nil, err
 		}
@@ -991,7 +1112,7 @@ func (q *Queries) ListActiveReleasesForPullRequests(ctx context.Context, dollar_
 }
 
 const listDoneIssueReleasesWithMergedPRs = `-- name: ListDoneIssueReleasesWithMergedPRs :many
-SELECT r.id, r.workspace_id, r.project_id, r.title, r.description, r.stage, r.risk_level, r.channel_id, r.issue_id, r.approver_id, r.second_approver_id, r.staging_deploy_id, r.production_deploy_id, r.created_by, r.created_at, r.updated_at, r.merged_at, r.staged_at, r.promoted_at, r.done_at, r.rollback_reason, r.merge_paused, r.merge_method, r.smoke_run_id, r.smoke_run_url, r.smoke_status, r.smoke_completed_at, r.qa_verified_at, r.qa_verified_by, r.merged_main_sha, r.promoted_by, r.production_main_sha, r.rolled_back_by, r.rolled_back_completed_at
+SELECT r.id, r.workspace_id, r.project_id, r.title, r.description, r.stage, r.risk_level, r.channel_id, r.issue_id, r.approver_id, r.second_approver_id, r.staging_deploy_id, r.production_deploy_id, r.created_by, r.created_at, r.updated_at, r.merged_at, r.staged_at, r.promoted_at, r.done_at, r.rollback_reason, r.merge_paused, r.merge_method, r.smoke_run_id, r.smoke_run_url, r.smoke_status, r.smoke_completed_at, r.qa_verified_at, r.qa_verified_by, r.merged_main_sha, r.promoted_by, r.production_main_sha, r.rolled_back_by, r.rolled_back_completed_at, r.is_direct_merge
 FROM ship_release r
 JOIN issue i ON i.id = r.issue_id
 WHERE r.stage NOT IN ('done', 'rolled_back', 'cancelled')
@@ -1060,6 +1181,7 @@ func (q *Queries) ListDoneIssueReleasesWithMergedPRs(ctx context.Context) ([]Shi
 			&i.ProductionMainSha,
 			&i.RolledBackBy,
 			&i.RolledBackCompletedAt,
+			&i.IsDirectMerge,
 		); err != nil {
 			return nil, err
 		}
@@ -1072,7 +1194,7 @@ func (q *Queries) ListDoneIssueReleasesWithMergedPRs(ctx context.Context) ([]Shi
 }
 
 const listInProductionReleases = `-- name: ListInProductionReleases :many
-SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE stage = 'in_production'
 ORDER BY promoted_at DESC NULLS LAST
 `
@@ -1124,6 +1246,7 @@ func (q *Queries) ListInProductionReleases(ctx context.Context) ([]ShipRelease, 
 			&i.ProductionMainSha,
 			&i.RolledBackBy,
 			&i.RolledBackCompletedAt,
+			&i.IsDirectMerge,
 		); err != nil {
 			return nil, err
 		}
@@ -1136,7 +1259,7 @@ func (q *Queries) ListInProductionReleases(ctx context.Context) ([]ShipRelease, 
 }
 
 const listRecentReleasesByProject = `-- name: ListRecentReleasesByProject :many
-SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE project_id = $1
 ORDER BY updated_at DESC
 LIMIT $2
@@ -1193,6 +1316,7 @@ func (q *Queries) ListRecentReleasesByProject(ctx context.Context, arg ListRecen
 			&i.ProductionMainSha,
 			&i.RolledBackBy,
 			&i.RolledBackCompletedAt,
+			&i.IsDirectMerge,
 		); err != nil {
 			return nil, err
 		}
@@ -1490,7 +1614,7 @@ func (q *Queries) ListReleasePullRequests(ctx context.Context, releaseID pgtype.
 }
 
 const listReleasesByProject = `-- name: ListReleasesByProject :many
-SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE project_id = $1
   AND (
       $2::bool = TRUE
@@ -1550,6 +1674,7 @@ func (q *Queries) ListReleasesByProject(ctx context.Context, arg ListReleasesByP
 			&i.ProductionMainSha,
 			&i.RolledBackBy,
 			&i.RolledBackCompletedAt,
+			&i.IsDirectMerge,
 		); err != nil {
 			return nil, err
 		}
@@ -1562,7 +1687,7 @@ func (q *Queries) ListReleasesByProject(ctx context.Context, arg ListReleasesByP
 }
 
 const listReleasesPastMonitoringWindow = `-- name: ListReleasesPastMonitoringWindow :many
-SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at FROM ship_release
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE stage = 'in_production'
   AND promoted_at IS NOT NULL
   AND promoted_at < $1
@@ -1617,6 +1742,7 @@ func (q *Queries) ListReleasesPastMonitoringWindow(ctx context.Context, promoted
 			&i.ProductionMainSha,
 			&i.RolledBackBy,
 			&i.RolledBackCompletedAt,
+			&i.IsDirectMerge,
 		); err != nil {
 			return nil, err
 		}
@@ -1679,7 +1805,7 @@ UPDATE ship_release SET
     done_at    = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type SetReleaseDoneParams struct {
@@ -1726,6 +1852,7 @@ func (q *Queries) SetReleaseDone(ctx context.Context, arg SetReleaseDoneParams) 
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -1735,7 +1862,7 @@ UPDATE ship_release SET
     promoted_at = COALESCE(promoted_at, $2),
     updated_at  = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type SetReleaseInProductionParams struct {
@@ -1784,6 +1911,7 @@ func (q *Queries) SetReleaseInProduction(ctx context.Context, arg SetReleaseInPr
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -1793,7 +1921,7 @@ UPDATE ship_release SET
     merge_method = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type SetReleaseMergeMethodParams struct {
@@ -1842,6 +1970,7 @@ func (q *Queries) SetReleaseMergeMethod(ctx context.Context, arg SetReleaseMerge
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -1852,7 +1981,7 @@ UPDATE ship_release SET
     merge_paused = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type SetReleaseMergePausedParams struct {
@@ -1904,6 +2033,7 @@ func (q *Queries) SetReleaseMergePaused(ctx context.Context, arg SetReleaseMerge
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -1914,7 +2044,7 @@ UPDATE ship_release SET
     merged_main_sha = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type SetReleaseMergedMainSHAParams struct {
@@ -1967,6 +2097,7 @@ func (q *Queries) SetReleaseMergedMainSHA(ctx context.Context, arg SetReleaseMer
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -2039,7 +2170,7 @@ UPDATE ship_release SET
     promoted_by          = COALESCE(promoted_by, $5),
     updated_at           = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type SetReleasePromotedParams struct {
@@ -2102,6 +2233,7 @@ func (q *Queries) SetReleasePromoted(ctx context.Context, arg SetReleasePromoted
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -2112,7 +2244,7 @@ UPDATE ship_release SET
     qa_verified_by = NULL,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 // Clears qa_verified_at + qa_verified_by. Caller flips stage back to
@@ -2155,6 +2287,7 @@ func (q *Queries) SetReleaseQAUnverified(ctx context.Context, id pgtype.UUID) (S
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -2165,7 +2298,7 @@ UPDATE ship_release SET
     qa_verified_by = $3,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type SetReleaseQAVerifiedParams struct {
@@ -2216,6 +2349,7 @@ func (q *Queries) SetReleaseQAVerified(ctx context.Context, arg SetReleaseQAVeri
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -2227,7 +2361,7 @@ UPDATE ship_release SET
     rolled_back_completed_at = $2,
     updated_at               = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type SetReleaseRolledBackParams struct {
@@ -2287,6 +2421,7 @@ func (q *Queries) SetReleaseRolledBack(ctx context.Context, arg SetReleaseRolled
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -2296,7 +2431,7 @@ UPDATE ship_release SET
     rolled_back_completed_at = $2,
     updated_at               = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type SetReleaseRolledBackCompleteParams struct {
@@ -2346,6 +2481,7 @@ func (q *Queries) SetReleaseRolledBackComplete(ctx context.Context, arg SetRelea
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -2357,7 +2493,7 @@ UPDATE ship_release SET
     smoke_status = $4,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type SetReleaseSmokeRunParams struct {
@@ -2412,6 +2548,7 @@ func (q *Queries) SetReleaseSmokeRun(ctx context.Context, arg SetReleaseSmokeRun
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -2422,7 +2559,7 @@ UPDATE ship_release SET
     smoke_completed_at = COALESCE($3, smoke_completed_at),
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type SetReleaseSmokeStatusParams struct {
@@ -2475,6 +2612,7 @@ func (q *Queries) SetReleaseSmokeStatus(ctx context.Context, arg SetReleaseSmoke
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -2485,7 +2623,7 @@ UPDATE ship_release SET
     staged_at = COALESCE(staged_at, $3),
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type SetReleaseStagingDeployParams struct {
@@ -2537,6 +2675,7 @@ func (q *Queries) SetReleaseStagingDeploy(ctx context.Context, arg SetReleaseSta
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -2596,7 +2735,7 @@ UPDATE ship_release SET
     channel_id = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type UpdateReleaseChannelParams struct {
@@ -2642,6 +2781,7 @@ func (q *Queries) UpdateReleaseChannel(ctx context.Context, arg UpdateReleaseCha
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -2651,7 +2791,7 @@ UPDATE ship_release SET
     issue_id = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type UpdateReleaseIssueParams struct {
@@ -2697,6 +2837,7 @@ func (q *Queries) UpdateReleaseIssue(ctx context.Context, arg UpdateReleaseIssue
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -2715,7 +2856,7 @@ UPDATE ship_release SET
     END,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type UpdateReleaseMetadataParams struct {
@@ -2776,6 +2917,7 @@ func (q *Queries) UpdateReleaseMetadata(ctx context.Context, arg UpdateReleaseMe
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -2785,7 +2927,7 @@ UPDATE ship_release SET
     risk_level = $2,
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type UpdateReleaseRiskLevelParams struct {
@@ -2834,6 +2976,7 @@ func (q *Queries) UpdateReleaseRiskLevel(ctx context.Context, arg UpdateReleaseR
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }
@@ -2848,7 +2991,7 @@ UPDATE ship_release SET
     rollback_reason = COALESCE($7, rollback_reason),
     updated_at = NOW()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at
+RETURNING id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge
 `
 
 type UpdateReleaseStageParams struct {
@@ -2911,6 +3054,7 @@ func (q *Queries) UpdateReleaseStage(ctx context.Context, arg UpdateReleaseStage
 		&i.ProductionMainSha,
 		&i.RolledBackBy,
 		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
 	)
 	return i, err
 }

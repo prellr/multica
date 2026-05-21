@@ -17,6 +17,26 @@ INSERT INTO ship_release (
 )
 RETURNING *;
 
+-- name: CreateDirectMergeRelease :one
+-- ROA-311 — synthesis path for a PR merged directly to the default
+-- branch (no merge train). A direct merge is an already-completed ship,
+-- so the release is born advanced: is_direct_merge=true, stage at
+-- 'in_production' (so the production deployment_status webhook's
+-- FindReleaseByProductionMainSHA lookup, which filters
+-- stage IN ('verifying','promoting','in_production'), can still link the
+-- real deploy), and the merged_at / promoted_at ladder stamped now() so
+-- DeriveReleaseStage can run its 24h auto-done rule. merged_main_sha is
+-- stamped here too so deploy webhooks can match a production deploy back
+-- to this release.
+INSERT INTO ship_release (
+    workspace_id, project_id, title, description, risk_level,
+    is_direct_merge, stage, merged_at, promoted_at, merged_main_sha
+) VALUES (
+    $1, $2, $3, sqlc.narg('description'), $4,
+    TRUE, 'in_production', NOW(), NOW(), $5
+)
+RETURNING *;
+
 -- name: GetRelease :one
 SELECT * FROM ship_release
 WHERE id = $1;
@@ -188,6 +208,16 @@ WHERE release_id = $1;
 SELECT COUNT(*)::int AS pr_count
 FROM ship_release_pull_request
 WHERE release_id = $1;
+
+-- name: GetReleasePRStates :many
+-- ROA-311 — lean lookup of every member PR's pull_request.state for one
+-- release. DeriveReleaseStage's Phase 2 PR-membership step needs only
+-- the state column; this avoids the heavy ListReleasePullRequests join
+-- when the active-release loop just needs "did every PR merge?".
+SELECT pr.state
+FROM ship_release_pull_request rpr
+JOIN pull_request pr ON pr.id = rpr.pull_request_id
+WHERE rpr.release_id = $1;
 
 -- name: InsertReleaseEvent :one
 INSERT INTO ship_release_event (

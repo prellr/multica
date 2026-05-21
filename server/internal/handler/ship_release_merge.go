@@ -281,7 +281,7 @@ func (h *Handler) AbortMergeRelease(w http.ResponseWriter, r *http.Request) {
 	h.publish(protocol.EventReleaseCancelled, uuidToString(wsID), "member", userID, map[string]any{
 		"release_id": uuidToString(updated.ID),
 	})
-	writeJSON(w, http.StatusOK, releaseToResponse(updated, int(count)))
+	writeJSON(w, http.StatusOK, h.releaseToResponseWithStates(r.Context(), updated, int(count)))
 }
 
 // MergeStateResponse is the GET /api/releases/{id}/merge_state body.

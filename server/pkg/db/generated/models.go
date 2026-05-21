@@ -1197,6 +1197,7 @@ type ShipRelease struct {
 	ProductionMainSha     pgtype.Text        `json:"production_main_sha"`
 	RolledBackBy          pgtype.UUID        `json:"rolled_back_by"`
 	RolledBackCompletedAt pgtype.Timestamptz `json:"rolled_back_completed_at"`
+	IsDirectMerge         bool               `json:"is_direct_merge"`
 }
 
 type ShipReleaseEvent struct {

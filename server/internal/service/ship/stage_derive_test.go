@@ -51,7 +51,18 @@ func (b *relBuilder) withProductionDeploy() *relBuilder {
 	b.r.ProductionDeployID = ptrUUID(true)
 	return b
 }
-func (b *relBuilder) build() db.ShipRelease { return b.r }
+func (b *relBuilder) directMerge() *relBuilder { b.r.IsDirectMerge = true; return b }
+func (b *relBuilder) build() db.ShipRelease    { return b.r }
+
+// merged / unmerged build the prMergeStates slice DeriveReleaseStage's
+// Phase 2 step consults — n member PRs all in the given state.
+func merged(n int) []db.PullRequestState {
+	out := make([]db.PullRequestState, n)
+	for i := range out {
+		out[i] = db.PullRequestStateMerged
+	}
+	return out
+}
 
 // TestDeriveReleaseStage_StickyTerminals — the stored "done" / "rolled_back"
 // / "cancelled" values are operator intent and must not be re-derived.
@@ -76,7 +87,7 @@ func TestDeriveReleaseStage_StickyTerminals(t *testing.T) {
 				promotedAt(now.Add(-48 * time.Hour)).
 				withProductionDeploy().
 				build()
-			if got := DeriveReleaseStage(r, now); got != c.stage {
+			if got := DeriveReleaseStage(r, nil, now); got != c.stage {
 				t.Errorf("terminal stage %q must not be re-derived; got %q", c.stage, got)
 			}
 		})
@@ -94,7 +105,7 @@ func TestDeriveReleaseStage_RollbackReasonOverridesDrift(t *testing.T) {
 							promotedAt(now.Add(-2 * time.Hour)).
 							withProductionDeploy().
 							build()
-	if got := DeriveReleaseStage(r, now); got != db.ReleaseStageRolledBack {
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStageRolledBack {
 		t.Errorf("rollback_reason set must derive rolled_back; got %q", got)
 	}
 }
@@ -110,7 +121,7 @@ func TestDeriveReleaseStage_ExplicitDoneAtBeatsAutoWindow(t *testing.T) {
 		doneAt(now.Add(-30 * time.Minute)).
 		withProductionDeploy().
 		build()
-	if got := DeriveReleaseStage(r, now); got != db.ReleaseStageDone {
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStageDone {
 		t.Errorf("explicit done_at must derive done; got %q", got)
 	}
 }
@@ -126,7 +137,7 @@ func TestDeriveReleaseStage_AutoDoneAfter24h(t *testing.T) {
 		promotedAt(now.Add(-25 * time.Hour)).
 		withProductionDeploy().
 		build()
-	if got := DeriveReleaseStage(r, now); got != db.ReleaseStageDone {
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStageDone {
 		t.Errorf("promoted_at > 24h ago + production_deploy_id must derive done; got %q", got)
 	}
 }
@@ -142,7 +153,7 @@ func TestDeriveReleaseStage_AutoDoneRequiresDeploy(t *testing.T) {
 		promotedAt(now.Add(-48 * time.Hour)).
 		// no withProductionDeploy() — deploy never recorded
 		build()
-	if got := DeriveReleaseStage(r, now); got != db.ReleaseStagePromoting {
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStagePromoting {
 		// promoted_at without production_deploy_id => promoting (Phase 1
 		// branch 5). After phase 2 with full deploy lookup this might
 		// stay at in_production or be more nuanced; for now we surface
@@ -160,7 +171,7 @@ func TestDeriveReleaseStage_InProductionWithinWindow(t *testing.T) {
 							promotedAt(now.Add(-2 * time.Hour)).
 							withProductionDeploy().
 							build()
-	if got := DeriveReleaseStage(r, now); got != db.ReleaseStageInProduction {
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStageInProduction {
 		t.Errorf("fresh promoted release with deploy must derive in_production; got %q", got)
 	}
 }
@@ -174,7 +185,7 @@ func TestDeriveReleaseStage_StagingWithoutVerifying(t *testing.T) {
 		stagedAt(now.Add(-30 * time.Minute)).
 		mergedAt(now.Add(-1 * time.Hour)).
 		build()
-	if got := DeriveReleaseStage(r, now); got != db.ReleaseStageInStaging {
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStageInStaging {
 		t.Errorf("staged_at without verifying intent must derive in_staging; got %q", got)
 	}
 }
@@ -190,7 +201,7 @@ func TestDeriveReleaseStage_VerifyingHonoredFromStored(t *testing.T) {
 		stagedAt(now.Add(-15 * time.Minute)).
 		mergedAt(now.Add(-1 * time.Hour)).
 		build()
-	if got := DeriveReleaseStage(r, now); got != db.ReleaseStageVerifying {
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStageVerifying {
 		t.Errorf("stored verifying with staged_at must derive verifying; got %q", got)
 	}
 }
@@ -203,7 +214,7 @@ func TestDeriveReleaseStage_MergedWaitingForStaging(t *testing.T) {
 	r := aRelease(db.ReleaseStageInStaging).
 		mergedAt(now.Add(-3 * time.Minute)).
 		build()
-	if got := DeriveReleaseStage(r, now); got != db.ReleaseStageInStaging {
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStageInStaging {
 		t.Errorf("merged_at without staged_at must derive in_staging; got %q", got)
 	}
 }
@@ -215,7 +226,7 @@ func TestDeriveReleaseStage_MergingFromStored(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 	r := aRelease(db.ReleaseStageMerging).build()
-	if got := DeriveReleaseStage(r, now); got != db.ReleaseStageMerging {
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStageMerging {
 		t.Errorf("stored merging with no timestamps must derive merging; got %q", got)
 	}
 }
@@ -226,7 +237,7 @@ func TestDeriveReleaseStage_DefaultAssembling(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 	r := aRelease(db.ReleaseStageAssembling).build()
-	if got := DeriveReleaseStage(r, now); got != db.ReleaseStageAssembling {
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStageAssembling {
 		t.Errorf("blank release must derive assembling; got %q", got)
 	}
 }
@@ -249,12 +260,85 @@ func TestDeriveReleaseStage_FixesActiveRailDriftFromBug3(t *testing.T) {
 							promotedAt(now.Add(-30 * time.Hour)).
 							withProductionDeploy().
 							build()
-	derived := DeriveReleaseStage(r, now)
+	derived := DeriveReleaseStage(r, nil, now)
 	if derived != db.ReleaseStageDone {
 		t.Fatalf("drifted stage on shipped release must derive done; got %q", derived)
 	}
 	if !IsTerminalDerivedStage(derived) {
 		t.Fatalf("derived done must be terminal so Active rail drops it")
+	}
+}
+
+// TestDeriveReleaseStage_AllPRsMergedRescuesAssembling — ROA-311 Phase 2.
+// A release whose timestamp ladder is entirely NULL (no merged_at) but
+// whose every member PR has merged on GitHub must NOT strand in
+// `assembling`. The PR-membership step derives in_staging — the
+// post-merge pre-deploy stage — so the release leaves assembling and the
+// rail reflects reality.
+func TestDeriveReleaseStage_AllPRsMergedRescuesAssembling(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	r := aRelease(db.ReleaseStageAssembling).build() // ladder all NULL
+	if got := DeriveReleaseStage(r, merged(2), now); got != db.ReleaseStageInStaging {
+		t.Errorf("all-PRs-merged release must derive in_staging; got %q", got)
+	}
+}
+
+// TestDeriveReleaseStage_UnmergedPRKeepsAssembling — the Phase 2 step
+// only fires when EVERY member PR has merged. One still-open PR means
+// the release genuinely is still assembling.
+func TestDeriveReleaseStage_UnmergedPRKeepsAssembling(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	r := aRelease(db.ReleaseStageAssembling).build()
+	states := []db.PullRequestState{db.PullRequestStateMerged, db.PullRequestStateOpen}
+	if got := DeriveReleaseStage(r, states, now); got != db.ReleaseStageAssembling {
+		t.Errorf("release with an unmerged PR must stay assembling; got %q", got)
+	}
+}
+
+// TestDeriveReleaseStage_NoMemberPRsKeepsAssembling — a release with zero
+// member PRs is genuinely still assembling; the empty-slice path must not
+// trip the all-merged rule (vacuous truth would be wrong here).
+func TestDeriveReleaseStage_NoMemberPRsKeepsAssembling(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	r := aRelease(db.ReleaseStageAssembling).build()
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStageAssembling {
+		t.Errorf("release with no member PRs must stay assembling; got %q", got)
+	}
+}
+
+// TestDeriveReleaseStage_DirectMergeAutoDoneAfter24h — ROA-311 Phase 2a.
+// A synthesized direct-merge release is born with promoted_at stamped but
+// never gets a production_deploy_id linked. After 24h it must still
+// auto-graduate to done so it drops off the Active rail — the merge
+// itself is the evidence the deploy fired.
+func TestDeriveReleaseStage_DirectMergeAutoDoneAfter24h(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	r := aRelease(db.ReleaseStageInProduction).
+		promotedAt(now.Add(-25 * time.Hour)).
+		directMerge().
+		// no withProductionDeploy() — direct merges never link one
+		build()
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStageDone {
+		t.Errorf("direct-merge release promoted >24h ago must derive done; got %q", got)
+	}
+}
+
+// TestDeriveReleaseStage_DirectMergeInProductionWithinWindow — before the
+// 24h window elapses, a direct-merge release derives in_production even
+// without a linked production deploy.
+func TestDeriveReleaseStage_DirectMergeInProductionWithinWindow(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	r := aRelease(db.ReleaseStageInProduction).
+		promotedAt(now.Add(-2 * time.Hour)).
+		directMerge().
+		build()
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStageInProduction {
+		t.Errorf("fresh direct-merge release must derive in_production; got %q", got)
 	}
 }
 

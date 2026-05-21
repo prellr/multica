@@ -206,6 +206,36 @@ func TestDeriveReleaseStage_VerifyingHonoredFromStored(t *testing.T) {
 	}
 }
 
+// TestDeriveReleaseStage_StagedAtHonorsPromoting — a direct_to_prod
+// release whose merge train stamped `promoting` must NOT be pinned back
+// to in_staging by a (legacy synthetic) staged_at. ROA-31x: "IN STAGING"
+// was showing on a repo with no staging environment.
+func TestDeriveReleaseStage_StagedAtHonorsPromoting(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	r := aRelease(db.ReleaseStagePromoting).
+		stagedAt(now.Add(-10 * time.Minute)).
+		mergedAt(now.Add(-12 * time.Minute)).
+		build()
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStagePromoting {
+		t.Errorf("stored promoting with staged_at must derive promoting, not in_staging; got %q", got)
+	}
+}
+
+// TestDeriveReleaseStage_StagedAtHonorsInProduction — same tiebreaker:
+// a stored in_production survives a present staged_at.
+func TestDeriveReleaseStage_StagedAtHonorsInProduction(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	r := aRelease(db.ReleaseStageInProduction).
+		stagedAt(now.Add(-1 * time.Hour)).
+		mergedAt(now.Add(-2 * time.Hour)).
+		build()
+	if got := DeriveReleaseStage(r, nil, now); got != db.ReleaseStageInProduction {
+		t.Errorf("stored in_production with staged_at must derive in_production; got %q", got)
+	}
+}
+
 // TestDeriveReleaseStage_MergedWaitingForStaging — merge train completed,
 // no staging deploy yet => in_staging (awaiting the staging deploy event).
 func TestDeriveReleaseStage_MergedWaitingForStaging(t *testing.T) {

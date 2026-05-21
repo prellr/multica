@@ -680,6 +680,46 @@ func TestActions_SubmitReview_Approve_HappyPath(t *testing.T) {
 	}
 }
 
+// TestActions_SubmitReview_SelfApproveFallsBackToComment — GitHub rejects
+// approvals from the PR author. Multica should not require a teammate for
+// that path; it records an auditable PR comment and treats the action as
+// succeeded.
+func TestActions_SubmitReview_SelfApproveFallsBackToComment(t *testing.T) {
+	if !shipPhase3MigrationApplied(t) {
+		t.Skip("phase 3 migration not applied")
+	}
+	enableShipHub(t, true)
+	_, prID := seedPRForActions(t, "https://github.com/multica-ai/multica", 205)
+
+	var commentBody string
+	ghClient := &fakeShipGithub{
+		submitReviewFn: func(ctx context.Context, owner, repo string, prNumber int, event gh.ReviewEvent, body string) (*gh.Review, error) {
+			return nil, errors.New("github: unprocessable: Can not approve your own pull request")
+		},
+		createCommentFn: func(ctx context.Context, owner, repo string, prNumber int, body string) (*gh.Comment, error) {
+			commentBody = body
+			return &gh.Comment{ID: 440, HTMLURL: "https://github.com/multica-ai/multica/pull/205#issuecomment-440", Body: body}, nil
+		},
+	}
+	svc := &ship.Service{Q: testHandler.Queries, Github: ghClient}
+	res, err := runAction(t, svc, prID, parseUUID(testUserID), ship.ActionSubmitReview, map[string]string{"event": "APPROVE", "body": "LGTM"}, nil, pgtype.UUID{}, "")
+	if err != nil {
+		t.Fatalf("submit_review: %v", err)
+	}
+	if res.Status != ship.StatusSucceeded {
+		t.Fatalf("status: %s", res.Status)
+	}
+	if res.Comment == nil || res.Comment.ID != 440 {
+		t.Fatalf("fallback comment missing/wrong: %+v", res.Comment)
+	}
+	if !strings.Contains(commentBody, "Approved in Multica.") || !strings.Contains(commentBody, "LGTM") {
+		t.Fatalf("fallback comment body: %q", commentBody)
+	}
+	if actionRowCount(t, prID, ship.StatusSucceeded) != 1 {
+		t.Fatalf("expected one succeeded audit row")
+	}
+}
+
 // TestActions_SubmitReview_Comment_RequiresBody — COMMENT with empty body
 // is rejected at the service layer (mapped to 400 by the handler) so the
 // user sees a clean error rather than GitHub's 422 forwarded raw.

@@ -373,6 +373,13 @@ func main() {
 	// review.
 	go runShipHubPipelineRefreshPoller(sweepCtx, queries)
 
+	// Stage reconciler — recomputes every active release's derived stage
+	// and rewrites the stored `ship_release.stage` column when it has
+	// drifted. The stored column gates every write-side release action;
+	// keeping it honest is what lets MarkReleaseDone / PromoteRelease /
+	// etc. work for releases whose PRs merged outside the merge train.
+	go runShipHubStageReconciler(sweepCtx, queries)
+
 	if metricsServer != nil {
 		go func() {
 			slog.Info("metrics server starting", "addr", metricsConfig.Addr)

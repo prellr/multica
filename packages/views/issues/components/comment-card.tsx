@@ -29,7 +29,7 @@ import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { QuickEmojiPicker } from "@multica/ui/components/common/quick-emoji-picker";
 import { cn } from "@multica/ui/lib/utils";
 import { useActorName } from "@multica/core/workspace/hooks";
-import { timeAgo } from "@multica/core/utils";
+import { useTimeAgo } from "../../i18n";
 import { ContentEditor, type ContentEditorRef, copyMarkdown, ReadonlyContent, useFileDropZone, FileDropOverlay, useDownloadAttachment, useAttachmentPreview, isPreviewable } from "../../editor";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
@@ -207,6 +207,7 @@ function CommentRow({
   onToggleReaction: (commentId: string, emoji: string) => void;
 }) {
   const { t } = useT("issues");
+  const timeAgo = useTimeAgo();
   const { getActorName } = useActorName();
   const [editing, setEditing] = useState(false);
   const editEditorRef = useRef<ContentEditorRef>(null);
@@ -420,6 +421,7 @@ function CommentCardImpl({
   highlightedCommentId,
 }: CommentCardProps) {
   const { t } = useT("issues");
+  const timeAgo = useTimeAgo();
   const { getActorName } = useActorName();
   const { uploadWithToast } = useFileUpload(api);
   const isCollapsed = useCommentCollapseStore((s) => s.isCollapsed(issueId, entry.id));

@@ -513,7 +513,7 @@ func TestReleaseResponseShape_Phase7c(t *testing.T) {
 		SmokeRunID:    pgtype.Text{String: "wf-1", Valid: true},
 		MergedMainSha: pgtype.Text{String: "abc1234", Valid: true},
 		MergePaused:   false,
-	}, 0, nil)
+	}, 0, nil, "staged_strict")
 	out, err := json.Marshal(resp)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

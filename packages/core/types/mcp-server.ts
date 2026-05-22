@@ -52,3 +52,21 @@ export interface UpdateMCPServerRequest {
   read_only?: boolean;
   approval_required_for?: string;
 }
+
+export interface MCPDirectoryEntry {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  transport_types: string[];
+  publisher_name: string | null;
+  homepage: string | null;
+  stars: number;
+  last_fetched_at: string;
+}
+
+export interface MCPServerDirectoryResponse {
+  entries: MCPDirectoryEntry[];
+  total: number;
+  last_fetched_at: string | null;
+}

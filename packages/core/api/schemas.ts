@@ -10,7 +10,9 @@ import type {
   ListIssuesResponse,
   ListMCPServersResponse,
   MarketplaceSearchResult,
+  MCPDirectoryEntry,
   MCPServer,
+  MCPServerDirectoryResponse,
   TimelineEntry,
 } from "../types";
 
@@ -159,6 +161,42 @@ export const EMPTY_GET_MCP_SERVER_RESPONSE: GetMCPServerResponse = {
 
 export const MCPServerResponseSchema = MCPServerSchema;
 export const EMPTY_MCP_SERVER_RESPONSE: MCPServer = EMPTY_MCP_SERVER;
+
+const MCPDirectoryEntrySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  description: z.string().nullable().default(null),
+  transport_types: z.array(z.string()).default([]),
+  publisher_name: z.string().nullable().default(null),
+  homepage: z.string().nullable().default(null),
+  stars: z.number().default(0),
+  last_fetched_at: z.string(),
+}).loose();
+
+export const MCPServerDirectoryResponseSchema = z.object({
+  entries: z.array(MCPDirectoryEntrySchema).default([]),
+  total: z.number().default(0),
+  last_fetched_at: z.string().nullable().default(null),
+}).loose();
+
+export const EMPTY_MCP_SERVER_DIRECTORY_RESPONSE: MCPServerDirectoryResponse = {
+  entries: [],
+  total: 0,
+  last_fetched_at: null,
+};
+
+export const EMPTY_MCP_DIRECTORY_ENTRY: MCPDirectoryEntry = {
+  id: "",
+  name: "",
+  slug: "",
+  description: null,
+  transport_types: [],
+  publisher_name: null,
+  homepage: null,
+  stars: 0,
+  last_fetched_at: "",
+};
 
 const MarketplaceSkillSchema = z.object({
   name: z.string(),

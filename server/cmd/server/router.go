@@ -73,6 +73,9 @@ type RouterOptions struct {
 	HTTPMetrics  *obsmetrics.HTTPMetrics
 	DaemonHub    *daemonws.Hub
 	DaemonWakeup service.TaskWakeupNotifier
+	// StartMCPDirectoryRefresher enables the boot-time/daily mcp.directory
+	// cache refresh worker. Tests leave this false to avoid network work.
+	StartMCPDirectoryRefresher bool
 	// HeartbeatScheduler, when non-nil, replaces the default synchronous
 	// passthrough scheduler on the constructed Handler. main.go injects a
 	// BatchedHeartbeatScheduler here so the caller can also drive Run/Stop;
@@ -129,6 +132,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	}
 	if opts.ServiceCtx != nil {
 		h.ServiceCtx = opts.ServiceCtx
+	}
+	if opts.StartMCPDirectoryRefresher {
+		ctx := h.ServiceCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		go h.RunMCPServerDirectoryRefresher(ctx)
 	}
 	// Auth caches: PAT cache is shared between the regular Auth middleware,
 	// the DaemonAuth fallback (mul_) path, and the revoke handler
@@ -702,6 +712,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/allowlist/{toolName}", h.RemoveMCPServerToolAllowlistEntry)
 				})
 			})
+
+			// MCP Server Directory (mcp.directory integration)
+			r.Get("/api/mcp-server-directory", h.SearchMCPServerDirectory)
+			r.Post("/api/mcp-server-directory/refresh", h.TriggerMCPServerDirectoryRefresh)
 
 			// Pins
 			r.Route("/api/pins", func(r chi.Router) {

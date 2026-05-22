@@ -201,7 +201,7 @@ type releaseResponse struct {
 	RolledBackCompletedAt *string `json:"rolled_back_completed_at"`
 }
 
-func releaseToResponse(r db.ShipRelease, prCount int, prMergeStates []db.PullRequestState) releaseResponse {
+func releaseToResponse(r db.ShipRelease, prCount int, prMergeStates []db.PullRequestState, shape string) releaseResponse {
 	// PR4 of the Ship Hub rebuild: derive the displayed stage at read
 	// time rather than trusting the stored column. The stored stage is
 	// written by multiple producers (merge train, staging promotion,
@@ -209,9 +209,12 @@ func releaseToResponse(r db.ShipRelease, prCount int, prMergeStates []db.PullReq
 	// write or a missed webhook can leave it stale forever; derivation
 	// reconciles against the observable timestamp ladder + the sticky
 	// operator-intent terminals + member-PR merge state (ROA-311).
+	// shape is the project's pipeline shape — the derivation needs it
+	// so a direct_to_prod release's post-merge stage resolves to
+	// in_production rather than a phantom in_staging (ROA-333).
 	// See server/internal/service/ship/stage_derive.go for the full
 	// algorithm + invariants.
-	derivedStage := ship.DeriveReleaseStage(r, prMergeStates, time.Now())
+	derivedStage := ship.DeriveReleaseStage(r, prMergeStates, shape, time.Now())
 	return releaseResponse{
 		ID:                    uuidToString(r.ID),
 		WorkspaceID:           uuidToString(r.WorkspaceID),
@@ -255,11 +258,27 @@ func releaseToResponse(r db.ShipRelease, prCount int, prMergeStates []db.PullReq
 // wrapper. Callers that have just mutated a release and don't already
 // hold its member-PR rows use this to fetch the lean PR-state list
 // (GetReleasePRStates) so the derived stage in the echoed response
-// reflects the Phase 2 PR-membership rule (ROA-311). A query failure
-// degrades gracefully to Phase 1 derivation (nil states).
+// reflects the Phase 2 PR-membership rule (ROA-311). It also resolves
+// the release's project pipeline shape so the derivation is
+// shape-aware (ROA-333). A query failure degrades gracefully to a
+// Phase 1 derivation with the staged-strict default shape.
 func (h *Handler) releaseToResponseWithStates(ctx context.Context, rel db.ShipRelease, prCount int) releaseResponse {
 	prStates, _ := h.Queries.GetReleasePRStates(ctx, rel.ID)
-	return releaseToResponse(rel, prCount, prStates)
+	return releaseToResponse(rel, prCount, prStates, h.projectShape(ctx, rel.ProjectID))
+}
+
+// projectShape resolves a project's pipeline shape (direct_to_prod,
+// staged_strict, manual_only, library, manual_compose) for the stage
+// derivation. On any failure it returns the staged-strict shape — the
+// safe default EffectivePipelineConfig itself falls back to — so the
+// derivation degrades to its pre-ROA-333 behavior rather than crashing.
+func (h *Handler) projectShape(ctx context.Context, projectID pgtype.UUID) string {
+	project, err := h.Queries.GetProject(ctx, projectID)
+	if err != nil {
+		return "staged_strict"
+	}
+	cfg, _ := ship.EffectivePipelineConfig(project)
+	return cfg.Shape
 }
 
 // releaseSignoffResponse is the wire shape for ship_release_signoff
@@ -489,7 +508,8 @@ func (h *Handler) CreateRelease(w http.ResponseWriter, r *http.Request) {
 	for i, pr := range result.PRs {
 		createdPRStates[i] = pr.State
 	}
-	resp := releaseToResponse(result.Release, len(result.PRs), createdPRStates)
+	createCfg, _ := ship.EffectivePipelineConfig(project)
+	resp := releaseToResponse(result.Release, len(result.PRs), createdPRStates, createCfg.Shape)
 	body := map[string]any{
 		"release":  resp,
 		"warnings": result.Warnings,
@@ -562,7 +582,7 @@ func (h *Handler) GetRelease(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := map[string]any{
-		"release":       releaseToResponse(rel, len(prRows), prStates),
+		"release":       releaseToResponse(rel, len(prRows), prStates, h.projectShape(r.Context(), rel.ProjectID)),
 		"pull_requests": prs,
 		"events":        events,
 		"signoffs":      signoffs,
@@ -602,11 +622,14 @@ func (h *Handler) ListProjectReleases(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list releases")
 		return
 	}
+	// All releases here belong to the one project — resolve its
+	// pipeline shape once and reuse for every row's stage derivation.
+	listCfg, _ := ship.EffectivePipelineConfig(project)
 	out := make([]releaseResponse, len(rows))
 	for i, r := range rows {
 		count, _ := h.Queries.CountActiveReleasePullRequests(context.Background(), r.ID)
 		prStates, _ := h.Queries.GetReleasePRStates(context.Background(), r.ID)
-		out[i] = releaseToResponse(r, int(count), prStates)
+		out[i] = releaseToResponse(r, int(count), prStates, listCfg.Shape)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"releases": out})
 }
@@ -632,6 +655,21 @@ func (h *Handler) ListWorkspaceActiveReleases(w http.ResponseWriter, r *http.Req
 	// page load without operator intervention. The SQL filter still
 	// applies a coarse cut on the stored stage; derivation tightens it.
 	now := time.Now()
+	// ROA-333 — releases here span many projects; the stage derivation
+	// is pipeline-shape-aware, so resolve each project's shape once and
+	// memoize it (a release whose PRs merged on a direct_to_prod repo
+	// must derive to in_production, not the phantom in_staging). Avoids
+	// an N+1 GetProject per release when several share a project.
+	shapeByProject := map[string]string{}
+	shapeFor := func(projectID pgtype.UUID) string {
+		key := uuidToString(projectID)
+		if s, ok := shapeByProject[key]; ok {
+			return s
+		}
+		s := h.projectShape(r.Context(), projectID)
+		shapeByProject[key] = s
+		return s
+	}
 	out := make([]releaseResponse, 0, len(rows))
 	for _, rel := range rows {
 		// ROA-311 — fetch member-PR states so the derivation's Phase 2
@@ -641,11 +679,12 @@ func (h *Handler) ListWorkspaceActiveReleases(w http.ResponseWriter, r *http.Req
 		// N+1 over the small active-release list is acceptable — it
 		// mirrors the per-release CountActiveReleasePullRequests call.
 		prStates, _ := h.Queries.GetReleasePRStates(r.Context(), rel.ID)
-		if ship.IsTerminalDerivedStage(ship.DeriveReleaseStage(rel, prStates, now)) {
+		shape := shapeFor(rel.ProjectID)
+		if ship.IsTerminalDerivedStage(ship.DeriveReleaseStage(rel, prStates, shape, now)) {
 			continue
 		}
 		count, _ := h.Queries.CountActiveReleasePullRequests(r.Context(), rel.ID)
-		out = append(out, releaseToResponse(rel, int(count), prStates))
+		out = append(out, releaseToResponse(rel, int(count), prStates, shape))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"releases": out})
 }

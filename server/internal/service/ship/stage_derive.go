@@ -26,11 +26,21 @@
 // (a direct GitHub merge, or a merge-train goroutine that died after the
 // merge landed) never gets merged_at stamped, so the timestamp ladder
 // alone strands it in `assembling` forever and floods the Active
-// Releases rail. The PR-membership step derives such a release to
-// in_staging instead. Direct-merge releases additionally satisfy the
-// 24h auto-done rule without a linked production deploy row (the merge
-// is the evidence the deploy fired). Both fixes drop stuck releases off
-// the Active rail without operator intervention.
+// Releases rail. The PR-membership step derives such a release to its
+// post-merge stage instead. Direct-merge releases additionally satisfy
+// the 24h auto-done rule without a linked production deploy row (the
+// merge is the evidence the deploy fired). Both fixes drop stuck
+// releases off the Active rail without operator intervention.
+//
+// Phase 2b (ROA-333): the post-merge derivation is pipeline-shape-aware.
+// A direct_to_prod project has no staging environment — its pipeline is
+// assembling → merging → promoting → in_production → done — so a merged
+// release that previously derived to the hardcoded `in_staging` landed
+// on a stage that isn't in its kanban and got stuck (every advance
+// action has a stage precondition the phantom `in_staging` fails). The
+// caller now passes the project's pipeline shape; a direct_to_prod
+// release's post-merge stage is in_production, every other shape keeps
+// in_staging.
 package ship
 
 import (
@@ -46,6 +56,18 @@ import (
 // which short-circuits this auto-rule.
 const stageDoneAfterPromote = 24 * time.Hour
 
+// postMergeStage is the stage a release sits at once its PRs are
+// merged but no deploy/promote timestamp has been stamped. A
+// direct_to_prod project has no staging environment — a merge to its
+// default branch auto-deploys to production — so its post-merge
+// stage is in_production, not in_staging.
+func postMergeStage(shape string) db.ReleaseStage {
+	if shape == "direct_to_prod" {
+		return db.ReleaseStageInProduction
+	}
+	return db.ReleaseStageInStaging
+}
+
 // DeriveReleaseStage returns the stage a release SHOULD be in given the
 // observable facts on the release row. Terminal stages and the explicit
 // rollback signal are sticky; everything else is derived from the
@@ -58,6 +80,15 @@ const stageDoneAfterPromote = 24 * time.Hour
 // stamped and would otherwise strand in `assembling`. Pass an empty
 // slice when the release has no member PRs.
 //
+// shape is the project's pipeline shape — one of direct_to_prod,
+// staged_strict, manual_only, library, manual_compose (the values
+// produced by EffectivePipelineConfig(project).Shape). It makes the
+// post-merge derivation shape-aware: a direct_to_prod project has no
+// staging environment, so a merge to its default branch auto-deploys
+// to production and its post-merge stage is in_production, not the
+// phantom in_staging that isn't even in its kanban. Every other shape
+// keeps in_staging as the post-merge stage.
+//
 // The function is pure: same input → same output, no I/O, no clock skew
 // risk beyond the time.Now() call for the 24-hour auto-done rule (which
 // the test injects via the now parameter).
@@ -68,7 +99,7 @@ const stageDoneAfterPromote = 24 * time.Hour
 // release has reached" check rather than a "what was the last writer
 // trying to do" check. The latter is what the stored column does and is
 // exactly what we're moving away from.
-func DeriveReleaseStage(r db.ShipRelease, prMergeStates []db.PullRequestState, now time.Time) db.ReleaseStage {
+func DeriveReleaseStage(r db.ShipRelease, prMergeStates []db.PullRequestState, shape string, now time.Time) db.ReleaseStage {
 	// (1) Sticky terminals from the stored column. These represent
 	// explicit operator intent (Cancel button, Rollback button, Mark
 	// Done button) that no observable fact can override. A user who
@@ -129,16 +160,19 @@ func DeriveReleaseStage(r db.ShipRelease, prMergeStates []db.PullRequestState, n
 	// (6) staged_at stamped => the release reached staging; the exact
 	// stage is a tiebreaker on the stored column. staged_at alone can't
 	// distinguish in_staging / verifying / promoting / in_production, so
-	// we honor an advanced stored stage and otherwise default to
-	// in_staging.
+	// we honor an advanced stored stage and otherwise default to the
+	// shape-aware post-merge stage.
 	//
 	// Honoring promoting / in_production here matters for direct_to_prod
 	// projects: they have no staging environment, and a release that
 	// reached `promoting` must not be pinned back to `in_staging` just
 	// because a staged_at timestamp is present (a legacy synthetic
 	// staged_at from an older completeMergeTrain, or any later writer).
-	// Showing "IN STAGING" for a repo with no staging is the ROA-31x
-	// report this branch fixes.
+	// The default fall-through is shape-aware too: a direct_to_prod
+	// release carrying a legacy synthetic staged_at derives to
+	// in_production, not the phantom in_staging that isn't in its
+	// kanban. Showing "IN STAGING" for a repo with no staging is the
+	// ROA-31x report this branch fixes.
 	if r.StagedAt.Valid {
 		switch r.Stage {
 		case db.ReleaseStageVerifying,
@@ -146,15 +180,19 @@ func DeriveReleaseStage(r db.ShipRelease, prMergeStates []db.PullRequestState, n
 			db.ReleaseStageInProduction:
 			return r.Stage
 		}
-		return db.ReleaseStageInStaging
+		return postMergeStage(shape)
 	}
 
-	// (7) merged_at stamped, no staging yet => in_staging (awaiting
-	// the staging deploy that will stamp staged_at). The previous
-	// behavior went to "in_staging" via the writer in
-	// completeMergeTrain — derivation now does it directly.
+	// (7) merged_at stamped, no staging yet => the shape-aware
+	// post-merge stage. For a staged shape that's in_staging (awaiting
+	// the staging deploy that will stamp staged_at); for a
+	// direct_to_prod shape — which has no staging environment — the
+	// merge auto-deploys to production, so it's in_production. The
+	// previous behavior went to "in_staging" via the writer in
+	// completeMergeTrain — derivation now does it directly, and
+	// shape-aware.
 	if r.MergedAt.Valid {
-		return db.ReleaseStageInStaging
+		return postMergeStage(shape)
 	}
 
 	// (8) Honor the merging-state signal from the stored column when
@@ -173,12 +211,17 @@ func DeriveReleaseStage(r db.ShipRelease, prMergeStates []db.PullRequestState, n
 	// the merge-train goroutine after the merge landed, etc.) so no
 	// writer ever stamped the ladder.
 	//
-	// release_stage has no `merged` value; in_staging is the post-merge
-	// pre-deploy stage, so that's what an all-PRs-merged release derives
-	// to. This is the durable fix for ROA-311: a release whose PRs
-	// merged outside the merge train can never strand in `assembling`
-	// again. A release with NO member PRs, or with any unmerged member
-	// PR, keeps the existing behavior and falls through to step (10).
+	// release_stage has no `merged` value; the post-merge pre-deploy
+	// stage is what an all-PRs-merged release derives to, and it is
+	// shape-aware: a staged shape derives to in_staging, a
+	// direct_to_prod shape — which has no staging environment, so its
+	// merge auto-deploys to production — derives to in_production.
+	// This is the durable fix for ROA-311 (and the ROA-333 follow-up
+	// that made it shape-aware): a release whose PRs merged outside the
+	// merge train can never strand in `assembling`, nor in a phantom
+	// `in_staging` that isn't in a direct_to_prod project's kanban. A
+	// release with NO member PRs, or with any unmerged member PR, keeps
+	// the existing behavior and falls through to step (10).
 	if len(prMergeStates) > 0 {
 		allMerged := true
 		for _, st := range prMergeStates {
@@ -188,7 +231,7 @@ func DeriveReleaseStage(r db.ShipRelease, prMergeStates []db.PullRequestState, n
 			}
 		}
 		if allMerged {
-			return db.ReleaseStageInStaging
+			return postMergeStage(shape)
 		}
 	}
 

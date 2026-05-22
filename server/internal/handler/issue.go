@@ -1764,6 +1764,15 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 	}
 
+	// Platform-driven parent notification: when this issue transitions into
+	// `done` and has a parent, post a top-level system comment on the parent
+	// (MUL-2538 — replaces the agent-prompt rule that caused self-mention
+	// loops in PR #2918). The helper guards on transition + parent state and
+	// fails best-effort.
+	if statusChanged {
+		h.notifyParentOfChildDone(r.Context(), prevIssue, issue)
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -2165,6 +2174,12 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// Cancel active tasks when the issue is cancelled by a user.
 		if statusChanged && issue.Status == "cancelled" {
 			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
+		}
+
+		// Platform-driven parent notification, mirrored from UpdateIssue
+		// (MUL-2538). Best-effort; failure does not abort the batch.
+		if statusChanged {
+			h.notifyParentOfChildDone(r.Context(), prevIssue, issue)
 		}
 
 		updated++

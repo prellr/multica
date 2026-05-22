@@ -13,6 +13,8 @@ export type {
 } from "./client";
 export { parseWithFallback, setSchemaLogger } from "./schema";
 export type { ParseOptions } from "./schema";
+export { BackupStatusSchema } from "./schemas";
+export type { BackupStatus } from "./schemas";
 export { WSClient } from "./ws-client";
 
 import type { ApiClient as ApiClientType } from "./client";

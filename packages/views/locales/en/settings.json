@@ -26,6 +26,7 @@
       "repositories": "Repositories",
       "integrations": "Integrations",
       "connected-apps": "Connected Apps",
+      "system": "System",
       "labs": "Labs",
       "members": "Members"
     }
@@ -73,6 +74,10 @@
       "label": "Show system notifications",
       "hint": "Show a banner from your operating system for new inbox items when the app isn't focused."
     }
+  },
+  "system_tab": {
+    "backup_health": "Backup health",
+    "backup_threshold": "Threshold: stale after 36 hours. Backups run nightly at 3 AM via cron."
   },
   "tokens": {
     "title": "API Tokens",

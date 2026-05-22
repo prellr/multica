@@ -26,6 +26,7 @@
       "repositories": "代码仓库",
       "integrations": "集成",
       "connected-apps": "Connected Apps",
+      "system": "System",
       "labs": "实验室",
       "members": "成员"
     }
@@ -73,6 +74,10 @@
       "label": "显示系统通知",
       "hint": "App 未获得焦点时，新的收件箱条目通过操作系统弹出通知横幅。"
     }
+  },
+  "system_tab": {
+    "backup_health": "备份健康状态",
+    "backup_threshold": "阈值：超过 36 小时即视为过期。备份通过 cron 在每天凌晨 3 点运行。"
   },
   "tokens": {
     "title": "API Token",

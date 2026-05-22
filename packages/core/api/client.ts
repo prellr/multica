@@ -198,6 +198,8 @@ import {
   DashboardAgentRunTimeListSchema,
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
+  BackupStatusSchema,
+  type BackupStatus,
   EMPTY_AGENT_TEMPLATE_DETAIL,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_ATTACHMENT,
@@ -1022,6 +1024,16 @@ export class ApiClient {
       DashboardAgentRunTimeListSchema,
       [],
       { endpoint: "GET /api/dashboard/agent-runtime" },
+    );
+  }
+
+  async getBackupStatus(): Promise<BackupStatus> {
+    const raw = await this.fetch<unknown>("/api/admin/backup-status");
+    return parseWithFallback<BackupStatus>(
+      raw,
+      BackupStatusSchema,
+      { configured: false, healthy: false },
+      { endpoint: "GET /api/admin/backup-status" },
     );
   }
 

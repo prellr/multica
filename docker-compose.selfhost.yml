@@ -71,9 +71,15 @@ services:
       - "127.0.0.1:${PORT:-8080}:8080"
     volumes:
       - backend_uploads:/app/data/uploads
+      # Backup health monitoring. Set MULTICA_BACKUP_DIR in .env to the same
+      # path as multica-backup.sh (default: ~/multica-backups). The backend
+      # reads the directory read-only; BACKUP_STATUS_DIR tells it the container
+      # path (/app/data/backups here).
+      - ${MULTICA_BACKUP_DIR:-/tmp/multica-backups-unused}:/app/data/backups:ro
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-multica}:${POSTGRES_PASSWORD:-multica}@postgres:5432/${POSTGRES_DB:-multica}?sslmode=disable
       PORT: "8080"
+      BACKUP_STATUS_DIR: ${BACKUP_STATUS_DIR:-}
       METRICS_ADDR: ${METRICS_ADDR:-}
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}

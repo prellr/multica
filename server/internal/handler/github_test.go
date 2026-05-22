@@ -1467,9 +1467,12 @@ func TestWebhook_MergedPR_ChildWithParent_NotifiesParent(t *testing.T) {
 	if !strings.Contains(content, child.Identifier) {
 		t.Errorf("system comment should reference child identifier %q, got: %s", child.Identifier, content)
 	}
+	// Parent has no assignee in this fixture, so the routing mentions stay
+	// absent. Behavior for assigned parents is covered in
+	// issue_child_done_test.go (MUL-2538 Option C).
 	for _, banned := range []string{"mention://agent/", "mention://member/", "mention://squad/"} {
 		if strings.Contains(content, banned) {
-			t.Errorf("system comment must not include %q mention, got: %s", banned, content)
+			t.Errorf("system comment must not include %q mention (parent unassigned), got: %s", banned, content)
 		}
 	}
 }

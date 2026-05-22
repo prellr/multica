@@ -479,7 +479,12 @@ func renderChannelMentionContext(ctx TaskContextForEnv) string {
 	b.WriteString("Respond conversationally as a teammate. Your final stdout is captured ")
 	b.WriteString("as your reply and posted to the channel as a `channel_message` from your ")
 	b.WriteString("agent identity. There is no separate `multica` command to call.\n\n")
-	b.WriteString("Do NOT run `multica issue ...` commands — there is no issue here.\n\n")
+	if ctx.IsOrchestratorAgent {
+		b.WriteString("You MAY run `multica issue create` to open a ticket when the channel conversation warrants it. " +
+			"Do NOT run other `multica issue ...` commands (get, status, comment, assign, etc.) — there is no existing issue here.\n\n")
+	} else {
+		b.WriteString("Do NOT run `multica issue ...` commands — there is no issue here.\n\n")
+	}
 	if ctx.ChannelID != "" {
 		b.WriteString("If you need messages older than the window above (e.g. earlier context the user is referencing), run:\n\n")
 		fmt.Fprintf(&b, "```\nmultica channel history %s --before <RFC3339-timestamp> --limit 50 --output json\n```\n\n", ctx.ChannelID)

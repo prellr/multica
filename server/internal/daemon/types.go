@@ -72,6 +72,7 @@ type Task struct {
 	ProjectResources        []ProjectResourceData `json:"project_resources,omitempty"`         // project-scoped resources to expose to the agent
 	PeerAgents              []PeerAgentData       `json:"peer_agents,omitempty"`               // other non-archived agents in the same workspace, for orchestrator routing
 	IsOrchestratorWake      bool                  `json:"is_orchestrator_wake,omitempty"`      // server set this true when the claiming agent IS the workspace's orchestrator AND the trigger was agent-authored — adapts the prompt
+	IsWorkspaceOrchestrator bool                  `json:"is_workspace_orchestrator,omitempty"` // mirrors handler: true when agent is the workspace orchestrator
 	MemoryArtifacts         []MemoryArtifactData  `json:"memory_artifacts,omitempty"`          // workspace knowledge anchored to this issue or its project
 	MCPServers              []MCPServerData       `json:"mcp_servers,omitempty"`               // workspace/agent-scoped MCP servers to mount into .mcp.json
 	PriorSessionID          string                `json:"prior_session_id,omitempty"`          // Claude session ID from a previous task on this issue

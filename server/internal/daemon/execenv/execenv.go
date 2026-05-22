@@ -105,8 +105,9 @@ type TaskContextForEnv struct {
 	// ChannelHistory is recent messages older than the trigger, oldest
 	// first. renderChannelMentionContext embeds these so the agent has a
 	// transcript without needing to fetch.
-	ChannelHistory []ChannelHistoryEntry
-	IsSquadLeader  bool // true when the agent is acting as a squad leader (may exit silently on no_action)
+	ChannelHistory      []ChannelHistoryEntry
+	IsSquadLeader       bool // true when the agent is acting as a squad leader (may exit silently on no_action)
+	IsOrchestratorAgent bool // true when this agent is the workspace's configured orchestrator
 }
 
 // ChannelHistoryEntry is the daemon-side rendering shape for one message.

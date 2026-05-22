@@ -1908,6 +1908,13 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		// the orchestrator, or it loops indefinitely posting identical comments.
 		// Best-effort — a workspace fetch failure or a missing orchestrator
 		// pointer just leaves the flag false (no behavior change).
+		//
+		// Workspace-level Context (workspace.context DB column) — the per-workspace
+		// system prompt that workspace owners set in Settings → General. Inject it
+		// into the brief regardless of task kind (issue / chat / autopilot /
+		// quick-create) so every agent running in the workspace sees the same
+		// shared context. Empty string when the owner hasn't set one; the daemon
+		// skips rendering the heading in that case.
 		if ws, err := h.Queries.GetWorkspace(r.Context(), workspaceUUID); err == nil {
 			if ws.OrchestratorAgentID.Valid &&
 				uuidToString(ws.OrchestratorAgentID) == uuidToString(task.AgentID) {
@@ -1919,6 +1926,15 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				triggerAuthorAgentID != uuidToString(ws.OrchestratorAgentID) {
 				resp.IsOrchestratorWake = true
 			}
+			if ws.Context.Valid {
+				resp.WorkspaceContext = ws.Context.String
+			}
+		} else {
+			slog.Warn("task claim: failed to load workspace for context injection",
+				"task_id", uuidToString(task.ID),
+				"workspace_id", resp.WorkspaceID,
+				"error", err,
+			)
 		}
 	}
 

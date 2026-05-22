@@ -60,11 +60,16 @@ type MemoryArtifactData struct {
 // Task represents a claimed task from the server.
 // Agent data (name, skills) is populated by the claim endpoint.
 type Task struct {
-	ID                      string                `json:"id"`
-	AgentID                 string                `json:"agent_id"`
-	RuntimeID               string                `json:"runtime_id"`
-	IssueID                 string                `json:"issue_id"`
-	WorkspaceID             string                `json:"workspace_id"`
+	ID          string `json:"id"`
+	AgentID     string `json:"agent_id"`
+	RuntimeID   string `json:"runtime_id"`
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+	// WorkspaceContext mirrors workspace.context (the per-workspace system
+	// prompt set in Settings → General). Server populates this on every claim
+	// regardless of task kind so the daemon can inject `## Workspace Context`
+	// into the brief. Empty when the owner hasn't set one.
+	WorkspaceContext        string                `json:"workspace_context,omitempty"`
 	Agent                   *AgentData            `json:"agent,omitempty"`
 	Repos                   []RepoData            `json:"repos,omitempty"`
 	ProjectID               string                `json:"project_id,omitempty"`                // issue's project, when present
@@ -123,6 +128,14 @@ type Task struct {
 	ThreadIssueProjectTitle   string `json:"thread_issue_project_title,omitempty"`
 	ThreadIssueParentIssueID  string `json:"thread_issue_parent_issue_id,omitempty"`
 	ThreadIssueParentIssueKey string `json:"thread_issue_parent_issue_key,omitempty"`
+	// RequestingUserName + RequestingUserProfileDescription describe the human
+	// the agent is working on behalf of. v1 sources them from the runtime
+	// owner (the user who registered the daemon). Empty when the runtime has
+	// no owner (cloud / system runtimes) or the user hasn't set a description.
+	// Injected into the brief under `## Requesting User`; omitted entirely
+	// when description is empty so the agent doesn't see a useless heading.
+	RequestingUserName               string `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string `json:"requesting_user_profile_description,omitempty"`
 }
 
 type MCPServerData struct {

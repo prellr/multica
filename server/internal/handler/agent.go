@@ -153,11 +153,17 @@ type MemoryArtifactData struct {
 }
 
 type AgentTaskResponse struct {
-	ID                      string                `json:"id"`
-	AgentID                 string                `json:"agent_id"`
-	RuntimeID               string                `json:"runtime_id"`
-	IssueID                 string                `json:"issue_id"`
-	WorkspaceID             string                `json:"workspace_id"`
+	ID          string `json:"id"`
+	AgentID     string `json:"agent_id"`
+	RuntimeID   string `json:"runtime_id"`
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+	// WorkspaceContext is the workspace-level system prompt set in workspace
+	// settings (`workspace.context` DB column). Injected into the agent brief
+	// as `## Workspace Context` so every agent running in this workspace —
+	// regardless of issue / chat / autopilot / quick-create — sees the same
+	// shared context. Empty when the workspace owner hasn't set it.
+	WorkspaceContext        string                `json:"workspace_context,omitempty"`
 	Status                  string                `json:"status"`
 	Priority                int32                 `json:"priority"`
 	DispatchedAt            *string               `json:"dispatched_at"`

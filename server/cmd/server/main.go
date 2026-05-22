@@ -292,11 +292,12 @@ func main() {
 	sweepCtx, sweepCancel := context.WithCancel(context.Background())
 
 	r := NewRouterWithOptions(pool, hub, bus, analyticsClient, storeRedis, RouterOptions{
-		HTTPMetrics:        httpMetrics,
-		DaemonHub:          daemonHub,
-		DaemonWakeup:       daemonWakeup,
-		HeartbeatScheduler: heartbeatScheduler,
-		ServiceCtx:         sweepCtx,
+		HTTPMetrics:                httpMetrics,
+		DaemonHub:                  daemonHub,
+		DaemonWakeup:               daemonWakeup,
+		HeartbeatScheduler:         heartbeatScheduler,
+		ServiceCtx:                 sweepCtx,
+		StartMCPDirectoryRefresher: true,
 	})
 
 	srv := &http.Server{

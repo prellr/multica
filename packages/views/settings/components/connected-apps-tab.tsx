@@ -10,6 +10,7 @@ import {
   KeyRound,
   Pencil,
   Plus,
+  Search,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
@@ -67,8 +68,9 @@ import {
   useUpdateMCPServer,
   useUpsertMCPServerSecret,
 } from "@multica/core/mcp-servers/mutations";
-import type { Agent, MCPServer } from "@multica/core/types";
+import type { Agent, MCPDirectoryEntry, MCPServer } from "@multica/core/types";
 import { useT } from "../../i18n";
+import { MCPDirectoryBrowserModal } from "./mcp-directory-browser";
 
 type Transport = MCPServer["transport"];
 type Scope = MCPServer["scope"];
@@ -120,6 +122,10 @@ function stateFromServer(server: MCPServer | null): FormState {
     readOnly: server.read_only,
     approvalRequiredFor: server.approval_required_for,
   };
+}
+
+function seedFormState(initialValues?: Partial<FormState>): FormState {
+  return { ...emptyFormState(), ...(initialValues ?? {}) };
 }
 
 function formatTimestamp(value: string | null) {
@@ -222,21 +228,25 @@ function MCPServerDialog({
   onOpenChange,
   editing,
   agents,
+  initialValues,
+  showDirectoryUrlNote = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   editing: MCPServer | null;
   agents: Agent[];
+  initialValues?: Partial<FormState>;
+  showDirectoryUrlNote?: boolean;
 }) {
   const { t } = useT("settings");
-  const [form, setForm] = useState<FormState>(() => stateFromServer(editing));
+  const [form, setForm] = useState<FormState>(() => editing ? stateFromServer(editing) : seedFormState(initialValues));
   const createMutation = useCreateMCPServer();
   const updateMutation = useUpdateMCPServer();
   const isSaving = createMutation.isPending || updateMutation.isPending;
 
   useEffect(() => {
-    if (open) setForm(stateFromServer(editing));
-  }, [editing, open]);
+    if (open) setForm(editing ? stateFromServer(editing) : seedFormState(initialValues));
+  }, [editing, initialValues, open]);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -345,6 +355,11 @@ function MCPServerDialog({
                 required
                 type="url"
               />
+              {showDirectoryUrlNote && !editing && (
+                <p className="text-xs text-muted-foreground">
+                  {t(($) => $.connected_apps.directory_url_note)}
+                </p>
+              )}
             </div>
           )}
 
@@ -689,7 +704,10 @@ export function ConnectedAppsTab() {
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const user = useAuthStore((s) => s.user);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
   const [editing, setEditing] = useState<MCPServer | null>(null);
+  const [initialValues, setInitialValues] = useState<Partial<FormState> | undefined>();
+  const [showDirectoryUrlNote, setShowDirectoryUrlNote] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MCPServer | null>(null);
   const deleteMutation = useDeleteMCPServer();
@@ -701,11 +719,37 @@ export function ConnectedAppsTab() {
 
   function openCreateDialog() {
     setEditing(null);
+    setInitialValues(undefined);
+    setShowDirectoryUrlNote(false);
     setDialogOpen(true);
   }
 
   function openEditDialog(server: MCPServer) {
     setEditing(server);
+    setInitialValues(undefined);
+    setShowDirectoryUrlNote(false);
+    setDialogOpen(true);
+  }
+
+  function preferredTransport(entry: MCPDirectoryEntry): Transport {
+    if (entry.transport_types.includes("http")) return "http";
+    if (entry.transport_types.includes("sse")) return "sse";
+    if (entry.transport_types.includes("stdio")) return "stdio";
+    return "sse";
+  }
+
+  function handleDirectoryConnect(entry: MCPDirectoryEntry) {
+    const transport = preferredTransport(entry);
+    setEditing(null);
+    setInitialValues({
+      name: entry.name,
+      transport,
+      url: transport === "stdio" ? "" : entry.homepage ?? "",
+      command: "",
+      argsText: "",
+    });
+    setShowDirectoryUrlNote(transport !== "stdio" && !!entry.homepage);
+    setBrowsing(false);
     setDialogOpen(true);
   }
 
@@ -731,10 +775,16 @@ export function ConnectedAppsTab() {
             </p>
           </div>
           {canManage && (
-            <Button size="sm" onClick={openCreateDialog}>
-              <Plus className="size-4" />
-              {t(($) => $.connected_apps.add_server)}
-            </Button>
+            <div className="flex shrink-0 gap-2">
+              <Button size="sm" variant="outline" onClick={() => setBrowsing(true)}>
+                <Search className="size-4" />
+                {t(($) => $.connected_apps.browse_directory)}
+              </Button>
+              <Button size="sm" onClick={openCreateDialog}>
+                <Plus className="size-4" />
+                {t(($) => $.connected_apps.add_server)}
+              </Button>
+            </div>
           )}
         </div>
 
@@ -780,6 +830,14 @@ export function ConnectedAppsTab() {
         onOpenChange={setDialogOpen}
         editing={editing}
         agents={agents}
+        initialValues={initialValues}
+        showDirectoryUrlNote={showDirectoryUrlNote}
+      />
+
+      <MCPDirectoryBrowserModal
+        open={browsing}
+        onOpenChange={setBrowsing}
+        onConnect={handleDirectoryConnect}
       />
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>

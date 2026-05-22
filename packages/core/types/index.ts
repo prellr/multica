@@ -136,6 +136,8 @@ export type {
   GetMCPServerResponse,
   CreateMCPServerRequest,
   UpdateMCPServerRequest,
+  MCPDirectoryEntry,
+  MCPServerDirectoryResponse,
 } from "./mcp-server";
 export type {
   MemoryArtifact,

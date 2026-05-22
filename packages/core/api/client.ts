@@ -93,6 +93,7 @@ import type {
   UpdateMCPServerRequest,
   ListMCPServersResponse,
   GetMCPServerResponse,
+  MCPServerDirectoryResponse,
   NotificationPreferenceResponse,
   NotificationPreferences,
   Channel,
@@ -271,6 +272,8 @@ import {
   EMPTY_GET_MCP_SERVER_RESPONSE,
   MCPServerResponseSchema,
   EMPTY_MCP_SERVER_RESPONSE,
+  MCPServerDirectoryResponseSchema,
+  EMPTY_MCP_SERVER_DIRECTORY_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -2058,6 +2061,28 @@ export class ApiClient {
     await this.fetch(`/api/mcp-servers/${id}/tool-allowlist/${encodeURIComponent(toolName)}`, {
       method: "DELETE",
     });
+  }
+
+  async searchMCPServerDirectory(params?: {
+    q?: string;
+    transport?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<MCPServerDirectoryResponse> {
+    const search = new URLSearchParams();
+    if (params?.q) search.set("q", params.q);
+    if (params?.transport) search.set("transport", params.transport);
+    if (params?.limit !== undefined) search.set("limit", String(params.limit));
+    if (params?.offset !== undefined) search.set("offset", String(params.offset));
+    const qs = search.toString();
+    const raw = await this.fetch<unknown>(`/api/mcp-server-directory${qs ? `?${qs}` : ""}`);
+    return parseWithFallback(raw, MCPServerDirectoryResponseSchema, EMPTY_MCP_SERVER_DIRECTORY_RESPONSE, {
+      endpoint: "GET /api/mcp-server-directory",
+    }) as MCPServerDirectoryResponse;
+  }
+
+  async refreshMCPServerDirectory(): Promise<{ status: string }> {
+    return this.fetch("/api/mcp-server-directory/refresh", { method: "POST" });
   }
 
   // Memory artifacts — workspace-scoped, kind-discriminated markdown

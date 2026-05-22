@@ -938,6 +938,19 @@ type McpServer struct {
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 }
 
+type McpServerDirectory struct {
+	ID             string             `json:"id"`
+	Name           string             `json:"name"`
+	Slug           string             `json:"slug"`
+	Description    pgtype.Text        `json:"description"`
+	TransportTypes []string           `json:"transport_types"`
+	PublisherName  pgtype.Text        `json:"publisher_name"`
+	Homepage       pgtype.Text        `json:"homepage"`
+	Stars          int32              `json:"stars"`
+	SearchVector   interface{}        `json:"search_vector"`
+	LastFetchedAt  pgtype.Timestamptz `json:"last_fetched_at"`
+}
+
 type McpServerSecret struct {
 	ID             pgtype.UUID        `json:"id"`
 	ServerID       pgtype.UUID        `json:"server_id"`

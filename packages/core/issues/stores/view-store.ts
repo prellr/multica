@@ -230,6 +230,10 @@ export const viewStorePersistOptions = (name: string) => ({
   name,
   storage: createJSONStorage(() => createWorkspaceAwareStorage(defaultStorage)),
   partialize: (state: IssueViewState) => ({
+    // NOTE: `agentRunningFilter` is intentionally NOT persisted — running
+    // state changes second-to-second, and a stored toggle would let users
+    // return to an unexplained empty list. Keep it ephemeral. See the
+    // field comment on IssueViewState.
     viewMode: state.viewMode,
     statusFilters: state.statusFilters,
     priorityFilters: state.priorityFilters,

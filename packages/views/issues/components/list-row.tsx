@@ -219,6 +219,8 @@ export const ListRow = memo(function ListRow({
           <span className="w-16 shrink-0 text-xs text-muted-foreground">
             {issue.identifier}
           </span>
+          {activeTasks && activeTasks.length > 0 && <WorkingBadge tasks={activeTasks} />}
+
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
             <span className="truncate">{issue.title}</span>
             {showChildProgress && (

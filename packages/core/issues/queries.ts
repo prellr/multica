@@ -78,6 +78,26 @@ async function fetchFirstPages(filter: MyIssuesFilter = {}): Promise<ListIssuesC
 }
 
 /**
+ * "All my issues" — union of three server filters:
+ *   assignee_id=me OR creator_id=me OR involves_user_id=me
+ *
+ * The backend has no OR-across-user-filters today, so we run the three
+ * existing single-filter fetches in parallel and dedupe on the client by
+ * issue id within each status bucket. Order within each bucket preserves
+ * the first-seen position (each sub-fetch is already server-sorted).
+ *
+ * Personal lists are bounded (tens to a few hundred issues across all
+ * three relations), so 3× the request count is acceptable — a single
+ * fetchFirstPages already runs 7 status fetches in parallel, so the total
+ * here is 21 small parallel requests. Easy enough; no need to add a new
+ * backend query just for this scope.
+ *
+ * `total` per bucket is set to the merged length, not the true server
+ * total — pagination on the "All" scope is out of scope; the first
+ * 50-per-status × 3 widening (deduped) is what the page renders.
+ */
+
+/**
  * CACHE SHAPE NOTE: The raw cache stores {@link ListIssuesCache} (buckets keyed
  * by status, each with `{ issues, total }`), and `select` flattens it to
  * `Issue[]` for consumers. Mutations and ws-updaters must use

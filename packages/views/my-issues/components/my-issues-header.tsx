@@ -119,7 +119,11 @@ export function MyIssuesHeader({
   activeTasksMap?: Map<string, AgentTask[]>;
 }) {
   const { t } = useT("my-issues");
+  // Pulls the chip-wide "Viewing only working agents" label from the
+  // shared issues namespace so the copy stays identical with the global
+  // /issues page header — single source of truth for this filter cue.
   const SCOPES: { value: MyIssuesScope; label: string; description: string }[] = [
+    { value: "all", label: t(($) => $.header.scope.all_label), description: t(($) => $.header.scope.all_description) },
     { value: "assigned", label: t(($) => $.header.scope.assigned_label), description: t(($) => $.header.scope.assigned_description) },
     { value: "created", label: t(($) => $.header.scope.created_label), description: t(($) => $.header.scope.created_description) },
     { value: "agents", label: t(($) => $.header.scope.agents_label), description: t(($) => $.header.scope.agents_description) },
@@ -132,7 +136,6 @@ export function MyIssuesHeader({
   const cardProperties = useStore(myIssuesViewStore, (s) => s.cardProperties);
   const scope = useStore(myIssuesViewStore, (s) => s.scope);
   const act = myIssuesViewStore.getState();
-
   const counts = useIssueCounts(allIssues);
 
   const hasActiveFilters =

@@ -80,6 +80,7 @@ type Handler struct {
 	Bus                   *events.Bus
 	TaskService           *service.TaskService
 	AutopilotService      *service.AutopilotService
+	ReminderService       *service.ReminderService
 	ChannelService        *channel.ChannelService
 	ChannelMessageService *channel.MessageService
 	EmailService          *service.EmailService
@@ -130,6 +131,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		Bus:                   bus,
 		TaskService:           taskSvc,
 		AutopilotService:      service.NewAutopilotService(queries, txStarter, bus, taskSvc),
+		ReminderService:       service.NewReminderService(queries, bus),
 		ChannelService:        channel.NewChannelService(queries, txStarter),
 		ChannelMessageService: channel.NewMessageService(queries),
 		EmailService:          emailService,

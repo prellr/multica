@@ -332,6 +332,8 @@ func main() {
 	// no configured retention.
 	channelMsgSvc := channel.NewMessageService(queries)
 	go runChannelRetentionSweeper(sweepCtx, channelMsgSvc)
+	reminderSvc := service.NewReminderService(queries, bus)
+	go runReminderScheduler(sweepCtx, reminderSvc)
 	// Ship Hub Phase 2 secret migrator. Runs once on boot to move any
 	// plaintext ship_hub.github_token entries out of workspace.settings
 	// and into the encrypted workspace_secret table. Idempotent: a

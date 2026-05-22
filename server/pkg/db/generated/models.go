@@ -1162,6 +1162,24 @@ type PullRequestReview struct {
 	SubmittedAt       pgtype.Timestamptz `json:"submitted_at"`
 }
 
+type Reminder struct {
+	ID            pgtype.UUID        `json:"id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	CreatorType   string             `json:"creator_type"`
+	CreatorID     pgtype.UUID        `json:"creator_id"`
+	RecipientType string             `json:"recipient_type"`
+	RecipientID   pgtype.UUID        `json:"recipient_id"`
+	Kind          string             `json:"kind"`
+	Title         string             `json:"title"`
+	Body          pgtype.Text        `json:"body"`
+	IssueID       pgtype.UUID        `json:"issue_id"`
+	RemindAt      pgtype.Timestamptz `json:"remind_at"`
+	Status        string             `json:"status"`
+	DeliveredAt   pgtype.Timestamptz `json:"delivered_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ShipCardAction struct {
 	ID            pgtype.UUID        `json:"id"`
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`

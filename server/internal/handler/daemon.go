@@ -1906,12 +1906,17 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		// the orchestrator, or it loops indefinitely posting identical comments.
 		// Best-effort — a workspace fetch failure or a missing orchestrator
 		// pointer just leaves the flag false (no behavior change).
-		if ws, err := h.Queries.GetWorkspace(r.Context(), workspaceUUID); err == nil &&
-			ws.OrchestratorAgentID.Valid &&
-			uuidToString(ws.OrchestratorAgentID) == uuidToString(task.AgentID) &&
-			resp.TriggerAuthorType == "agent" &&
-			triggerAuthorAgentID != uuidToString(ws.OrchestratorAgentID) {
-			resp.IsOrchestratorWake = true
+		if ws, err := h.Queries.GetWorkspace(r.Context(), workspaceUUID); err == nil {
+			if ws.OrchestratorAgentID.Valid &&
+				uuidToString(ws.OrchestratorAgentID) == uuidToString(task.AgentID) {
+				resp.IsWorkspaceOrchestrator = true
+			}
+			if ws.OrchestratorAgentID.Valid &&
+				uuidToString(ws.OrchestratorAgentID) == uuidToString(task.AgentID) &&
+				resp.TriggerAuthorType == "agent" &&
+				triggerAuthorAgentID != uuidToString(ws.OrchestratorAgentID) {
+				resp.IsOrchestratorWake = true
+			}
 		}
 	}
 

@@ -2113,6 +2113,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		ChannelAuthorName:     task.TriggerAuthorName,
 		ChannelHistory:        convertChannelHistoryForEnv(task.ChannelHistory),
 		IsSquadLeader:         strings.Contains(instructions, "## Squad Operating Protocol"),
+		IsOrchestratorAgent:   task.IsWorkspaceOrchestrator,
 	}
 
 	// Mark candidate env roots as active before any env work so the GC loop

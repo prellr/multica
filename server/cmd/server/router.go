@@ -873,6 +873,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/{id}/archive", h.ArchiveInboxItem)
 			})
 
+			r.Route("/api/reminders", func(r chi.Router) {
+				r.Get("/", h.ListReminders)
+				r.Post("/", h.CreateReminder)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetReminder)
+					r.Post("/cancel", h.CancelReminder)
+				})
+			})
+
 			// Notification preferences
 			r.Route("/api/notification-preferences", func(r chi.Router) {
 				r.Get("/", h.GetNotificationPreferences)

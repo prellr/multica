@@ -1347,3 +1347,14 @@ const DashboardAgentRunTimeSchema = z.object({
 }).loose();
 
 export const DashboardAgentRunTimeListSchema = z.array(DashboardAgentRunTimeSchema);
+
+export const BackupStatusSchema = z.object({
+  configured: z.boolean(),
+  last_backup_at: z.string().nullable().optional(),
+  age_seconds: z.number().nullable().optional(),
+  healthy: z.boolean(),
+  postgres_dump_size: z.number().nullable().optional(),
+  error: z.string().nullable().optional(),
+}).loose();
+
+export type BackupStatus = z.infer<typeof BackupStatusSchema>;

@@ -810,6 +810,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/agent-runtime", h.GetDashboardAgentRunTime)
 			})
 
+			// Admin / ops endpoints - owner/admin role is checked inside the handlers.
+			r.Get("/api/admin/backup-status", h.GetBackupStatus)
+
 			// Runtimes
 			r.Route("/api/runtimes", func(r chi.Router) {
 				r.Get("/", h.ListAgentRuntimes)

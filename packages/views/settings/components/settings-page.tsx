@@ -11,9 +11,13 @@ import {
   FolderGit2,
   FlaskConical,
   Bell,
+  Server,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multica/ui/components/ui/tabs";
+import { useQuery } from "@tanstack/react-query";
+import { useAuthStore } from "@multica/core/auth";
 import { useCurrentWorkspace } from "@multica/core/paths";
+import { memberListOptions } from "@multica/core/workspace/queries";
 import { useNavigation } from "../../navigation";
 import { AccountTab } from "./account-tab";
 import { PreferencesTab } from "./preferences-tab";
@@ -25,6 +29,7 @@ import { IntegrationsTab } from "./integrations-tab";
 import { ConnectedAppsTab } from "./connected-apps-tab";
 import { LabsTab } from "./labs-tab";
 import { NotificationsTab } from "./notifications-tab";
+import { SystemTab } from "./system-tab";
 import { useT } from "../../i18n";
 
 const ACCOUNT_TAB_KEYS = ["profile", "preferences", "notifications", "tokens"] as const;
@@ -39,12 +44,13 @@ const ACCOUNT_TAB_ICONS = {
   tokens: Plug,
 } as const;
 
-const WORKSPACE_TAB_KEYS = ["general", "repositories", "integrations", "connected-apps", "labs", "members"] as const;
+const WORKSPACE_TAB_KEYS = ["general", "repositories", "integrations", "connected-apps", "system", "labs", "members"] as const;
 const WORKSPACE_TAB_VALUES = {
   general: "workspace",
   repositories: "repositories",
   integrations: "integrations",
   "connected-apps": "connected-apps",
+  system: "system",
   labs: "labs",
   members: "members",
 } as const;
@@ -53,6 +59,7 @@ const WORKSPACE_TAB_ICONS = {
   repositories: FolderGit2,
   integrations: Plug,
   "connected-apps": AppWindow,
+  system: Server,
   labs: FlaskConical,
   members: Users,
 } as const;
@@ -74,8 +81,21 @@ interface SettingsPageProps {
 
 export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
   const { t } = useT("settings");
-  const workspaceName = useCurrentWorkspace()?.name;
+  const workspace = useCurrentWorkspace();
+  const workspaceName = workspace?.name;
+  const wsId = workspace?.id ?? "";
+  const user = useAuthStore((s) => s.user);
+  const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const member = members.find((m) => m.user_id === user?.id) ?? null;
+  const isAdmin = member?.role === "owner" || member?.role === "admin";
   const navigation = useNavigation();
+  const workspaceTabValues = React.useMemo(
+    () =>
+      Object.entries(WORKSPACE_TAB_VALUES)
+        .filter(([key]) => key !== "system" || isAdmin)
+        .map(([, value]) => value),
+    [isAdmin],
+  );
 
   // Whitelist of valid tab values; unknown ?tab=… values silently fall back to
   // the default. Whitelisting also blocks junk like ?tab=<script> from
@@ -84,10 +104,10 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
     () =>
       new Set<string>([
         ...ACCOUNT_TAB_KEYS,
-        ...Object.values(WORKSPACE_TAB_VALUES),
+        ...workspaceTabValues,
         ...(extraAccountTabs?.map((tab) => tab.value) ?? []),
       ]),
-    [extraAccountTabs],
+    [extraAccountTabs, workspaceTabValues],
   );
 
   const tabFromUrl = navigation.searchParams.get(TAB_QUERY_KEY);
@@ -138,6 +158,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
             {workspaceName ?? t(($) => $.page.workspace_fallback)}
           </span>
           {WORKSPACE_TAB_KEYS.map((key) => {
+            if (key === "system" && !isAdmin) return null;
             const Icon = WORKSPACE_TAB_ICONS[key];
             return (
               <TabsTrigger key={key} value={WORKSPACE_TAB_VALUES[key]}>
@@ -160,6 +181,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <TabsContent value="repositories"><RepositoriesTab /></TabsContent>
           <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
           <TabsContent value="connected-apps"><ConnectedAppsTab /></TabsContent>
+          {isAdmin && <TabsContent value="system"><SystemTab /></TabsContent>}
           <TabsContent value="labs"><LabsTab /></TabsContent>
           <TabsContent value="members"><MembersTab /></TabsContent>
           {extraAccountTabs?.map((tab) => (

@@ -52,7 +52,7 @@ func TestRollupTaskUsageDaily_AggregatesAndIsIdempotent(t *testing.T) {
 
 	// Two rows on the same (date, provider, model) — must collapse to
 	// a single output row whose totals sum the inputs.
-	insertUsage := func(usageAt time.Time, model string, in, out int64) {
+	insertUsage := func(usageAt time.Time, model string, in, out int64) string {
 		var taskID string
 		if err := testPool.QueryRow(ctx, `
 			INSERT INTO agent_task_queue (agent_id, issue_id, runtime_id, status, created_at)
@@ -70,9 +70,10 @@ func TestRollupTaskUsageDaily_AggregatesAndIsIdempotent(t *testing.T) {
 		t.Cleanup(func() {
 			testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
 		})
+		return taskID
 	}
 
-	insertUsage(day.Add(1*time.Hour), "claude-3-5-sonnet", 100, 10)
+	correctionTaskID := insertUsage(day.Add(1*time.Hour), "claude-3-5-sonnet", 100, 10)
 	insertUsage(day.Add(2*time.Hour), "claude-3-5-sonnet", 200, 20)
 	// A second model on the same day must produce a *separate* output
 	// row (different group key).
@@ -152,12 +153,10 @@ func TestRollupTaskUsageDaily_AggregatesAndIsIdempotent(t *testing.T) {
 	correctionMark := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	if _, err := testPool.Exec(ctx, `
 		UPDATE task_usage SET input_tokens = 1000, updated_at = $1
-		 WHERE task_id IN (
-		   SELECT id FROM agent_task_queue WHERE runtime_id = $2 AND created_at::date = $3::date
-		 )
+		 WHERE task_id = $2
 		   AND model = 'claude-3-5-sonnet'
 		   AND input_tokens = 100
-	`, correctionMark, runtimeID, day); err != nil {
+	`, correctionMark, correctionTaskID); err != nil {
 		t.Fatalf("simulate correction: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `

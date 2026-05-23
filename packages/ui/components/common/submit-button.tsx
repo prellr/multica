@@ -37,7 +37,7 @@ function SubmitButton({
 }: SubmitButtonProps) {
   if (running) {
     const stopButton = (
-      <Button size="icon-sm" onClick={onStop}>
+      <Button size="icon-sm" onClick={onStop} aria-label="Stop">
         <Square className="fill-current" />
       </Button>
     );
@@ -51,7 +51,12 @@ function SubmitButton({
   }
 
   const submitButton = (
-    <Button size="icon-sm" disabled={disabled || loading} onClick={onClick}>
+    <Button
+      size="icon-sm"
+      disabled={disabled || loading}
+      onClick={onClick}
+      aria-label="Submit"
+    >
       {loading ? <Loader2 className="animate-spin" /> : <ArrowUp />}
     </Button>
   );

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { loginAsDefault, createTestApi } from "./helpers";
+import { createTestApi, loginAsDefault, openManualIssueDialog } from "./helpers";
 import type { TestApiClient } from "./fixtures";
 
 test.describe("Issues", () => {
@@ -33,18 +33,16 @@ test.describe("Issues", () => {
     await expect(page.locator("text=Backlog")).toBeVisible();
 
     // Switch to list view
-    await page.click("text=List");
+    await page.getByRole("button", { name: "Board view" }).click();
+    await page.getByRole("menuitem", { name: "List" }).click();
     await expect(page.getByText(title)).toBeVisible();
   });
 
   test("can create a new issue", async ({ page }) => {
-    const newIssueButton = page.getByRole("button", { name: "New Issue" });
-    await expect(newIssueButton).toBeVisible();
-    await newIssueButton.click();
+    await openManualIssueDialog(page);
 
     const title = "E2E Created " + Date.now();
     const titleInput = page.getByRole("textbox", { name: "Issue title" });
-    await expect(titleInput).toBeVisible();
     await titleInput.fill(title);
     await page.getByRole("button", { name: "Create Issue" }).click();
 
@@ -83,10 +81,9 @@ test.describe("Issues", () => {
   });
 
   test("can dismiss issue creation", async ({ page }) => {
-    await page.getByRole("button", { name: "New Issue" }).click();
+    await openManualIssueDialog(page);
 
     const titleInput = page.getByRole("textbox", { name: "Issue title" });
-    await expect(titleInput).toBeVisible();
 
     await page.keyboard.press("Escape");
 

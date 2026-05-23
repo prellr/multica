@@ -21,6 +21,7 @@ interface TestWorkspace {
 
 export class TestApiClient {
   private token: string | null = null;
+  private email: string | null = null;
   private workspaceSlug: string | null = null;
   private workspaceId: string | null = null;
   private createdIssueIds: string[] = [];
@@ -64,6 +65,7 @@ export class TestApiClient {
       const data = await verifyRes.json();
 
       this.token = data.token;
+      this.email = email;
 
       // Update user name if needed
       if (name && data.user?.name !== name) {
@@ -72,6 +74,14 @@ export class TestApiClient {
           body: JSON.stringify({ name }),
         });
       }
+
+      await client.query(
+        `UPDATE "user"
+            SET onboarded_at = COALESCE(onboarded_at, now()),
+                starter_content_state = COALESCE(starter_content_state, 'skipped_legacy')
+          WHERE email = $1`,
+        [email],
+      );
 
       await client.query("DELETE FROM verification_code WHERE email = $1", [email]);
 
@@ -96,7 +106,7 @@ export class TestApiClient {
 
   async ensureWorkspace(name = "E2E Workspace", slug = "e2e-workspace") {
     const workspaces = await this.getWorkspaces();
-    const workspace = workspaces.find((item) => item.slug === slug) ?? workspaces[0];
+    const workspace = workspaces.find((item) => item.slug === slug);
     if (workspace) {
       this.workspaceId = workspace.id;
       this.workspaceSlug = workspace.slug;
@@ -114,9 +124,10 @@ export class TestApiClient {
     }
 
     const refreshed = await this.getWorkspaces();
-    const created = refreshed.find((item) => item.slug === slug) ?? refreshed[0];
+    const created = refreshed.find((item) => item.slug === slug);
     if (created) {
       this.workspaceId = created.id;
+      this.workspaceSlug = created.slug;
       return created;
     }
 
@@ -137,6 +148,17 @@ export class TestApiClient {
     await this.authedFetch(`/api/issues/${id}`, { method: "DELETE" });
   }
 
+  async createComment(issueId: string, content: string) {
+    const res = await this.authedFetch(`/api/issues/${issueId}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    });
+    if (!res.ok) {
+      throw new Error(`create comment failed: ${res.status}`);
+    }
+    return res.json();
+  }
+
   /** Clean up all issues created during this test. */
   async cleanup() {
     for (const id of this.createdIssueIds) {
@@ -151,6 +173,10 @@ export class TestApiClient {
 
   getToken() {
     return this.token;
+  }
+
+  getEmail() {
+    return this.email;
   }
 
   private async authedFetch(path: string, init?: RequestInit) {

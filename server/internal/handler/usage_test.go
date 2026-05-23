@@ -44,8 +44,16 @@ func TestWorkspaceUsage_BucketsByUsageTime(t *testing.T) {
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
 	})
 
-	now := time.Now().UTC()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	var today time.Time
+	var todayKey, yesterdayKey string
+	if err := testPool.QueryRow(ctx, `
+		SELECT
+			date_trunc('day', now())::timestamptz,
+			to_char(date_trunc('day', now()), 'YYYY-MM-DD'),
+			to_char(date_trunc('day', now()) - interval '1 day', 'YYYY-MM-DD')
+	`).Scan(&today, &todayKey, &yesterdayKey); err != nil {
+		t.Fatalf("fetch database-local day boundary: %v", err)
+	}
 	yesterdayLate := today.Add(-2 * time.Minute)
 	todayEarly := today.Add(5 * time.Minute)
 	yesterdayMorning := today.Add(-19 * time.Hour)
@@ -70,7 +78,7 @@ func TestWorkspaceUsage_BucketsByUsageTime(t *testing.T) {
 		})
 	}
 
-	insertTaskWithUsage(yesterdayLate, todayEarly, 1000)         // cross-midnight
+	insertTaskWithUsage(yesterdayLate, todayEarly, 1000)          // cross-midnight
 	insertTaskWithUsage(yesterdayMorning, yesterdayMorning, 2000) // full-day yesterday
 
 	// /api/usage/daily — daily breakdown.
@@ -94,8 +102,6 @@ func TestWorkspaceUsage_BucketsByUsageTime(t *testing.T) {
 	for _, r := range dailyResp {
 		byDate[r.Date] += r.TotalInputTokens
 	}
-	todayKey := today.Format("2006-01-02")
-	yesterdayKey := today.Add(-24 * time.Hour).Format("2006-01-02")
 	if byDate[todayKey] < 1000 {
 		t.Errorf("daily: today bucket expected >=1000 input tokens (cross-midnight task), got %d (full map: %v)", byDate[todayKey], byDate)
 	}

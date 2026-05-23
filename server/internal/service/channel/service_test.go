@@ -1036,8 +1036,8 @@ func TestSelectAgentsForMention_DedupWindow(t *testing.T) {
 		t.Fatalf("lookup runtime: %v", err)
 	}
 	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context)
-		VALUES ($1, $2, NULL, 'queued', 0, $3)
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context, created_at)
+		VALUES ($1, $2, NULL, 'queued', 0, $3, now() - interval '2 seconds')
 	`, testAgentID, runtimeID, contextJSON); err != nil {
 		t.Fatalf("seed task: %v", err)
 	}

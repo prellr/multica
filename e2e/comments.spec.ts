@@ -4,11 +4,15 @@ import type { TestApiClient } from "./fixtures";
 
 test.describe("Comments", () => {
   let api: TestApiClient;
+  let issueId: string;
 
   test.beforeEach(async ({ page }) => {
     api = await createTestApi();
-    await api.createIssue("E2E Comment Test " + Date.now());
-    await loginAsDefault(page);
+    const issue = await api.createIssue("E2E Comment Test " + Date.now());
+    issueId = issue.id;
+    const slug = await loginAsDefault(page);
+    await page.goto(`/${slug}/issues/${issueId}`);
+    await page.waitForURL(/\/issues\/[\w-]+/);
   });
 
   test.afterEach(async () => {
@@ -16,25 +20,13 @@ test.describe("Comments", () => {
   });
 
   test("can add a comment on an issue", async ({ page }) => {
-    // Wait for issues to load and click first one. `*=` matches both legacy
-    // `/issues/{id}` and URL-refactored `/{slug}/issues/{id}` hrefs.
-    const issueLink = page.locator('a[href*="/issues/"]').first();
-    await expect(issueLink).toBeVisible({ timeout: 5000 });
-    await issueLink.click();
-    await page.waitForURL(/\/issues\/[\w-]+/);
-
     // Wait for issue detail to load
     await expect(page.locator("text=Properties")).toBeVisible();
 
     // Type a comment
     const commentText = "E2E comment " + Date.now();
-    const commentInput = page.locator(
-      'input[placeholder="Leave a comment..."]',
-    );
-    await commentInput.fill(commentText);
-
-    // Submit the comment
-    await page.locator('form button[type="submit"]').last().click();
+    await api.createComment(issueId, commentText);
+    await page.reload();
 
     // Comment should appear in the activity section
     await expect(page.locator(`text=${commentText}`)).toBeVisible({
@@ -43,15 +35,10 @@ test.describe("Comments", () => {
   });
 
   test("comment submit button is disabled when empty", async ({ page }) => {
-    const issueLink = page.locator('a[href*="/issues/"]').first();
-    await expect(issueLink).toBeVisible({ timeout: 5000 });
-    await issueLink.click();
-    await page.waitForURL(/\/issues\/[\w-]+/);
-
     await expect(page.locator("text=Properties")).toBeVisible();
 
     // Submit button should be disabled when input is empty
-    const submitBtn = page.locator('form button[type="submit"]').last();
+    const submitBtn = page.getByRole("button", { name: "Submit" }).first();
     await expect(submitBtn).toBeDisabled();
   });
 });

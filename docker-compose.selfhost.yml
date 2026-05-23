@@ -73,6 +73,14 @@ services:
       - backend_uploads:/app/data/uploads
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-multica}:${POSTGRES_PASSWORD:-multica}@postgres:5432/${POSTGRES_DB:-multica}?sslmode=disable
+      # Pool sizing — the Go server's default is MaxConns=25 (see
+      # server/cmd/server/dbstats.go), which is on the edge for a host
+      # with 6+ heartbeating daemons + ~8 background pollers + WS/HTTP.
+      # Bursts saturated the pool and cascaded into multi-minute API
+      # degradation. 50 doubles the headroom while staying well below
+      # Postgres's default max_connections=100.
+      DATABASE_MAX_CONNS: ${DATABASE_MAX_CONNS:-50}
+      DATABASE_MIN_CONNS: ${DATABASE_MIN_CONNS:-5}
       PORT: "8080"
       METRICS_ADDR: ${METRICS_ADDR:-}
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}

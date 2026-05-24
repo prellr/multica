@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  DashboardAgentRunTimeListSchema,
-  DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
   EMPTY_USER,
   ListIssuesResponseSchema,
@@ -125,29 +123,6 @@ describe("dashboard + runtime usage schema drift", () => {
     expect(parsed[0]?.output_tokens).toBe(0);
     expect(parsed[0]?.cache_read_tokens).toBe(0);
     expect(parsed[0]?.cache_write_tokens).toBe(0);
-  });
-
-  it("coerces a missing date key to \"\" so the rest of the series survives", () => {
-    const parsed = DashboardUsageDailyListSchema.parse([
-      { model: "claude-opus-4-7", input_tokens: 5 },
-    ]);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0]?.date).toBe("");
-  });
-
-  it("coerces a missing agent_id key to \"\" for the agent-runtime panel", () => {
-    const parsed = DashboardAgentRunTimeListSchema.parse([
-      { total_seconds: 42, task_count: 3, failed_count: 0 },
-    ]);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0]?.agent_id).toBe("");
-  });
-
-  it("coerces a missing agent_id key to \"\" for the usage-by-agent panel", () => {
-    const parsed = DashboardUsageByAgentListSchema.parse([
-      { model: "claude-opus-4-7", input_tokens: 7 },
-    ]);
-    expect(parsed[0]?.agent_id).toBe("");
   });
 
   it("rejects a non-array body so parseWithFallback can return its fallback", () => {

@@ -53,6 +53,74 @@ describe("estimateCost", () => {
     expect(cost).toBeCloseTo(1.25, 5);
   });
 
+  it("prices a Copilot session reporting claude-opus-4.7 at the official Opus rate", () => {
+    // Copilot's `meta.agentMeta.model` is `claude-opus-4.7` (dotted). We
+    // canonicalize to the dashed catalog key so it hits the maintained $5/$25
+    // tier instead of falling through to the custom-pricing dialog.
+    const cost = estimateCost({
+      ...zeroUsage,
+      model: "claude-opus-4.7",
+      input_tokens: 1_000_000,
+      output_tokens: 1_000_000,
+    });
+    expect(cost).toBeCloseTo(5 + 25, 5);
+  });
+
+  it("prices the provider-prefixed Anthropic form (anthropic/claude-sonnet-4.6)", () => {
+    // openclaw / opencode emit `<provider>/<model>`. Same SKU as the
+    // bare form, must hit the same rate.
+    const cost = estimateCost({
+      ...zeroUsage,
+      model: "anthropic/claude-sonnet-4.6",
+      input_tokens: 1_000_000,
+      output_tokens: 1_000_000,
+    });
+    expect(cost).toBeCloseTo(3 + 15, 5);
+  });
+
+  it("prices the dated dotted Anthropic form (claude-haiku-4.5-20251001)", () => {
+    // Belt-and-braces: combine all three tolerances (provider prefix not
+    // present, but dot→dash + date strip both apply).
+    const cost = estimateCost({
+      ...zeroUsage,
+      model: "claude-haiku-4.5-20251001",
+      input_tokens: 1_000_000,
+    });
+    expect(cost).toBeCloseTo(1, 5);
+  });
+
+  it("prices the full provider+dotted+dated form (anthropic/claude-opus-4.7-20251001)", () => {
+    // All three normalization steps must compose: strip `anthropic/`,
+    // dot→dash on the Claude ID, and trim the date stamp. Pins the
+    // combined path so a future change to candidate ordering can't
+    // silently drop one tolerance.
+    const cost = estimateCost({
+      ...zeroUsage,
+      model: "anthropic/claude-opus-4.7-20251001",
+      input_tokens: 1_000_000,
+      output_tokens: 1_000_000,
+    });
+    expect(cost).toBeCloseTo(5 + 25, 5);
+  });
+
+  it("prices the 1M-context Anthropic tag form (claude-opus-4-7[1m]) at the standard Opus tier", () => {
+    // Claude Code reports the 1M-context beta as `claude-opus-4-7[1m]`.
+    // Anthropic prices it at the standard Opus rate for prompts ≤200K
+    // input tokens (with a 2× surcharge above that, which we can't see
+    // from aggregated daily totals). Strip the bracketed context tag so
+    // the tokens still land in the cost total at standard pricing —
+    // mild under-estimate, but the alternative was excluding them
+    // entirely (the bug this fixes).
+    const cost = estimateCost({
+      ...zeroUsage,
+      model: "claude-opus-4-7[1m]",
+      input_tokens: 1_000_000,
+      output_tokens: 1_000_000,
+    });
+    expect(cost).toBeCloseTo(5 + 25, 5);
+    expect(isModelPriced("claude-opus-4-7[1m]")).toBe(true);
+  });
+
   it("prices each dotted Codex catalog SKU at its own tier, not gpt-5", () => {
     // Every dotted minor version is priced independently. The resolver does
     // exact-match-after-date-strip (no startsWith fallback), so each row

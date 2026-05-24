@@ -147,9 +147,18 @@ func (a *releaseIssueOps) CloseReleaseIssue(ctx context.Context, issueID pgtype.
 	if status == "" {
 		status = "done"
 	}
-	_, err := a.h.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
-		ID:     issueID,
-		Status: status,
+	// UpdateIssueStatus is scoped by workspace_id (defense-in-depth tenant
+	// guard — upstream #3027). The interface signature doesn't carry the
+	// workspace id, so we fetch the issue's workspace here. Extra
+	// round-trip but no interface churn for fork-only callers.
+	issue, err := a.h.Queries.GetIssue(ctx, issueID)
+	if err != nil {
+		return err
+	}
+	_, err = a.h.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+		ID:          issueID,
+		Status:      status,
+		WorkspaceID: issue.WorkspaceID,
 	})
 	return err
 }

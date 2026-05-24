@@ -601,8 +601,9 @@ func (s *Service) closeReleaseTrackingIssue(ctx context.Context, releaseID, issu
 		}
 	}
 	_, err = s.Q.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
-		ID:     issueID,
-		Status: "done",
+		ID:          issueID,
+		Status:      "done",
+		WorkspaceID: issue.WorkspaceID,
 	})
 	if err == nil {
 		_, _ = s.insertReleaseEvent(ctx, releaseID, "issue_closed", pgtype.UUID{}, map[string]any{

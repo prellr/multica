@@ -51,10 +51,11 @@ WHERE id = $1
 RETURNING *;
 
 -- name: UpdateIssueStatus :one
+-- Workspace_id in the WHERE clause is a SQL-layer tenant guard; see DeleteIssue.
 UPDATE issue SET
     status = $2,
     updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND workspace_id = $3
 RETURNING *;
 
 -- name: UpdateIssueDescription :one
@@ -76,7 +77,12 @@ INSERT INTO issue (
 ) RETURNING *;
 
 -- name: DeleteIssue :exec
-DELETE FROM issue WHERE id = $1;
+-- Defense-in-depth: the workspace_id predicate makes the tenant invariant a
+-- SQL-layer guarantee rather than a handler-layer one. Handler loaders
+-- (loadIssueForUser / GetIssueInWorkspace) already enforce membership today,
+-- but a future loader bypass or a new caller skipping the loader would be
+-- silently catastrophic without this guard. See incident #1661.
+DELETE FROM issue WHERE id = $1 AND workspace_id = $2;
 
 -- name: ListOpenIssues :many
 SELECT id, workspace_id, title, description, status, priority,

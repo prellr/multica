@@ -316,8 +316,9 @@ func (s *Service) handleMerge(ctx context.Context, workspaceID pgtype.UUID, pr d
 	}
 	if pr.AutoCloseIssueOnMerge {
 		if _, err := s.Q.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
-			ID:     pr.OriginatingIssueID,
-			Status: "done",
+			ID:          pr.OriginatingIssueID,
+			Status:      "done",
+			WorkspaceID: pr.WorkspaceID,
 		}); err != nil {
 			return fmt.Errorf("close originating issue: %w", err)
 		}

@@ -42,7 +42,7 @@ import { ActorAvatar } from "../../common/actor-avatar";
 import { TimezoneSelect } from "../../common/timezone-select";
 import { AppLink, useNavigation } from "../../navigation";
 import { availabilityConfig, workloadConfig } from "../../agents/presence";
-import { formatLastSeen } from "../utils";
+import { formatLastSeen, isSelfHealingRuntime } from "../utils";
 import { HealthBadge } from "./shared";
 import { ProviderLogo } from "./provider-logo";
 import { UpdateSection } from "./update-section";
@@ -485,10 +485,7 @@ function DiagnosticsCard({
 }) {
   const { t } = useT("runtimes");
   const isLocal = runtime.runtime_mode === "local";
-  // A live local daemon re-registers itself within seconds of a server-side
-  // delete (daemon self-heal, #2404), so deleting an online local runtime
-  // from the UI has no lasting effect — disable it and explain why.
-  const selfHealing = isLocal && runtime.status === "online";
+  const selfHealing = isSelfHealingRuntime(runtime);
   // canDelete here doubles as the "can edit runtime" predicate — it already
   // means "workspace owner/admin OR runtime owner", which is the same gate
   // the server enforces for the visibility PATCH.

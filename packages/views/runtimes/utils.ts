@@ -1,9 +1,18 @@
 import type {
+  AgentRuntime,
   RuntimeUsage,
   RuntimeUsageByAgent,
   RuntimeUsageByHour,
 } from "@multica/core/types";
 import { getCustomPricing } from "@multica/core/runtimes/custom-pricing-store";
+
+// A live local daemon re-registers itself within seconds of a server-side
+// delete (daemon self-heal, #2404), so deleting an online local runtime from
+// the UI has no lasting effect. Both the detail page and the list row menu
+// gate their Delete affordance on this same predicate.
+export function isSelfHealingRuntime(runtime: AgentRuntime): boolean {
+  return runtime.runtime_mode === "local" && runtime.status === "online";
+}
 
 // ---------------------------------------------------------------------------
 // Formatting helpers

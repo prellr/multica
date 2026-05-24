@@ -20,6 +20,7 @@ import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { Button } from "@multica/ui/components/ui/button";
 import type { Issue, IssueStatus } from "@multica/core/types";
+import type { AgentTask } from "@multica/core/types/agent";
 import { useLoadMoreByStatus } from "@multica/core/issues/mutations";
 import type { MyIssuesFilter } from "@multica/core/issues/queries";
 import { useModalStore } from "@multica/core/modals";
@@ -33,6 +34,7 @@ import { InfiniteScrollSentinel } from "./infinite-scroll-sentinel";
 import { useT } from "../../i18n";
 
 const EMPTY_PROGRESS_MAP = new Map<string, ChildProgress>();
+const EMPTY_ACTIVE_TASKS_MAP = new Map<string, AgentTask[]>();
 
 const STATUS_DROPPABLE_PREFIX = "list-status:";
 
@@ -76,6 +78,7 @@ export function ListView({
   visibleStatuses,
   onMoveIssue,
   childProgressMap = EMPTY_PROGRESS_MAP,
+  activeTasksMap = EMPTY_ACTIVE_TASKS_MAP,
   myIssuesScope,
   myIssuesFilter,
   projectId,
@@ -94,6 +97,8 @@ export function ListView({
     newPosition?: number,
   ) => void;
   childProgressMap?: Map<string, ChildProgress>;
+  /** Active agent tasks indexed by issue id; drives the "agent working" badge. */
+  activeTasksMap?: Map<string, AgentTask[]>;
   /** When set, per-status load-more targets the scoped cache instead of the workspace one. */
   myIssuesScope?: string;
   myIssuesFilter?: MyIssuesFilter;
@@ -330,6 +335,7 @@ export function ListView({
           collapsedParentIds={collapsedSet}
           onToggleParent={toggleParentCollapsed}
           childProgressMap={childProgressMap}
+          activeTasksMap={activeTasksMap}
           orphanedChildIds={orphanedChildIds}
           dragEnabled={dragEnabled}
           myIssuesOpts={myIssuesOpts}
@@ -378,6 +384,7 @@ function StatusAccordionItem({
   childProgressMap,
   orphanedChildIds,
   dragEnabled,
+  activeTasksMap,
   myIssuesOpts,
   projectId,
 }: {
@@ -389,6 +396,7 @@ function StatusAccordionItem({
   childProgressMap: Map<string, ChildProgress>;
   orphanedChildIds: Set<string>;
   dragEnabled: boolean;
+  activeTasksMap: Map<string, AgentTask[]>;
   myIssuesOpts?: { scope: string; filter: MyIssuesFilter };
   projectId?: string;
 }) {
@@ -504,6 +512,7 @@ function StatusAccordionItem({
                   <ListRow
                     issue={issue}
                     childProgress={childProgressMap.get(issue.id)}
+                    activeTasks={activeTasksMap.get(issue.id)}
                     hasChildren={hasChildren}
                     collapsed={collapsed}
                     onToggleCollapsed={
@@ -519,6 +528,7 @@ function StatusAccordionItem({
                           key={child.id}
                           issue={child}
                           childProgress={childProgressMap.get(child.id)}
+                          activeTasks={activeTasksMap.get(child.id)}
                           indentLevel={1}
                         />
                       ))}

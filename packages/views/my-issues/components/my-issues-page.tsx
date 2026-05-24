@@ -20,6 +20,7 @@ import { ListView } from "../../issues/components/list-view";
 import { BatchActionToolbar } from "../../issues/components/batch-action-toolbar";
 import { useClearFiltersOnWorkspaceChange } from "@multica/core/issues/stores/view-store";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { activeTasksByIssueOptions, workingIssueIdsOptions } from "@multica/core/issues/active-tasks-by-issue";
 import { myIssueListOptions, childIssueProgressOptions, type MyIssuesFilter } from "@multica/core/issues/queries";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { myIssuesViewStore } from "@multica/core/issues/stores/my-issues-view-store";
@@ -38,6 +39,7 @@ export function MyIssuesPage() {
   const statusFilters = useStore(myIssuesViewStore, (s) => s.statusFilters);
   const priorityFilters = useStore(myIssuesViewStore, (s) => s.priorityFilters);
   const scope = useStore(myIssuesViewStore, (s) => s.scope);
+  const workingOnly = useStore(myIssuesViewStore, (s) => s.workingOnly);
 
   // Clear filter state when switching between workspaces (URL-driven).
   useClearFiltersOnWorkspaceChange(myIssuesViewStore, wsId);
@@ -73,7 +75,12 @@ export function MyIssuesPage() {
     myIssueListOptions(wsId, scope, filter),
   );
 
-  // Apply status/priority filters from view store
+  // Shared workspace-wide agent task snapshot derivations (one fetch backs
+  // both the per-issue badge and the Working filter membership set).
+  const { data: activeTasksMap } = useQuery(activeTasksByIssueOptions(wsId));
+  const { data: workingIssueIds } = useQuery(workingIssueIdsOptions(wsId));
+
+  // Apply status/priority + Working filters from view store
   const issues = useMemo(
     () =>
       filterIssues(myIssues, {
@@ -85,8 +92,10 @@ export function MyIssuesPage() {
         projectFilters: [],
         includeNoProject: false,
         labelFilters: [],
+        workingOnly,
+        workingIssueIds,
       }),
-    [myIssues, statusFilters, priorityFilters],
+    [myIssues, statusFilters, priorityFilters, workingOnly, workingIssueIds],
   );
 
   const { data: childProgressMap = new Map() } = useQuery(childIssueProgressOptions(wsId));
@@ -170,7 +179,7 @@ export function MyIssuesPage() {
       </PageHeader>
 
       {/* Header: scope tabs (left) + controls (right) */}
-      <MyIssuesHeader allIssues={myIssues} />
+      <MyIssuesHeader allIssues={myIssues} activeTasksMap={activeTasksMap} />
 
       {/* Content: scrollable */}
       <ViewStoreProvider store={myIssuesViewStore}>
@@ -189,6 +198,7 @@ export function MyIssuesPage() {
                 hiddenStatuses={hiddenStatuses}
                 onMoveIssue={handleMoveIssue}
                 childProgressMap={childProgressMap}
+                activeTasksMap={activeTasksMap}
                 myIssuesScope={scope}
                 myIssuesFilter={filter}
               />
@@ -197,6 +207,7 @@ export function MyIssuesPage() {
                 issues={issues}
                 visibleStatuses={visibleStatuses}
                 childProgressMap={childProgressMap}
+                activeTasksMap={activeTasksMap}
                 myIssuesScope={scope}
                 myIssuesFilter={filter}
                 onMoveIssue={handleMoveIssue}

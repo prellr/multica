@@ -17,6 +17,7 @@ import {
 import { arrayMove } from "@dnd-kit/sortable";
 import { Eye, MoreHorizontal } from "lucide-react";
 import type { Issue, IssueStatus } from "@multica/core/types";
+import type { AgentTask } from "@multica/core/types/agent";
 import { Button } from "@multica/ui/components/ui/button";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { useLoadMoreByStatus } from "@multica/core/issues/mutations";
@@ -102,6 +103,7 @@ function findColumn(
 }
 
 const EMPTY_PROGRESS_MAP = new Map<string, ChildProgress>();
+const EMPTY_ACTIVE_TASKS_MAP = new Map<string, AgentTask[]>();
 
 export function BoardView({
   issues,
@@ -109,6 +111,7 @@ export function BoardView({
   hiddenStatuses,
   onMoveIssue,
   childProgressMap = EMPTY_PROGRESS_MAP,
+  activeTasksMap = EMPTY_ACTIVE_TASKS_MAP,
   myIssuesScope,
   myIssuesFilter,
   projectId,
@@ -122,6 +125,8 @@ export function BoardView({
     newPosition?: number
   ) => void;
   childProgressMap?: Map<string, ChildProgress>;
+  /** Active agent tasks indexed by issue id; drives the "agent working" badge. */
+  activeTasksMap?: Map<string, AgentTask[]>;
   /** When set, per-status load-more targets the scoped cache instead of the workspace one. */
   myIssuesScope?: string;
   myIssuesFilter?: MyIssuesFilter;
@@ -131,6 +136,7 @@ export function BoardView({
   const sortBy = useViewStore((s) => s.sortBy);
   const sortDirection = useViewStore((s) => s.sortDirection);
   const isMobile = useIsMobile();
+  const workingOnly = useViewStore((s) => s.workingOnly);
   const myIssuesOpts = myIssuesScope
     ? { scope: myIssuesScope, filter: myIssuesFilter ?? {} }
     : undefined;
@@ -321,8 +327,10 @@ export function BoardView({
             issueIds={columns[status] ?? []}
             issueMap={issueMapRef.current}
             childProgressMap={childProgressMap}
+            activeTasksMap={activeTasksMap}
             myIssuesOpts={myIssuesOpts}
             projectId={projectId}
+            workingOnly={workingOnly}
           />
         ))}
 
@@ -337,7 +345,11 @@ export function BoardView({
       <DragOverlay dropAnimation={null}>
         {activeIssue ? (
           <div className="w-[280px] rotate-2 scale-105 cursor-grabbing opacity-90 shadow-lg shadow-black/10">
-            <BoardCardContent issue={activeIssue} childProgress={childProgressMap.get(activeIssue.id)} />
+            <BoardCardContent
+              issue={activeIssue}
+              childProgress={childProgressMap.get(activeIssue.id)}
+              activeTasks={activeTasksMap.get(activeIssue.id)}
+            />
           </div>
         ) : null}
       </DragOverlay>
@@ -350,12 +362,14 @@ function MobileBoardColumn({
   issueIds,
   issueMap,
   childProgressMap,
+  activeTasksMap,
   myIssuesOpts,
 }: {
   status: IssueStatus;
   issueIds: string[];
   issueMap: Map<string, Issue>;
   childProgressMap?: Map<string, ChildProgress>;
+  activeTasksMap?: Map<string, AgentTask[]>;
   myIssuesOpts?: { scope: string; filter: MyIssuesFilter };
 }) {
   const { t } = useT("issues");
@@ -384,6 +398,7 @@ function MobileBoardColumn({
               key={issue.id}
               issue={issue}
               childProgress={childProgressMap?.get(issue.id)}
+              activeTasks={activeTasksMap?.get(issue.id)}
             />
           ))
         )}
@@ -398,15 +413,17 @@ function MobileBoardColumn({
 function MobileBoardCard({
   issue,
   childProgress,
+  activeTasks,
 }: {
   issue: Issue;
   childProgress?: ChildProgress;
+  activeTasks?: AgentTask[];
 }) {
   const p = useWorkspacePaths();
   return (
     <IssueActionsContextMenu issue={issue}>
       <AppLink href={p.issueDetail(issue.id)} className="block">
-        <BoardCardContent issue={issue} editable childProgress={childProgress} />
+        <BoardCardContent issue={issue} editable childProgress={childProgress} activeTasks={activeTasks} />
       </AppLink>
     </IssueActionsContextMenu>
   );
@@ -417,27 +434,36 @@ function PaginatedBoardColumn({
   issueIds,
   issueMap,
   childProgressMap,
+  activeTasksMap,
   myIssuesOpts,
   projectId,
+  workingOnly,
 }: {
   status: IssueStatus;
   issueIds: string[];
   issueMap: Map<string, Issue>;
   childProgressMap?: Map<string, ChildProgress>;
+  activeTasksMap?: Map<string, AgentTask[]>;
   myIssuesOpts?: { scope: string; filter: MyIssuesFilter };
   projectId?: string;
+  workingOnly: boolean;
 }) {
   const { loadMore, hasMore, isLoading, total } = useLoadMoreByStatus(
     status,
     myIssuesOpts,
   );
+  // Same split as the assignee-grouped path: the hook keeps using the raw
+  // cache total for pagination, but the column header reflects what the
+  // user actually sees once the Working filter has trimmed the column.
+  const displayCount = workingOnly ? issueIds.length : total;
   return (
     <BoardColumn
       status={status}
       issueIds={issueIds}
       issueMap={issueMap}
       childProgressMap={childProgressMap}
-      totalCount={total}
+      activeTasksMap={activeTasksMap}
+      totalCount={displayCount}
       projectId={projectId}
       footer={
         hasMore ? (

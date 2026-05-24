@@ -7,7 +7,9 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { AppLink } from "../../navigation";
 import type { Issue } from "@multica/core/types";
+import type { AgentTask } from "@multica/core/types/agent";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { WorkingBadge } from "./working-badge";
 import { useIssueSelectionStore } from "@multica/core/issues/stores/selection-store";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -45,6 +47,7 @@ export const ListRow = memo(function ListRow({
   isSortable = false,
   isDragOverlay = false,
   showStatus = false,
+  activeTasks,
 }: {
   issue: Issue;
   childProgress?: ChildProgress;
@@ -77,6 +80,8 @@ export const ListRow = memo(function ListRow({
   isDragOverlay?: boolean;
   /** Show the issue status inline, used when the list is not grouped by status. */
   showStatus?: boolean;
+  /** Active agent tasks for this issue — used by the WorkingBadge. */
+  activeTasks?: AgentTask[];
 }) {
   const { t } = useT("issues");
   const selected = useIssueSelectionStore((s) => s.selectedIds.has(issue.id));
@@ -245,6 +250,11 @@ export const ListRow = memo(function ListRow({
                     +{labels.length - 3}
                   </span>
                 )}
+              </span>
+            )}
+            {activeTasks && activeTasks.length > 0 && (
+              <span className="ml-1.5 shrink-0">
+                <WorkingBadge tasks={activeTasks} />
               </span>
             )}
           </span>

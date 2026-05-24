@@ -6,6 +6,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import type { Issue, IssueStatus } from "@multica/core/types";
+import type { AgentTask } from "@multica/core/types/agent";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   DropdownMenu,
@@ -26,6 +27,7 @@ export function BoardColumn({
   issueIds,
   issueMap,
   childProgressMap,
+  activeTasksMap,
   totalCount,
   footer,
   projectId,
@@ -34,6 +36,7 @@ export function BoardColumn({
   issueIds: string[];
   issueMap: Map<string, Issue>;
   childProgressMap?: Map<string, ChildProgress>;
+  activeTasksMap?: Map<string, AgentTask[]>;
   totalCount?: number;
   footer?: ReactNode;
   /** When set, the per-column "+" pre-fills the project on the create form. */
@@ -105,7 +108,12 @@ export function BoardColumn({
       >
         <SortableContext items={issueIds} strategy={verticalListSortingStrategy}>
           {resolvedIssues.map((issue) => (
-            <DraggableBoardCard key={issue.id} issue={issue} childProgress={childProgressMap?.get(issue.id)} />
+            <DraggableBoardCard
+              key={issue.id}
+              issue={issue}
+              childProgress={childProgressMap?.get(issue.id)}
+              activeTasks={activeTasksMap?.get(issue.id)}
+            />
           ))}
         </SortableContext>
         {issueIds.length === 0 && (

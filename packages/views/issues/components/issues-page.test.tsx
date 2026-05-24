@@ -61,18 +61,74 @@ vi.mock("../../workspace/workspace-avatar", () => ({
 
 // Mock api (queries use api internally)
 const mockListIssues = vi.hoisted(() => vi.fn().mockResolvedValue({ issues: [], total: 0 }));
+const mockListMembers = vi.hoisted(() =>
+  vi.fn().mockResolvedValue([
+    {
+      id: "member-1",
+      workspace_id: "ws-1",
+      user_id: "user-1",
+      role: "member",
+      created_at: "2026-01-01T00:00:00Z",
+      name: "Test User",
+      email: "test@test.com",
+      avatar_url: null,
+    },
+  ]),
+);
+const mockListAgents = vi.hoisted(() =>
+  vi.fn().mockResolvedValue([
+    {
+      id: "agent-1",
+      workspace_id: "ws-1",
+      name: "Agent One",
+      description: "",
+      instructions: "",
+      status: "idle",
+      runtime_id: null,
+      owner_id: "user-1",
+      avatar_url: null,
+      visibility: "workspace",
+      archived_at: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    },
+  ]),
+);
+const mockListSquads = vi.hoisted(() =>
+  vi.fn().mockResolvedValue([
+    {
+      id: "squad-1",
+      workspace_id: "ws-1",
+      name: "Squad One",
+      description: "",
+      instructions: "",
+      avatar_url: null,
+      leader_id: "agent-1",
+      creator_id: "user-1",
+      archived_at: null,
+      archived_by: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    },
+  ]),
+);
+const mockGetAgentTaskSnapshot = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 vi.mock("@multica/core/api", () => ({
   api: {
     listIssues: (...args: any[]) => mockListIssues(...args),
     updateIssue: vi.fn(),
-    listMembers: () => Promise.resolve([]),
-    listAgents: () => Promise.resolve([]),
+    listMembers: (...args: any[]) => mockListMembers(...args),
+    listAgents: (...args: any[]) => mockListAgents(...args),
+    listSquads: (...args: any[]) => mockListSquads(...args),
+    getAgentTaskSnapshot: (...args: any[]) => mockGetAgentTaskSnapshot(...args),
   },
   getApi: () => ({
     listIssues: (...args: any[]) => mockListIssues(...args),
     updateIssue: vi.fn(),
-    listMembers: () => Promise.resolve([]),
-    listAgents: () => Promise.resolve([]),
+    listMembers: (...args: any[]) => mockListMembers(...args),
+    listAgents: (...args: any[]) => mockListAgents(...args),
+    listSquads: (...args: any[]) => mockListSquads(...args),
+    getAgentTaskSnapshot: (...args: any[]) => mockGetAgentTaskSnapshot(...args),
   }),
   setApiInstance: vi.fn(),
 }));
@@ -112,6 +168,7 @@ const mockViewState = {
   projectFilters: [] as string[],
   includeNoProject: false,
   labelFilters: [] as string[],
+  workingOnly: false,
   sortBy: "position" as const,
   sortDirection: "asc" as const,
   cardProperties: { priority: true, description: true, assignee: true, dueDate: true, project: true, childProgress: true, labels: true },
@@ -125,6 +182,7 @@ const mockViewState = {
   toggleProjectFilter: vi.fn(),
   toggleNoProject: vi.fn(),
   toggleLabelFilter: vi.fn(),
+  toggleWorkingOnly: vi.fn(),
   hideStatus: vi.fn(),
   showStatus: vi.fn(),
   clearFilters: vi.fn(),
@@ -386,9 +444,11 @@ describe("IssuesPage (shared)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListIssues.mockResolvedValue({ issues: [], total: 0 });
+    mockGetAgentTaskSnapshot.mockResolvedValue([]);
     mockViewState.viewMode = "board";
     mockViewState.statusFilters = [];
     mockViewState.priorityFilters = [];
+    mockViewState.workingOnly = false;
     mockScope = "all";
   });
 
@@ -493,4 +553,5 @@ describe("IssuesPage (shared)", () => {
     expect(screen.queryByText("Squad task")).not.toBeInTheDocument();
     expect(screen.queryByText("Design landing page")).not.toBeInTheDocument();
   });
+
 });

@@ -15,7 +15,6 @@ import type {
   MCPServerDirectoryResponse,
   TimelineEntry,
   User,
-  WebhookDelivery,
 } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -1360,28 +1359,6 @@ export const BackupStatusSchema = z.object({
 }).loose();
 
 export type BackupStatus = z.infer<typeof BackupStatusSchema>;
-
-export const EMPTY_WEBHOOK_DELIVERY: WebhookDelivery = {
-  id: "",
-  workspace_id: "",
-  autopilot_id: "",
-  trigger_id: "",
-  provider: "",
-  event: "",
-  dedupe_key: null,
-  dedupe_source: null,
-  signature_status: "not_required",
-  status: "queued",
-  attempt_count: 0,
-  content_type: null,
-  response_status: null,
-  autopilot_run_id: null,
-  replayed_from_delivery_id: null,
-  error: null,
-  received_at: "",
-  last_attempt_at: "",
-  created_at: "",
-};
 
 // ---------------------------------------------------------------------------
 // User (`/api/me` GET + PATCH). The auth store and Settings → Account both

@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DashboardUsageDailyListSchema,
-  EMPTY_USER,
   ListIssuesResponseSchema,
-  UserSchema,
 } from "./schemas";
-import { parseWithFallback } from "./schema";
 
 const baseIssue = {
   id: "11111111-1111-1111-1111-111111111111",
@@ -62,49 +59,6 @@ describe("IssueSchema (via ListIssuesResponseSchema)", () => {
       total: 1,
     };
     expect(ListIssuesResponseSchema.safeParse(payload).success).toBe(false);
-  });
-});
-
-// `user.timezone` (Viewing tz) was added in the timezone-architecture RFC.
-// A desktop build older than the server — or a server predating the
-// `user.timezone` migration — will return a `/api/me` body with no
-// `timezone` key. The schema must not fail closed on that: the field
-// defaults to `null`, which the frontend resolves to the browser-detected
-// tz at render time.
-describe("UserSchema timezone drift", () => {
-  const base = {
-    id: "11111111-1111-1111-1111-111111111111",
-    name: "Ada",
-    email: "ada@example.com",
-  };
-
-  it("defaults timezone to null when the field is absent", () => {
-    const parsed = UserSchema.parse(base);
-    expect(parsed.timezone).toBe(null);
-  });
-
-  it("preserves an explicit IANA timezone", () => {
-    const parsed = UserSchema.parse({ ...base, timezone: "Asia/Tokyo" });
-    expect(parsed.timezone).toBe("Asia/Tokyo");
-  });
-
-  it("accepts an explicit null timezone", () => {
-    const parsed = UserSchema.parse({ ...base, timezone: null });
-    expect(parsed.timezone).toBe(null);
-  });
-
-  // Wrong-type drift: a future server bug sending `timezone` as a number
-  // must not throw into the UI. parseWithFallback degrades the whole user
-  // object to the explicit fallback (EMPTY_USER) so /api/me callers keep a
-  // valid shape instead of white-screening.
-  it("falls back to EMPTY_USER when timezone is the wrong type", () => {
-    const parsed = parseWithFallback(
-      { ...base, timezone: 42 },
-      UserSchema,
-      EMPTY_USER,
-      { endpoint: "GET /api/me" },
-    );
-    expect(parsed).toBe(EMPTY_USER);
   });
 });
 

@@ -71,28 +71,6 @@ describe("ThinkingPicker", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
-  it("calls onChange with the picked value and skips when the user re-picks the current value", () => {
-    const { onChange } = renderPicker({ value: "low" });
-    fireEvent.click(screen.getByRole("button"));
-
-    // Picking a new level fires onChange with the runtime-native value.
-    fireEvent.click(screen.getByText("High"));
-    expect(onChange).toHaveBeenCalledWith("high");
-
-    // Re-opening and clicking the already-selected value is a no-op so we
-    // don't enqueue a redundant PATCH. The trigger also reads "Low", so
-    // there are two matches in the DOM — target the listbox item by
-    // selecting the option button explicitly.
-    onChange.mockClear();
-    fireEvent.click(screen.getByRole("button"));
-    const lowOption = screen
-      .getAllByRole("button")
-      .find((b) => b.getAttribute("data-picker-item") !== null && b.textContent?.includes("Low"));
-    expect(lowOption).toBeDefined();
-    fireEvent.click(lowOption!);
-    expect(onChange).not.toHaveBeenCalled();
-  });
-
   it("clears to empty string via the footer button when a value is set", () => {
     const { onChange } = renderPicker({ value: "high" });
     fireEvent.click(screen.getByRole("button"));

@@ -295,7 +295,7 @@ export function ShipProjectSection({ project }: ShipProjectSectionProps) {
             pipelineConfigProposed={fullProject?.pipeline_config_proposed}
           />
 
-          <ShipDeploySwimlanes projectId={project.id} />
+          <ShipDeploySwimlanes projectId={project.id} pipelineKind={fullProject?.pipeline_kind} />
 
           <div className="space-y-3">
             {repoGroups.map(([repoUrl, repoPrs]) => (

@@ -74,18 +74,32 @@ type staticToken string
 
 func (s staticToken) Token(context.Context) (string, error) { return string(s), nil }
 
+// TokenSourceFunc is the http.HandlerFunc-style adapter so callers can
+// pass a plain function literal where a TokenSource is required, e.g.
+// to wrap an AppAuthenticator.InstallationToken(ctx, id) closure
+// without defining a one-off struct at every site.
+type TokenSourceFunc func(ctx context.Context) (string, error)
+
+// Token satisfies TokenSource.
+func (f TokenSourceFunc) Token(ctx context.Context) (string, error) { return f(ctx) }
+
 // Client is a thin REST wrapper. Zero-config construction (NewClient)
 // uses the default HTTP client and the public api.github.com base; tests
 // swap BaseURL and HTTPClient via the exported fields.
 //
-// Auth precedence: TokenSource wins when set; otherwise the static
-// Token field is used. The exported Token field stays so existing tests
-// and the PAT path keep working.
+// Auth precedence per request: TokenSource is consulted first when set,
+// otherwise the static Token field is used. FallbackToken, when set
+// together with TokenSource, kicks in on a 404 from the primary token —
+// this handles the GitHub-App case where the workspace's installation
+// doesn't cover a specific repo (e.g. cross-namespace projects) but the
+// per-workspace PAT does. The retry is one-shot per request; if the PAT
+// also 404s the original error surfaces.
 type Client struct {
-	Token       string
-	TokenSource TokenSource
-	BaseURL     string
-	HTTPClient  *http.Client
+	Token         string
+	TokenSource   TokenSource
+	FallbackToken string
+	BaseURL       string
+	HTTPClient    *http.Client
 }
 
 // NewClient builds a Client with sensible defaults. token may be empty —
@@ -108,6 +122,21 @@ func NewClientWithTokenSource(src TokenSource) *Client {
 		TokenSource: src,
 		BaseURL:     apiBase,
 		HTTPClient:  &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// NewClientWithTokenSourceAndFallback wires the App's installation TokenSource
+// as the primary auth path with a PAT as the one-shot 404 fallback. Use this
+// when both auth surfaces exist for a workspace: GitHub-App installs are
+// scoped to specific repos and 404 on anything outside their scope, but a
+// per-workspace PAT often has broader access. The fallback keeps cross-
+// namespace projects working after a GitHub-App rollout.
+func NewClientWithTokenSourceAndFallback(src TokenSource, fallbackPAT string) *Client {
+	return &Client{
+		TokenSource:   src,
+		FallbackToken: fallbackPAT,
+		BaseURL:       apiBase,
+		HTTPClient:    &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -510,15 +539,21 @@ func (c *Client) doWithBody(ctx context.Context, method, path string, reqBody, t
 		httpClient = http.DefaultClient
 	}
 
-	// At most one retry: if the first attempt hits primary or secondary
-	// rate-limit AND the server tells us when to retry, sleep + retry once.
-	// Rationale: bursty workloads (deploys + agents + ship reconciler ticks
-	// overlapping) occasionally clip the per-hour budget for a few seconds
-	// — a single short backoff smooths those out without papering over a
-	// real exhaustion (which is bounded to ~60s wait and then surfaces).
-	// ROA-373.
-	const maxAttempts = 2
+	// Up to two retry conditions per request, each one-shot:
+	//   1. Rate-limit backoff (ROA-373) — bursty workloads (deploys +
+	//      agents + reconciler ticks) occasionally clip the per-hour
+	//      budget; a single short Retry-After sleep smooths those out.
+	//   2. PAT fallback on 404 (ROA-379) — when the primary token is a
+	//      GitHub-App installation that doesn't cover the requested repo,
+	//      retry with the configured PAT before surfacing ErrNotFound.
+	// Worst-case path: primary → rate-limit retry → fallback → return.
+	// The boolean flags below enforce one-shot-per-condition so the loop
+	// is bounded regardless of how each attempt fails.
+	const maxAttempts = 3
 	const maxRetryWait = 60 * time.Second
+
+	fallbackUsed := false
+	rateLimitRetried := false
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		var bodyReader io.Reader
@@ -534,13 +569,18 @@ func (c *Client) doWithBody(ctx context.Context, method, path string, reqBody, t
 		if bodyBytes != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
-		token := c.Token
-		if c.TokenSource != nil {
+		var token string
+		switch {
+		case fallbackUsed:
+			token = c.FallbackToken
+		case c.TokenSource != nil:
 			t, err := c.TokenSource.Token(ctx)
 			if err != nil {
 				return fmt.Errorf("github: token source: %w", err)
 			}
 			token = t
+		default:
+			token = c.Token
 		}
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
@@ -556,9 +596,9 @@ func (c *Client) doWithBody(ctx context.Context, method, path string, reqBody, t
 			return readErr
 		}
 
-		// Detect rate-limit on the response BEFORE classifying so we can
-		// decide to retry. Only 403s with the rate-limit signals qualify.
-		if resp.StatusCode == http.StatusForbidden && attempt < maxAttempts {
+		// Rate-limit backoff (one-shot regardless of which token path
+		// we're on). Only 403s with the rate-limit signals qualify.
+		if resp.StatusCode == http.StatusForbidden && !rateLimitRetried {
 			if isRateLimited(resp.Header, body) {
 				wait := rateLimitRetryAfter(resp.Header, maxRetryWait)
 				if wait > 0 {
@@ -569,14 +609,24 @@ func (c *Client) doWithBody(ctx context.Context, method, path string, reqBody, t
 						return ctx.Err()
 					case <-timer.C:
 					}
-					continue // re-attempt
+					rateLimitRetried = true
+					continue
 				}
 			}
 		}
 
+		// PAT fallback on 404 from the App path. Only meaningful when
+		// both auth surfaces are configured AND we haven't already
+		// swapped — a 404 from the PAT means the repo really is gone.
+		if resp.StatusCode == http.StatusNotFound && c.TokenSource != nil && c.FallbackToken != "" && !fallbackUsed {
+			fallbackUsed = true
+			continue
+		}
+
 		return c.classifyResponse(method, path, resp, body, target)
 	}
-	// Unreachable: loop always returns inside.
+	// Unreachable: the boolean guards ensure at most 3 iterations and
+	// the final iteration always returns inside classifyResponse.
 	return fmt.Errorf("github: %s %s: exhausted retries", method, path)
 }
 

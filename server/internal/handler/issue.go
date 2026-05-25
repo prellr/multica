@@ -24,12 +24,25 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+// Issue `kind` values. The column is a TEXT CHECK constraint (see migration
+// 116); these constants are the canonical strings used at every callsite that
+// reads or writes the column. PR 1 only writes `kindIssue` — `kindTask` is
+// defined here so PR 2's task-create path has a stable symbol to import.
+const (
+	kindIssue = "issue"
+	kindTask  = "task"
+)
+
 // IssueResponse is the JSON response for an issue.
 type IssueResponse struct {
 	ID            string                  `json:"id"`
 	WorkspaceID   string                  `json:"workspace_id"`
 	Number        int32                   `json:"number"`
 	Identifier    string                  `json:"identifier"`
+	// Kind discriminates between formal issues and lighter tasks; always
+	// "issue" in PR 1, will be "issue" | "task" once tasks ship. Frontend
+	// clients built before this field existed simply ignore it.
+	Kind          string                  `json:"kind"`
 	Title         string                  `json:"title"`
 	Description   *string                 `json:"description"`
 	Status        string                  `json:"status"`
@@ -67,6 +80,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		WorkspaceID:   uuidToString(i.WorkspaceID),
 		Number:        i.Number,
 		Identifier:    identifier,
+		Kind:          i.Kind,
 		Title:         i.Title,
 		Description:   textToPtr(i.Description),
 		Status:        i.Status,
@@ -94,6 +108,7 @@ func issueListRowToResponse(i db.ListIssuesRow, issuePrefix string) IssueRespons
 		WorkspaceID:   uuidToString(i.WorkspaceID),
 		Number:        i.Number,
 		Identifier:    identifier,
+		Kind:          i.Kind,
 		Title:         i.Title,
 		Description:   textToPtr(i.Description),
 		Status:        i.Status,
@@ -151,6 +166,7 @@ func openIssueRowToResponse(i db.ListOpenIssuesRow, issuePrefix string) IssueRes
 		WorkspaceID:   uuidToString(i.WorkspaceID),
 		Number:        i.Number,
 		Identifier:    identifier,
+		Kind:          i.Kind,
 		Title:         i.Title,
 		Description:   textToPtr(i.Description),
 		Status:        i.Status,
@@ -688,6 +704,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("open_only") == "true" {
 		issues, err := h.Queries.ListOpenIssues(ctx, db.ListOpenIssuesParams{
 			WorkspaceID:    wsUUID,
+			Kind:           kindIssue,
 			Priority:       priorityFilter,
 			AssigneeID:     assigneeFilter,
 			AssigneeIds:    assigneeIdsFilter,
@@ -744,6 +761,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 
 	issues, err := h.Queries.ListIssues(ctx, db.ListIssuesParams{
 		WorkspaceID:    wsUUID,
+		Kind:           kindIssue,
 		Limit:          int32(limit),
 		Offset:         int32(offset),
 		Status:         statusFilter,
@@ -764,6 +782,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	// Get the true total count for pagination awareness.
 	total, err := h.Queries.CountIssues(ctx, db.CountIssuesParams{
 		WorkspaceID:    wsUUID,
+		Kind:           kindIssue,
 		Status:         statusFilter,
 		Priority:       priorityFilter,
 		AssigneeID:     assigneeFilter,

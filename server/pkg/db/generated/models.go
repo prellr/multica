@@ -877,6 +877,7 @@ type Issue struct {
 	FirstExecutedAt    pgtype.Timestamptz `json:"first_executed_at"`
 	Metadata           []byte             `json:"metadata"`
 	StartDate          pgtype.Timestamptz `json:"start_date"`
+	Kind               string             `json:"kind"`
 }
 
 type IssueDependency struct {

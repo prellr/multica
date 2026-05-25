@@ -5,11 +5,16 @@
 -- member assignment (`assignee_type='member' AND assignee_id=involves_user_id`)
 -- because that is already the meaning of the `assignee_id` filter (tab 1
 -- "Assigned to me"), and the two filters must produce disjoint result sets.
+--
+-- The `kind` parameter is required (not nullable) so the Go compiler flags any
+-- callsite that hasn't been migrated past the task split. There is no implicit
+-- default at the SQL layer — callers must pass 'issue' or 'task' explicitly.
 SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
-       i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.metadata
+       i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.metadata, i.kind
 FROM issue i
 WHERE i.workspace_id = $1
+  AND i.kind = sqlc.arg('kind')::text
   AND (sqlc.narg('status')::text IS NULL OR i.status = sqlc.narg('status'))
   AND (sqlc.narg('priority')::text IS NULL OR i.priority = sqlc.narg('priority'))
   AND (sqlc.narg('assignee_id')::uuid IS NULL OR i.assignee_id = sqlc.narg('assignee_id'))
@@ -79,8 +84,12 @@ INSERT INTO issue (
 ) RETURNING *;
 
 -- name: GetIssueByNumber :one
+-- Numbers are issue-only by design (tasks have no human-readable identifier),
+-- but `AND kind = 'issue'` is kept as a defense-in-depth predicate so a future
+-- code path that incorrectly assigns a number to a task row cannot be looked
+-- up via the issue number API.
 SELECT * FROM issue
-WHERE workspace_id = $1 AND number = $2;
+WHERE workspace_id = $1 AND number = $2 AND kind = 'issue';
 
 -- name: UpdateIssue :one
 UPDATE issue SET
@@ -135,12 +144,14 @@ DELETE FROM issue WHERE id = $1 AND workspace_id = $2;
 
 -- name: ListOpenIssues :many
 -- See ListIssues for the semantics of involves_user_id (mirrors the 4-branch
--- filter; member-direct assignment is intentionally excluded).
+-- filter; member-direct assignment is intentionally excluded) and for the
+-- rationale behind the required `kind` parameter.
 SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
-       i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.metadata
+       i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.metadata, i.kind
 FROM issue i
 WHERE i.workspace_id = $1
+  AND i.kind = sqlc.arg('kind')::text
   AND i.status NOT IN ('done', 'cancelled')
   AND (sqlc.narg('priority')::text IS NULL OR i.priority = sqlc.narg('priority'))
   AND (sqlc.narg('assignee_id')::uuid IS NULL OR i.assignee_id = sqlc.narg('assignee_id'))
@@ -183,9 +194,11 @@ WHERE i.workspace_id = $1
 ORDER BY i.position ASC, i.created_at DESC;
 
 -- name: CountIssues :one
--- See ListIssues for the semantics of involves_user_id.
+-- See ListIssues for the semantics of involves_user_id and for the rationale
+-- behind the required `kind` parameter.
 SELECT count(*) FROM issue i
 WHERE i.workspace_id = $1
+  AND i.kind = sqlc.arg('kind')::text
   AND (sqlc.narg('status')::text IS NULL OR i.status = sqlc.narg('status'))
   AND (sqlc.narg('priority')::text IS NULL OR i.priority = sqlc.narg('priority'))
   AND (sqlc.narg('assignee_id')::uuid IS NULL OR i.assignee_id = sqlc.narg('assignee_id'))
@@ -234,10 +247,13 @@ ORDER BY position ASC, created_at DESC;
 
 -- name: ListReferencingIssues :many
 -- Returns issues that mention the given issue ID in their description
--- or in any of their comments, ordered by creation date.
+-- or in any of their comments, ordered by creation date. Hardcoded to
+-- kind='issue' — the "References" panel is an issue-side affordance; tasks
+-- that mention an issue are a separate (future) surface.
 SELECT i.* FROM issue i
 WHERE i.workspace_id = $1
   AND i.id != $2
+  AND i.kind = 'issue'
   AND (
     i.description ILIKE concat('%mention://issue/', $2::text, '%')
     OR i.id IN (

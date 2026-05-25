@@ -350,11 +350,6 @@ vi.mock("@multica/core/modals", () => ({
   ),
 }));
 
-// Mock core/utils
-vi.mock("@multica/core/utils", () => ({
-  timeAgo: () => "1d ago",
-}));
-
 // Mock core/hooks/use-file-upload
 vi.mock("@multica/core/hooks/use-file-upload", () => ({
   useFileUpload: () => ({ uploadWithToast: vi.fn().mockResolvedValue("https://example.com/file.png") }),
@@ -403,6 +398,7 @@ const mockIssue: Issue = {
   parent_issue_id: null,
   project_id: null,
   position: 0,
+  start_date: null,
   due_date: "2026-06-01T00:00:00Z",
   metadata: {},
   created_at: "2026-01-15T00:00:00Z",

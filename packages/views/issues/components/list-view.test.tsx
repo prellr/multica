@@ -238,6 +238,7 @@ const issueDefaults = {
   assignee_id: null,
   creator_type: "member" as const,
   creator_id: "user-1",
+  start_date: null,
   due_date: null,
   project_id: null,
   parent_issue_id: null,

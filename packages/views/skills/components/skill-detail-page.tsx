@@ -26,7 +26,7 @@ import type {
 import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
-import { timeAgo } from "@multica/core/utils";
+import { useTimeAgo } from "../../i18n";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import {
@@ -243,6 +243,7 @@ function OriginSidebarCard({
 
 export function SkillDetailPage({ skillId }: { skillId: string }) {
   const { t } = useT("skills");
+  const timeAgo = useTimeAgo();
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
   const paths = useWorkspacePaths();

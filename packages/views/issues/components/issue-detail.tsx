@@ -8,6 +8,7 @@ import { useNavigation } from "../../navigation";
 import {
   Archive,
   Calendar,
+  CalendarClock,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -42,7 +43,7 @@ import type { Issue, IssueStatus, IssuePriority, TimelineEntry, UpdateIssueReque
 import { STATUS_CONFIG, PRIORITY_CONFIG } from "@multica/core/issues/config";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { toast } from "sonner";
-import { StatusIcon, PriorityIcon, StatusPicker, PriorityPicker, DueDatePicker, AssigneePicker, LabelPicker } from ".";
+import { StatusIcon, PriorityIcon, StatusPicker, PriorityPicker, StartDatePicker, DueDatePicker, AssigneePicker, LabelPicker } from ".";
 import { IssueActionsDropdown, useIssueActions } from "../actions";
 import { ProjectPicker } from "../../projects/components/project-picker";
 import { CommentCard } from "./comment-card";
@@ -71,7 +72,7 @@ import { useIssueSubscribers } from "../hooks/use-issue-subscribers";
 import { ReactionBar } from "@multica/ui/components/common/reaction-bar";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { api } from "@multica/core/api";
-import { timeAgo } from "@multica/core/utils";
+import { useTimeAgo } from "../../i18n";
 import { cn } from "@multica/ui/lib/utils";
 
 import { ProgressRing } from "./progress-ring";
@@ -131,6 +132,11 @@ function formatActivity(
       if (toName) return t(($) => $.activity.assigned_to, { name: toName });
       if (details.from_id && !details.to_id) return t(($) => $.activity.removed_assignee);
       return t(($) => $.activity.changed_assignee);
+    }
+    case "start_date_changed": {
+      if (!details.to) return t(($) => $.activity.start_date_removed);
+      const formatted = new Date(details.to).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      return t(($) => $.activity.start_date_set, { date: formatted });
     }
     case "due_date_changed": {
       if (!details.to) return t(($) => $.activity.due_date_removed);
@@ -381,6 +387,7 @@ interface IssueDetailProps {
 
 export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = true, layoutId = "multica_issue_detail_layout", highlightCommentId }: IssueDetailProps) {
   const { t } = useT("issues");
+  const timeAgo = useTimeAgo();
   const id = issueId;
   const router = useNavigation();
   const user = useAuthStore((s) => s.user);
@@ -883,6 +890,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           <PropRow label={t(($) => $.detail.prop_assignee)}>
             <AssigneePicker assigneeType={issue.assignee_type} assigneeId={issue.assignee_id} onUpdate={handleUpdateField} align="start" />
           </PropRow>
+          <PropRow label={t(($) => $.detail.prop_start_date)}>
+            <StartDatePicker startDate={issue.start_date} onUpdate={handleUpdateField} />
+          </PropRow>
           <PropRow label={t(($) => $.detail.prop_due_date)}>
             <DueDatePicker dueDate={issue.due_date} onUpdate={handleUpdateField} />
           </PropRow>
@@ -1068,6 +1078,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           const details = (entry.details ?? {}) as Record<string, string>;
           const isStatusChange = entry.action === "status_changed";
           const isPriorityChange = entry.action === "priority_changed";
+          const isStartDateChange = entry.action === "start_date_changed";
           const isDueDateChange = entry.action === "due_date_changed";
 
           let leadIcon: React.ReactNode;
@@ -1075,6 +1086,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             leadIcon = <StatusIcon status={details.to as IssueStatus} className="h-4 w-4 shrink-0" />;
           } else if (isPriorityChange && details.to) {
             leadIcon = <PriorityIcon priority={details.to as IssuePriority} className="h-4 w-4 shrink-0" />;
+          } else if (isStartDateChange) {
+            leadIcon = <CalendarClock className="h-4 w-4 shrink-0 text-muted-foreground" />;
           } else if (isDueDateChange) {
             leadIcon = <Calendar className="h-4 w-4 shrink-0 text-muted-foreground" />;
           } else {

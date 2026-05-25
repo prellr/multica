@@ -168,11 +168,15 @@ The [GitHub PR ↔ issue integration](/github-integration) needs two variables. 
 |---|---|---|
 | `GITHUB_APP_SLUG` | empty | The slug of your GitHub App (the tail of `https://github.com/apps/<slug>`). Drives the Settings → GitHub install button URL |
 | `GITHUB_WEBHOOK_SECRET` | empty | The Webhook secret you set on the GitHub App. Used for HMAC-SHA256 verification of every `pull_request` / `installation` delivery, and as the HMAC key for the setup-callback state token |
+| `GITHUB_APP_ID` | empty | Numeric App ID from the GitHub App's General page. When set together with `GITHUB_APP_PRIVATE_KEY`, Ship Hub authenticates as the App (own per-installation rate quota) for every backend GitHub call — PR sync, CI status, workflow polling, release linkage |
+| `GITHUB_APP_PRIVATE_KEY` | empty | PEM-encoded RSA private key downloaded from the App's "Private keys" section. Paste the full PEM (including `-----BEGIN/END-----` lines) as a multi-line quoted value |
 
-**Behavior when either is unset:**
+**Behavior when either of the first two is unset:**
 
 - `Connect GitHub` in Settings → GitHub is **disabled** and shows a "not configured" hint to admins.
 - The `/api/webhooks/github` endpoint returns **`503 github webhooks not configured`** — Multica refuses to process events with no secret rather than treating every signature as valid.
+
+**Behavior when `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` is unset:** Ship Hub falls back to the per-workspace personal token configured in Settings → GitHub. That token shares the operator's 5000-req/hr REST quota with every agent's `gh` CLI traffic — fine for low volume, but the App path is recommended for any deployment with frequent deploys or autopilot activity.
 
 **Note:** `GITHUB_WEBHOOK_SECRET` is reused as the signing key for the install-flow state token, so operators only need to manage one secret. It is **not** the GitHub App's *Client* secret — Client secrets are OAuth-related and not used by this integration. See [GitHub integration → Self-host setup](/github-integration#self-host-setup) for the full walkthrough.
 

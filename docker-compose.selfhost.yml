@@ -116,6 +116,12 @@ services:
       ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
       GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      # ROA-379: when both are set, Ship Hub authenticates GitHub
+      # requests as the configured App (own per-installation rate-limit
+      # quota) instead of competing with agent PAT calls. Either var
+      # left empty falls back to the legacy personal-token path.
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
     restart: unless-stopped
 
   frontend:

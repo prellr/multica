@@ -10,7 +10,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/service/ship"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	gh "github.com/multica-ai/multica/server/pkg/github"
 )
 
 // shipHubReconcileInterval is how often the reconciler scans every
@@ -68,18 +67,20 @@ func runShipHubOnce(ctx context.Context, queries *db.Queries) {
 					"workspace_id", ws.ID, "error", err)
 			}
 		}
-		if token == "" {
-			// Workspace enabled the feature but never configured a token.
-			// We could still call the public GitHub API for public repos,
-			// but the unauthenticated rate limit (60/hr) is so low it would
-			// blow up the reconciler immediately. Skip and log once.
-			slog.Debug("ship hub reconciler: skipping workspace without token",
+		client, hasAuth := handler.ShipHubGitHubClientForBackground(ctx, queries, ws.ID, token)
+		if !hasAuth {
+			// Workspace enabled the feature but never installed the App
+			// AND never configured a PAT. We could still call the public
+			// GitHub API for public repos, but the unauthenticated rate
+			// limit (60/hr) is so low it would blow up the reconciler
+			// immediately. Skip and log once.
+			slog.Debug("ship hub reconciler: skipping workspace without GitHub auth",
 				"workspace_id", ws.ID)
 			continue
 		}
 		svc := &ship.Service{
 			Q:      queries,
-			Github: gh.NewClient(token),
+			Github: client,
 		}
 		if err := svc.SyncWorkspace(ctx, ws.ID); err != nil {
 			slog.Warn("ship hub reconciler: sync workspace failed",

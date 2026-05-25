@@ -30,7 +30,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/service/ship"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	gh "github.com/multica-ai/multica/server/pkg/github"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -536,7 +535,7 @@ func (h *Handler) linkStagingDeployForRelease(
 			token = encToken
 		}
 	}
-	svc := h.shipServiceFromToken(token)
+	svc := h.shipServiceFromToken(ctx, workspaceID, token)
 	deps := h.stagingDepsFor(workspaceID)
 	if _, err := svc.LinkStagingDeploy(ctx, release.ID, deployID, deploySHA, smokeWorkflow, repoURL, deps); err != nil {
 		slog.Warn("ship: link staging deploy failed",
@@ -576,12 +575,16 @@ func (h *Handler) recordSmokeOutcomeForRelease(
 }
 
 // shipServiceFromToken constructs a service with the workspace's
-// GitHub token from a webhook goroutine context (where the http
+// GitHub client from a webhook goroutine context (where the http
 // request is already gone). Mirrors shipServiceFromWorkspace's wiring
 // without the response-writer dependency.
-func (h *Handler) shipServiceFromToken(token string) *ship.Service {
+//
+// Prefers the GitHub App installation token when an installation row
+// exists for the workspace (and the App is configured); falls back to
+// the personal token otherwise. See shipHubGitHubClient.
+func (h *Handler) shipServiceFromToken(ctx context.Context, workspaceID pgtype.UUID, token string) *ship.Service {
 	return &ship.Service{
 		Q:      h.Queries,
-		Github: gh.NewClient(token),
+		Github: shipHubGitHubClient(ctx, h.Queries, workspaceID, token),
 	}
 }

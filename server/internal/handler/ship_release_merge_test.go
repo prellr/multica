@@ -716,34 +716,34 @@ func readPRCIStatus(t *testing.T, repoURL string, prNumber int) string {
 	return ci
 }
 
-// TestSyncProject_OpenPRRefreshesCIStatus_MergedSkipsFetch pins the
-// combined contract of Ship Hub rebuild PR1 + PR2.
+// TestSyncProject_OpenAlwaysRefreshed_MergedOnlyWhenStuck pins the
+// combined contract of Ship Hub rebuild PR1 + PR2 + the merged-PR refresh
+// extension shipped to fix the prellr/multica "16% of merged PRs stuck at
+// CI pending" report.
 //
-// PR1 (upsertPR side): the unexported upsertPR writer MUST NOT touch
-// ci_status / review_decision on any code path. Both columns are owned
-// by webhook-driven targeted writers (UpdatePullRequestCIStatus,
-// UpdatePullRequestReviewDecision).
+// PR1 (upsertPR side): upsertPR MUST NOT touch ci_status / review_decision
+// — both are owned by webhook-driven targeted writers.
 //
-// PR2 (SyncProject side): for OPEN PRs only, SyncProject's loop refreshes
-// ci_status via a live GetCIStatus call AFTER the upsert, then writes the
-// result through the same targeted writer the webhooks use. This restores
-// "Sync Now" as a real live-fetch escape hatch — without the blanket
-// clobbering that PR1 closed. For MERGED/CLOSED PRs, no refresh happens
-// (head SHA is no longer interesting; webhooks remain the only writer).
+// PR2 + merged-PR extension (SyncProject side):
+//   - OPEN PRs: always live-refresh ci_status via GetCIStatus after upsert.
+//   - MERGED PRs: refresh only when the cached ci_status is "pending" or
+//     empty — the race case where the PR auto-merged before the final
+//     check_run.completed webhook landed (or the webhook was dropped).
+//     Merged PRs whose cache is already "success"/"failure" are skipped
+//     so a 25-row closed-list iteration doesn't burn 25 GH calls per sync.
 //
 // The companion test TestShipService_SyncProject_PreservesWebhookCIStatus
 // in ship_service_integration_test.go pins the read-back: a webhook-set
-// ci_status on a MERGED PR survives subsequent syncs (PR2 doesn't touch
-// merged PRs, so the prior PR1 invariant still holds).
-func TestSyncProject_OpenPRRefreshesCIStatus_MergedSkipsFetch(t *testing.T) {
+// ci_status on a MERGED PR survives subsequent syncs (PR1's invariant).
+func TestSyncProject_OpenAlwaysRefreshed_MergedOnlyWhenStuck(t *testing.T) {
 	enableShipHub(t, false)
 	repoURL := "https://github.com/multica-ai/ship-pr2-refresh"
 	projectID := createShipProject(t, repoURL)
 
 	mergedAt := time.Now()
 	var ciCalls int32
-	openSHASeen := ""
-	var openSHALock sync.Mutex
+	var seenLock sync.Mutex
+	seenSHAs := map[string]int{}
 	ghClient := &fakeShipGithub{
 		listFn: func(_ context.Context, _, _ string, opts gh.ListOptions) ([]gh.PullRequest, error) {
 			if opts.State == "open" {
@@ -754,52 +754,88 @@ func TestSyncProject_OpenPRRefreshesCIStatus_MergedSkipsFetch(t *testing.T) {
 				pr.Head.SHA = "headsha601"
 				return []gh.PullRequest{pr}, nil
 			}
-			pr := gh.PullRequest{
-				Number: 602, Title: "merged pr", State: "closed", MergedAt: &mergedAt,
+			// Two merged PRs in the closed list — one currently cached
+			// as "success" (already resolved → skip refresh), one cached
+			// as "" or "pending" (stuck → refresh).
+			pr602 := gh.PullRequest{
+				Number: 602, Title: "merged pr already resolved", State: "closed", MergedAt: &mergedAt,
 				CreatedAt: time.Now(), UpdatedAt: time.Now(),
 			}
-			pr.Head.SHA = "headsha602"
-			return []gh.PullRequest{pr}, nil
+			pr602.Head.SHA = "headsha602"
+			pr603 := gh.PullRequest{
+				Number: 603, Title: "merged pr stuck pending", State: "closed", MergedAt: &mergedAt,
+				CreatedAt: time.Now(), UpdatedAt: time.Now(),
+			}
+			pr603.Head.SHA = "headsha603"
+			return []gh.PullRequest{pr602, pr603}, nil
 		},
 		getCIStatusFn: func(_ context.Context, _, _, sha string) (string, error) {
 			atomic.AddInt32(&ciCalls, 1)
-			openSHALock.Lock()
-			openSHASeen = sha
-			openSHALock.Unlock()
-			if sha == "headsha602" {
-				// Pre-PR2 buggy regression: merged PRs were the case
-				// the original ROA-274 logic skipped. PR2 must NOT
-				// extend the fetch to merged PRs — head SHA is no
-				// longer interesting and we'd waste a GH round-trip.
-				t.Errorf("GetCIStatus called for merged PR (sha=%s); PR2 must only refresh OPEN PRs", sha)
-			}
+			seenLock.Lock()
+			seenSHAs[sha]++
+			seenLock.Unlock()
 			return "success", nil
 		},
 	}
 	svc := &ship.Service{Q: testHandler.Queries, Github: ghClient}
 
+	// First sync — the closed PRs get their rows created with empty
+	// ci_status (upsertPR doesn't touch the column; column default is '').
+	// My fix observes empty → refreshes both merged PRs. Open PR is
+	// always refreshed. Expect 3 calls (601, 602, 603).
 	if _, err := svc.SyncProject(context.Background(),
 		parseUUID(testWorkspaceID), parseUUID(projectID)); err != nil {
-		t.Fatalf("SyncProject: %v", err)
+		t.Fatalf("SyncProject first call: %v", err)
+	}
+	if got := atomic.LoadInt32(&ciCalls); got != 3 {
+		t.Fatalf("first sync GetCIStatus call count: got %d, want 3 (open + 2 stuck merged)", got)
 	}
 
-	// Exactly one GetCIStatus call — for the open PR's head SHA.
-	if got := atomic.LoadInt32(&ciCalls); got != 1 {
-		t.Fatalf("GetCIStatus call count: got %d, want 1 (open PR only)", got)
+	// Now simulate the production scenario: a previously-resolved merged
+	// PR (602) has cached "success"; an unfortunate stuck-pending merged
+	// PR (603) sits at "pending" after a missed webhook.
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE pull_request SET ci_status = 'success' WHERE repo_url = $1 AND pr_number = 602
+	`, repoURL); err != nil {
+		t.Fatalf("seed PR 602 ci_status: %v", err)
 	}
-	openSHALock.Lock()
-	sha := openSHASeen
-	openSHALock.Unlock()
-	if sha != "headsha601" {
-		t.Fatalf("GetCIStatus sha: got %q, want headsha601", sha)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE pull_request SET ci_status = 'pending' WHERE repo_url = $1 AND pr_number = 603
+	`, repoURL); err != nil {
+		t.Fatalf("seed PR 603 ci_status: %v", err)
 	}
 
-	// Open PR row carries the refreshed ci_status; merged PR row stays
-	// NULL/empty because no refresh ran and no webhook simulated.
+	// Second sync — 601 (open) always refreshed; 602 (merged, cached
+	// success) SKIPPED; 603 (merged, cached pending) REFRESHED.
+	// Expect 2 more calls (601, 603); total now 5.
+	atomic.StoreInt32(&ciCalls, 0)
+	seenLock.Lock()
+	seenSHAs = map[string]int{}
+	seenLock.Unlock()
+	if _, err := svc.SyncProject(context.Background(),
+		parseUUID(testWorkspaceID), parseUUID(projectID)); err != nil {
+		t.Fatalf("SyncProject second call: %v", err)
+	}
+	if got := atomic.LoadInt32(&ciCalls); got != 2 {
+		t.Fatalf("second sync GetCIStatus call count: got %d, want 2 (open + stuck merged only)", got)
+	}
+	seenLock.Lock()
+	defer seenLock.Unlock()
+	if seenSHAs["headsha602"] != 0 {
+		t.Errorf("second sync: GetCIStatus called for already-resolved merged PR 602 (cached success); refresh should be skipped")
+	}
+	if seenSHAs["headsha601"] != 1 || seenSHAs["headsha603"] != 1 {
+		t.Errorf("second sync: expected refresh for 601 and 603, got %+v", seenSHAs)
+	}
+
+	// Final row states.
 	if got := readPRCIStatus(t, repoURL, 601); got != "success" {
-		t.Fatalf("open PR ci_status: got %q, want %q (PR2 refresh missed)", got, "success")
+		t.Errorf("open PR ci_status: got %q, want success", got)
 	}
-	if got := readPRCIStatus(t, repoURL, 602); got != "" {
-		t.Fatalf("merged PR ci_status: got %q, want NULL/empty (no refresh, no webhook)", got)
+	if got := readPRCIStatus(t, repoURL, 602); got != "success" {
+		t.Errorf("merged-resolved PR ci_status: got %q, want success (unchanged)", got)
+	}
+	if got := readPRCIStatus(t, repoURL, 603); got != "success" {
+		t.Errorf("merged-stuck PR ci_status: got %q, want success (refreshed)", got)
 	}
 }

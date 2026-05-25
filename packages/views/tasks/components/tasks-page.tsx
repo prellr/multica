@@ -8,6 +8,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { PageHeader } from "../../layout/page-header";
 import { useT } from "../../i18n";
 import { TaskRow } from "./task-row";
+import { QuickAddTask } from "./quick-add-task";
 
 /**
  * Workspace task list. Flat by design — no per-status buckets, no kanban,
@@ -30,6 +31,11 @@ export function TasksPage() {
         <ListTodo className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden />
         <span className="text-sm font-medium">{t(($) => $.page.title)}</span>
       </PageHeader>
+
+      {/* Quick-add is always mounted (even in loading and empty states) so
+        * the user can start adding tasks immediately on first load — the
+        * surface's whole point is being fast. */}
+      <QuickAddTask />
 
       {isLoading ? (
         <div className="flex-1 overflow-auto">

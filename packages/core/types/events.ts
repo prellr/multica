@@ -28,6 +28,13 @@ export type WSEventType =
   | "task:failed"
   | "task:message"
   | "task:cancelled"
+  // User-task CRUD lifecycle (distinct domain from the agent_task_queue
+  // events above — see server pkg/protocol/events.go for the naming
+  // rationale). Routed by exact verb in ws-client subscriptions, so the
+  // shared `task:` prefix doesn't cause runtime collisions.
+  | "task:created"
+  | "task:updated"
+  | "task:deleted"
   | "inbox:new"
   | "inbox:read"
   | "inbox:archived"

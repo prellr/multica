@@ -89,8 +89,12 @@ func resetGitHubAppAuthForTest() {
 
 // shipHubGitHubClient returns the right GitHub client for a workspace:
 //   - When the App is configured AND the workspace has a github_installation
-//     row, returns a client whose token is a fresh installation access
-//     token (own per-installation quota, independent of personal PATs).
+//     row, returns a client whose primary token is a fresh installation
+//     access token (own per-installation quota). If a personal token also
+//     exists, it's wired as a one-shot 404 fallback — important for
+//     workspaces that track repos outside the App installation's scope
+//     (cross-namespace projects). Without that fallback, a single org-
+//     scoped installation rollout would break every other-org project.
 //   - Otherwise falls back to gh.NewClient(personalToken). When personalToken
 //     is also "" the returned client makes unauthenticated requests, which
 //     is fine for public repos at the much lower anonymous rate limit.
@@ -102,10 +106,27 @@ func shipHubGitHubClient(ctx context.Context, queries *db.Queries, workspaceID p
 	auth, _ := GitHubAppAuth()
 	if auth != nil && queries != nil {
 		if installID, ok := lookupInstallationID(ctx, queries, workspaceID); ok {
+			if personalToken != "" {
+				return gh.NewClientWithTokenSourceAndFallback(
+					installationTokenSourceFor(auth, installID),
+					personalToken,
+				)
+			}
 			return auth.NewClientForInstallation(installID)
 		}
 	}
 	return gh.NewClient(personalToken)
+}
+
+// installationTokenSourceFor is the small adapter that exposes an
+// AppAuthenticator + installationID pair as a gh.TokenSource — the
+// public NewClientForInstallation already does this internally, but
+// NewClientWithTokenSourceAndFallback takes the TokenSource directly
+// so we surface the adapter here.
+func installationTokenSourceFor(auth *gh.AppAuthenticator, installationID int64) gh.TokenSource {
+	return gh.TokenSourceFunc(func(ctx context.Context) (string, error) {
+		return auth.InstallationToken(ctx, installationID)
+	})
 }
 
 // ShipHubGitHubClientForBackground is the exported variant of
@@ -113,6 +134,11 @@ func shipHubGitHubClient(ctx context.Context, queries *db.Queries, workspaceID p
 // http request lifecycle. Returns hasAuth=true when EITHER a GitHub
 // App installation exists OR personalToken is non-empty. Pollers use
 // hasAuth=false as the "skip this workspace" signal.
+//
+// As with shipHubGitHubClient, when both auth surfaces exist we return
+// a client that uses the installation token as primary and the PAT as
+// the one-shot 404 fallback so cross-namespace projects don't break
+// after the App rollout.
 func ShipHubGitHubClientForBackground(
 	ctx context.Context,
 	queries *db.Queries,
@@ -122,6 +148,12 @@ func ShipHubGitHubClientForBackground(
 	auth, _ := GitHubAppAuth()
 	if auth != nil && queries != nil {
 		if installID, ok := lookupInstallationID(ctx, queries, workspaceID); ok {
+			if personalToken != "" {
+				return gh.NewClientWithTokenSourceAndFallback(
+					installationTokenSourceFor(auth, installID),
+					personalToken,
+				), true
+			}
 			return auth.NewClientForInstallation(installID), true
 		}
 	}

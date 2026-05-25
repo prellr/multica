@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -489,6 +490,134 @@ func TestDoWithBody_RateLimitRetry(t *testing.T) {
 		}
 		if calls != 1 {
 			t.Errorf("expected 1 attempt (no retry on plain 403), got %d", calls)
+		}
+	})
+}
+
+// TestDoWithBody_PATFallbackOn404 covers the ROA-379 follow-up: when a
+// GitHub-App installation token returns 404 (repo not in installation
+// scope), the client retries once with the configured PAT before
+// surfacing ErrNotFound. Cross-namespace projects that the App doesn't
+// cover but the operator's PAT does keep working.
+func TestDoWithBody_PATFallbackOn404(t *testing.T) {
+	t.Run("404 on App → retry with PAT → success", func(t *testing.T) {
+		var sawAuth []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			auth := r.Header.Get("Authorization")
+			sawAuth = append(sawAuth, auth)
+			if auth == "Bearer app-token-xyz" {
+				http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("[]"))
+		}))
+		defer srv.Close()
+		c := NewClientWithTokenSourceAndFallback(
+			staticToken("app-token-xyz"),
+			"pat-token-abc",
+		)
+		c.BaseURL = srv.URL
+		if err := c.do(context.Background(), "GET", "/repos/other-org/repo/pulls", &[]struct{}{}); err != nil {
+			t.Fatalf("expected fallback success, got %v", err)
+		}
+		if len(sawAuth) != 2 {
+			t.Fatalf("expected 2 attempts (App then PAT), got %d: %v", len(sawAuth), sawAuth)
+		}
+		if sawAuth[0] != "Bearer app-token-xyz" {
+			t.Errorf("first attempt should use App token, got %q", sawAuth[0])
+		}
+		if sawAuth[1] != "Bearer pat-token-abc" {
+			t.Errorf("second attempt should use PAT, got %q", sawAuth[1])
+		}
+	})
+	t.Run("404 on App → 404 on PAT → ErrNotFound surfaces", func(t *testing.T) {
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+		}))
+		defer srv.Close()
+		c := NewClientWithTokenSourceAndFallback(staticToken("app"), "pat")
+		c.BaseURL = srv.URL
+		err := c.do(context.Background(), "GET", "/repos/gone/repo/pulls", &[]struct{}{})
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+		if calls != 2 {
+			t.Errorf("expected 2 attempts (App + PAT both 404), got %d", calls)
+		}
+	})
+	t.Run("happy path: no fallback when 2xx on App", func(t *testing.T) {
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("[]"))
+		}))
+		defer srv.Close()
+		c := NewClientWithTokenSourceAndFallback(staticToken("app"), "pat")
+		c.BaseURL = srv.URL
+		if err := c.do(context.Background(), "GET", "/repos/covered/repo/pulls", &[]struct{}{}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if calls != 1 {
+			t.Errorf("expected 1 attempt on 2xx, got %d", calls)
+		}
+	})
+	t.Run("no fallback when FallbackToken is empty", func(t *testing.T) {
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+		}))
+		defer srv.Close()
+		c := NewClientWithTokenSource(staticToken("app-only"))
+		c.BaseURL = srv.URL
+		err := c.do(context.Background(), "GET", "/anything", &struct{}{})
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+		if calls != 1 {
+			t.Errorf("expected 1 attempt (no fallback configured), got %d", calls)
+		}
+	})
+	t.Run("404 on App → rate-limited PAT → rate-limit retry on PAT → success", func(t *testing.T) {
+		var attempts int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n := atomic.AddInt32(&attempts, 1)
+			auth := r.Header.Get("Authorization")
+			switch n {
+			case 1:
+				if auth != "Bearer app" {
+					t.Errorf("attempt 1: expected App, got %q", auth)
+				}
+				http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+			case 2:
+				if auth != "Bearer pat" {
+					t.Errorf("attempt 2: expected PAT, got %q", auth)
+				}
+				w.Header().Set("X-RateLimit-Remaining", "0")
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, `{"message":"rate limit"}`, http.StatusForbidden)
+			case 3:
+				if auth != "Bearer pat" {
+					t.Errorf("attempt 3: expected PAT (post-rate-limit), got %q", auth)
+				}
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("[]"))
+			default:
+				t.Errorf("unexpected 4th attempt")
+			}
+		}))
+		defer srv.Close()
+		c := NewClientWithTokenSourceAndFallback(staticToken("app"), "pat")
+		c.BaseURL = srv.URL
+		if err := c.do(context.Background(), "GET", "/anything", &[]struct{}{}); err != nil {
+			t.Fatalf("expected eventual success, got %v", err)
+		}
+		if got := atomic.LoadInt32(&attempts); got != 3 {
+			t.Errorf("expected 3 attempts (App-404 → PAT-403 → PAT-200), got %d", got)
 		}
 	})
 }

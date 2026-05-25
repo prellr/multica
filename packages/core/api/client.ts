@@ -773,6 +773,15 @@ export class ApiClient {
     await this.fetch(`/api/tasks/${id}`, { method: "DELETE" });
   }
 
+  // Promote a task to a full issue. Returns the resulting Issue (with the
+  // newly assigned number + identifier). The task UUID is preserved across
+  // the transition — so a frontend that already held a reference can keep
+  // it; the route to render the promoted row is just /issues/:id instead
+  // of /tasks/:id.
+  async promoteTask(id: string): Promise<Issue> {
+    return this.fetch(`/api/tasks/${id}/promote`, { method: "POST" });
+  }
+
   async batchUpdateIssues(issueIds: string[], updates: UpdateIssueRequest): Promise<{ updated: number }> {
     return this.fetch("/api/issues/batch-update", {
       method: "POST",

@@ -35,6 +35,7 @@ export type WSEventType =
   | "task:created"
   | "task:updated"
   | "task:deleted"
+  | "task:promoted"
   | "inbox:new"
   | "inbox:read"
   | "inbox:archived"

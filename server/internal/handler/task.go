@@ -526,6 +526,72 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// PromoteTask converts a task into an issue. The flip happens inside a single
+// transaction with the issue-counter bump so the workspace counter and the
+// stamped number never disagree. The response is the resulting Issue payload
+// (number + identifier present), and a `task:promoted` WS event is published
+// so connected clients can transition the row from their task list to their
+// issue list in one atomic step.
+//
+// Authorization: the loadTaskForUser loader enforces workspace membership and
+// the kind='task' guard — hitting this endpoint with an issue UUID returns
+// 404 just like Get/Update/Delete.
+func (h *Handler) PromoteTask(w http.ResponseWriter, r *http.Request) {
+	task, ok := h.loadTaskForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	workspaceID := uuidToString(task.WorkspaceID)
+	actorUserID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	actorType, actorID := h.resolveActor(r, actorUserID, workspaceID)
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to promote task")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	qtx := h.Queries.WithTx(tx)
+	number, err := qtx.IncrementIssueCounter(r.Context(), task.WorkspaceID)
+	if err != nil {
+		slog.Warn("promote task: increment issue counter failed",
+			append(logger.RequestAttrs(r), "error", err, "task_id", uuidToString(task.ID))...)
+		writeError(w, http.StatusInternalServerError, "failed to promote task")
+		return
+	}
+	promoted, err := qtx.PromoteTaskToIssue(r.Context(), db.PromoteTaskToIssueParams{
+		ID:          task.ID,
+		WorkspaceID: task.WorkspaceID,
+		Number:      pgtype.Int4{Int32: number, Valid: true},
+	})
+	if err != nil {
+		slog.Warn("promote task: update failed",
+			append(logger.RequestAttrs(r), "error", err, "task_id", uuidToString(task.ID))...)
+		writeError(w, http.StatusInternalServerError, "failed to promote task")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to promote task")
+		return
+	}
+
+	// Build the issue payload using the same converter the issue endpoints
+	// use, so consumers see an identical shape regardless of how the row
+	// was created.
+	prefix := h.getIssuePrefix(r.Context(), promoted.WorkspaceID)
+	issue := issueToResponse(promoted, prefix)
+
+	h.publish(protocol.EventUserTaskPromoted, workspaceID, actorType, actorID, map[string]any{
+		"task_id": uuidToString(task.ID),
+		"issue":   issue,
+	})
+	writeJSON(w, http.StatusOK, issue)
+}
+
 func (h *Handler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 	task, ok := h.loadTaskForUser(w, r, chi.URLParam(r, "id"))
 	if !ok {

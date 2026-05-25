@@ -294,6 +294,64 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTas
 	return items, nil
 }
 
+const promoteTaskToIssue = `-- name: PromoteTaskToIssue :one
+UPDATE issue SET
+    kind = 'issue',
+    number = $3,
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND kind = 'task'
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, metadata, start_date, kind
+`
+
+type PromoteTaskToIssueParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Number      pgtype.Int4 `json:"number"`
+}
+
+// Promote a task to a full issue. Flips kind='task' -> 'issue' and stamps the
+// row with a workspace-scoped number. The handler does the IncrementIssueCounter
+// bump alongside this UPDATE inside a single transaction, so a crash between
+// the two would leave the workspace counter advanced but no row claiming it
+// (acceptable — the counter is monotonic, gaps are fine and far less
+// disruptive than a duplicate number).
+//
+// The `kind = 'task'` predicate is the safety net: passing an issue UUID
+// through the promote endpoint is a no-op (zero rows updated). This mirrors
+// the safety pattern used by UpdateTask / DeleteTask.
+func (q *Queries) PromoteTaskToIssue(ctx context.Context, arg PromoteTaskToIssueParams) (Issue, error) {
+	row := q.db.QueryRow(ctx, promoteTaskToIssue, arg.ID, arg.WorkspaceID, arg.Number)
+	var i Issue
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.CreatorType,
+		&i.CreatorID,
+		&i.ParentIssueID,
+		&i.AcceptanceCriteria,
+		&i.ContextRefs,
+		&i.Position,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Number,
+		&i.ProjectID,
+		&i.OriginType,
+		&i.OriginID,
+		&i.FirstExecutedAt,
+		&i.Metadata,
+		&i.StartDate,
+		&i.Kind,
+	)
+	return i, err
+}
+
 const updateTask = `-- name: UpdateTask :one
 UPDATE issue SET
     title = COALESCE($3, title),

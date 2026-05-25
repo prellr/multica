@@ -1,5 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
-import type { Task } from "../types";
+import type { Issue, Task } from "../types";
+import { issueKeys } from "../issues/queries";
+import { onIssueCreated } from "../issues/ws-updaters";
 import { taskKeys } from "./queries";
 import {
   prependTaskToLists,
@@ -47,4 +49,29 @@ export function onUserTaskUpdated(qc: QueryClient, wsId: string, task: Task): vo
 export function onUserTaskDeleted(qc: QueryClient, wsId: string, taskId: string): void {
   removeTaskFromLists(qc, wsId, taskId);
   qc.removeQueries({ queryKey: taskKeys.detail(wsId, taskId) });
+}
+
+/**
+ * Atomic task -> issue transition. Single event so both cache effects
+ * land together — firing task:deleted + issue:created separately would
+ * race (a client receiving only one half mid-network-blip would render an
+ * inconsistent view). The taskId is the soon-to-be-stale task UUID; the
+ * issue payload's id is the SAME UUID (the server reuses the row, just
+ * flips kind + stamps number).
+ */
+export function onUserTaskPromoted(
+  qc: QueryClient,
+  wsId: string,
+  taskId: string,
+  issue: Issue,
+): void {
+  // Drop the row from every task list cache and forget the task detail —
+  // the same id is now an issue, so a refetch on the task detail route
+  // would 404.
+  removeTaskFromLists(qc, wsId, taskId);
+  qc.removeQueries({ queryKey: taskKeys.detail(wsId, taskId) });
+  // Seed the issue caches the same way an issue:created WS event would —
+  // status bucket placement, child-progress recompute, my-issues fan-out.
+  onIssueCreated(qc, wsId, issue);
+  qc.setQueryData<Issue>(issueKeys.detail(wsId, issue.id), issue);
 }

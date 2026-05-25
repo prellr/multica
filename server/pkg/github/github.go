@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -94,12 +95,25 @@ func (f TokenSourceFunc) Token(ctx context.Context) (string, error) { return f(c
 // doesn't cover a specific repo (e.g. cross-namespace projects) but the
 // per-workspace PAT does. The retry is one-shot per request; if the PAT
 // also 404s the original error surfaces.
+//
+// AppMissOwnerTTL controls how long a per-owner "App does not cover this
+// owner" miss is remembered (default 15 min). Once a 404 from the App
+// has been observed for owner `X`, subsequent requests to /repos/X/...
+// skip the App entirely and go straight to FallbackToken — this avoids
+// the ~2× request amplification a syncProject loop over a cross-
+// namespace repo would otherwise incur (every PR's CI-status refresh
+// would hit App, 404, then retry with PAT). Set to 0 to disable.
 type Client struct {
-	Token         string
-	TokenSource   TokenSource
-	FallbackToken string
-	BaseURL       string
-	HTTPClient    *http.Client
+	Token           string
+	TokenSource     TokenSource
+	FallbackToken   string
+	BaseURL         string
+	HTTPClient      *http.Client
+	AppMissOwnerTTL time.Duration
+
+	appMissMu   sync.Mutex
+	appMissOwn  map[string]time.Time // owner → cache expiry
+	appMissNow  func() time.Time     // injectable for tests
 }
 
 // NewClient builds a Client with sensible defaults. token may be empty —
@@ -131,13 +145,71 @@ func NewClientWithTokenSource(src TokenSource) *Client {
 // scoped to specific repos and 404 on anything outside their scope, but a
 // per-workspace PAT often has broader access. The fallback keeps cross-
 // namespace projects working after a GitHub-App rollout.
+//
+// The returned Client also enables the per-owner negative cache with a
+// 15-min TTL so repeat calls for the same out-of-scope owner skip the
+// App round-trip entirely (the sync-PR-list case that surfaced as
+// 30s-client-timeouts on saf-mobile-ios — 18 PR-status refreshes × 2
+// round-trips overflowed the budget).
 func NewClientWithTokenSourceAndFallback(src TokenSource, fallbackPAT string) *Client {
 	return &Client{
-		TokenSource:   src,
-		FallbackToken: fallbackPAT,
-		BaseURL:       apiBase,
-		HTTPClient:    &http.Client{Timeout: 30 * time.Second},
+		TokenSource:     src,
+		FallbackToken:   fallbackPAT,
+		BaseURL:         apiBase,
+		HTTPClient:      &http.Client{Timeout: 30 * time.Second},
+		AppMissOwnerTTL: 15 * time.Minute,
 	}
+}
+
+// pathOwner extracts the GitHub owner ("multica-ai", "imjenaro", …)
+// from a /repos/{owner}/{repo}/... API path. Returns "" for paths
+// outside the per-repo namespace (e.g. /app/installations, /user) —
+// those don't carry an owner the per-owner cache can key on, and
+// asking the App for them is always legitimate.
+func pathOwner(path string) string {
+	// Strip the leading slash and any query string before splitting.
+	p := strings.TrimPrefix(path, "/")
+	if q := strings.IndexByte(p, '?'); q >= 0 {
+		p = p[:q]
+	}
+	parts := strings.SplitN(p, "/", 3)
+	if len(parts) < 2 || parts[0] != "repos" || parts[1] == "" {
+		return ""
+	}
+	return parts[1]
+}
+
+func (c *Client) appMissesOwner(owner string) bool {
+	c.appMissMu.Lock()
+	defer c.appMissMu.Unlock()
+	if c.appMissOwn == nil {
+		return false
+	}
+	exp, ok := c.appMissOwn[owner]
+	if !ok {
+		return false
+	}
+	if c.now().After(exp) {
+		delete(c.appMissOwn, owner)
+		return false
+	}
+	return true
+}
+
+func (c *Client) recordAppMissOwner(owner string) {
+	c.appMissMu.Lock()
+	defer c.appMissMu.Unlock()
+	if c.appMissOwn == nil {
+		c.appMissOwn = make(map[string]time.Time, 4)
+	}
+	c.appMissOwn[owner] = c.now().Add(c.AppMissOwnerTTL)
+}
+
+func (c *Client) now() time.Time {
+	if c.appMissNow != nil {
+		return c.appMissNow()
+	}
+	return time.Now()
 }
 
 // ParseRepoURL extracts (owner, repo) from a GitHub https URL. We only
@@ -552,7 +624,17 @@ func (c *Client) doWithBody(ctx context.Context, method, path string, reqBody, t
 	const maxAttempts = 3
 	const maxRetryWait = 60 * time.Second
 
+	// Skip the App entirely when we already know it doesn't cover this
+	// owner — saves the round-trip we'd otherwise burn just to 404 and
+	// fall back to PAT. Owners outside /repos/{owner}/... paths (e.g.
+	// /app/installations) skip this check by returning "" from
+	// pathOwner. See ROA-379 follow-up.
 	fallbackUsed := false
+	if c.TokenSource != nil && c.FallbackToken != "" && c.AppMissOwnerTTL > 0 {
+		if owner := pathOwner(path); owner != "" && c.appMissesOwner(owner) {
+			fallbackUsed = true
+		}
+	}
 	rateLimitRetried := false
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -619,6 +701,14 @@ func (c *Client) doWithBody(ctx context.Context, method, path string, reqBody, t
 		// both auth surfaces are configured AND we haven't already
 		// swapped — a 404 from the PAT means the repo really is gone.
 		if resp.StatusCode == http.StatusNotFound && c.TokenSource != nil && c.FallbackToken != "" && !fallbackUsed {
+			// Remember the App-doesn't-cover-this-owner verdict so
+			// subsequent requests within AppMissOwnerTTL skip the
+			// App attempt entirely.
+			if c.AppMissOwnerTTL > 0 {
+				if owner := pathOwner(path); owner != "" {
+					c.recordAppMissOwner(owner)
+				}
+			}
 			fallbackUsed = true
 			continue
 		}

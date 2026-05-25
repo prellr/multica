@@ -579,6 +579,71 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 		}
 	})
 
+	// task:created — Direct notification to assignee if assignee != actor.
+	// Tasks are issue rows with kind='task' (see PR 1/2); they emit
+	// task:* events instead of issue:* so the surface stays separable.
+	// The notification type ("issue_assigned") is reused because the
+	// rendered string ("Assigned") and the inbox UX are kind-agnostic —
+	// inbox click-through routes to /tasks/:id vs /issues/:id based on
+	// the kind field surfaced by ListInboxItems' join to issue.
+	// Status / priority / mention notifications are intentionally not
+	// mirrored: tasks have a narrower status set, no priority, and v1
+	// description is short enough that mention parsing is overkill.
+	bus.Subscribe(protocol.EventUserTaskCreated, func(e events.Event) {
+		payload, ok := e.Payload.(map[string]any)
+		if !ok {
+			return
+		}
+		task, ok := payload["task"].(handler.TaskResponse)
+		if !ok {
+			return
+		}
+		if task.AssigneeType == nil || task.AssigneeID == nil {
+			return
+		}
+		notifyDirect(ctx, queries, bus,
+			*task.AssigneeType, *task.AssigneeID,
+			task.WorkspaceID, e, task.ID, task.Status,
+			"issue_assigned", "action_required",
+			task.Title,
+			"",
+			emptyDetails,
+		)
+	})
+
+	// task:updated — fire on assignee change only. Tasks have no
+	// status/priority/due-date drift notifications today; the user-facing
+	// edit surface (the row toggle + detail page) doesn't expose those
+	// edits cleanly enough yet to be worth notifying on. Add later if
+	// task editing grows beyond the row toggle.
+	bus.Subscribe(protocol.EventUserTaskUpdated, func(e events.Event) {
+		payload, ok := e.Payload.(map[string]any)
+		if !ok {
+			return
+		}
+		task, ok := payload["task"].(handler.TaskResponse)
+		if !ok {
+			return
+		}
+		if task.AssigneeType == nil || task.AssigneeID == nil {
+			return
+		}
+		// Without prev-assignee tracking on the task update path we can't
+		// distinguish "assignee changed from X to Y" from "no change" —
+		// notifyDirect's recipient==actor skip prevents the most common
+		// noise (the assigner is themselves the new assignee), but a
+		// future polish should track prev_assignee in the task update
+		// payload and gate this on assigneeChanged like the issue path.
+		notifyDirect(ctx, queries, bus,
+			*task.AssigneeType, *task.AssigneeID,
+			task.WorkspaceID, e, task.ID, task.Status,
+			"issue_assigned", "action_required",
+			task.Title,
+			"",
+			emptyDetails,
+		)
+	})
+
 	// issue:updated — handle assignee changes, status changes, priority, due date
 	bus.Subscribe(protocol.EventIssueUpdated, func(e events.Event) {
 		payload, ok := e.Payload.(map[string]any)

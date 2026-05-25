@@ -25,7 +25,8 @@
     "empty": "收件箱为空",
     "original_input": "原始输入",
     "edit_advanced": "在完整表单中编辑",
-    "archive": "归档"
+    "archive": "归档",
+    "open_task": "打开 task"
   },
   "types": {
     "issue_assigned": "已分配",

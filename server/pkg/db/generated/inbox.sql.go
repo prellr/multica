@@ -296,7 +296,8 @@ func (q *Queries) GetInboxItemInWorkspace(ctx context.Context, arg GetInboxItemI
 
 const listInboxItems = `-- name: ListInboxItems :many
 SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details,
-       iss.status as issue_status
+       iss.status as issue_status,
+       iss.kind as issue_kind
 FROM inbox_item i
 LEFT JOIN issue iss ON iss.id = i.issue_id
 WHERE i.workspace_id = $1 AND i.recipient_type = $2 AND i.recipient_id = $3 AND i.archived = false
@@ -326,8 +327,13 @@ type ListInboxItemsRow struct {
 	ActorID       pgtype.UUID        `json:"actor_id"`
 	Details       []byte             `json:"details"`
 	IssueStatus   pgtype.Text        `json:"issue_status"`
+	IssueKind     pgtype.Text        `json:"issue_kind"`
 }
 
+// The issue join also surfaces `kind` so the frontend can route an inbox
+// click to /tasks/:id or /issues/:id without an extra round trip — see
+// PR 1/2 for the kind discriminator, and the inbox click handler on the
+// frontend for the routing branch.
 func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]ListInboxItemsRow, error) {
 	rows, err := q.db.Query(ctx, listInboxItems, arg.WorkspaceID, arg.RecipientType, arg.RecipientID)
 	if err != nil {
@@ -354,6 +360,7 @@ func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) 
 			&i.ActorID,
 			&i.Details,
 			&i.IssueStatus,
+			&i.IssueKind,
 		); err != nil {
 			return nil, err
 		}

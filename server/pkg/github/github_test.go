@@ -582,6 +582,115 @@ func TestDoWithBody_PATFallbackOn404(t *testing.T) {
 			t.Errorf("expected 1 attempt (no fallback configured), got %d", calls)
 		}
 	})
+	t.Run("subsequent calls to same owner skip App when negative cache is warm", func(t *testing.T) {
+		var appCalls, patCalls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") == "Bearer app" {
+				atomic.AddInt32(&appCalls, 1)
+				http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+				return
+			}
+			atomic.AddInt32(&patCalls, 1)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("[]"))
+		}))
+		defer srv.Close()
+		c := NewClientWithTokenSourceAndFallback(staticToken("app"), "pat")
+		c.BaseURL = srv.URL
+
+		// Pretend the cache uses a fixed "now" so the test doesn't
+		// race the wall clock if it ever runs near the TTL boundary.
+		c.appMissNow = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+		// First call: App 404 → PAT success. Records the miss.
+		if err := c.do(context.Background(), "GET", "/repos/imjenaro/saf-mobile-ios/pulls", &[]struct{}{}); err != nil {
+			t.Fatalf("first call: %v", err)
+		}
+		if got := atomic.LoadInt32(&appCalls); got != 1 {
+			t.Errorf("after first call: appCalls=%d, want 1", got)
+		}
+		if got := atomic.LoadInt32(&patCalls); got != 1 {
+			t.Errorf("after first call: patCalls=%d, want 1", got)
+		}
+
+		// Second + third calls to same owner: cache hit → skip App.
+		for i, path := range []string{"/repos/imjenaro/saf-mobile-ios/commits/abc/status", "/repos/imjenaro/control-panel/pulls"} {
+			if err := c.do(context.Background(), "GET", path, &[]struct{}{}); err != nil {
+				t.Fatalf("subsequent call %d (%s): %v", i+2, path, err)
+			}
+		}
+		if got := atomic.LoadInt32(&appCalls); got != 1 {
+			t.Errorf("after cache-hit calls: appCalls=%d, want 1 (no further App attempts)", got)
+		}
+		if got := atomic.LoadInt32(&patCalls); got != 3 {
+			t.Errorf("after cache-hit calls: patCalls=%d, want 3 (one per call)", got)
+		}
+
+		// Other owner is not poisoned by the imjenaro miss.
+		if err := c.do(context.Background(), "GET", "/repos/prellr/multica/pulls", &[]struct{}{}); err != nil {
+			t.Fatalf("prellr call: %v", err)
+		}
+		if got := atomic.LoadInt32(&appCalls); got != 2 {
+			t.Errorf("after prellr call: appCalls=%d, want 2 (prellr still tries App)", got)
+		}
+	})
+	t.Run("cache expires after TTL", func(t *testing.T) {
+		var appCalls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") == "Bearer app" {
+				atomic.AddInt32(&appCalls, 1)
+				http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("[]"))
+		}))
+		defer srv.Close()
+		c := NewClientWithTokenSourceAndFallback(staticToken("app"), "pat")
+		c.BaseURL = srv.URL
+		c.AppMissOwnerTTL = 10 * time.Minute
+		now := time.Unix(1_700_000_000, 0)
+		c.appMissNow = func() time.Time { return now }
+
+		// Warm the cache.
+		_ = c.do(context.Background(), "GET", "/repos/foo/bar/pulls", &[]struct{}{})
+		if got := atomic.LoadInt32(&appCalls); got != 1 {
+			t.Errorf("warmup: appCalls=%d, want 1", got)
+		}
+		// Within TTL — cache hit; appCalls stays at 1.
+		_ = c.do(context.Background(), "GET", "/repos/foo/bar/pulls", &[]struct{}{})
+		if got := atomic.LoadInt32(&appCalls); got != 1 {
+			t.Errorf("within TTL: appCalls=%d, want 1", got)
+		}
+		// Advance past TTL — cache miss; App is tried again.
+		now = now.Add(11 * time.Minute)
+		_ = c.do(context.Background(), "GET", "/repos/foo/bar/pulls", &[]struct{}{})
+		if got := atomic.LoadInt32(&appCalls); got != 2 {
+			t.Errorf("after TTL expiry: appCalls=%d, want 2", got)
+		}
+	})
+	t.Run("non-repos path does not populate cache", func(t *testing.T) {
+		var appCalls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") == "Bearer app" {
+				atomic.AddInt32(&appCalls, 1)
+				http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("[]"))
+		}))
+		defer srv.Close()
+		c := NewClientWithTokenSourceAndFallback(staticToken("app"), "pat")
+		c.BaseURL = srv.URL
+		// 404 on /app/installations/123/foo — no owner to key on, so
+		// cache stays empty. Subsequent repos call still tries App.
+		_ = c.do(context.Background(), "GET", "/app/installations/1/anything", &struct{}{})
+		_ = c.do(context.Background(), "GET", "/repos/some/repo/pulls", &[]struct{}{})
+		if got := atomic.LoadInt32(&appCalls); got != 2 {
+			t.Errorf("appCalls=%d, want 2 (no cache key from /app path)", got)
+		}
+	})
 	t.Run("404 on App → rate-limited PAT → rate-limit retry on PAT → success", func(t *testing.T) {
 		var attempts int32
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

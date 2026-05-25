@@ -1,11 +1,22 @@
 "use client";
 
-import { ArrowLeft, ArrowUpRight } from "lucide-react";
+import { useState } from "react";
+import { ArrowLeft, ArrowUpRight, Trash2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Button } from "@multica/ui/components/ui/button";
-import { taskDetailOptions, usePromoteTask } from "@multica/core/tasks";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@multica/ui/components/ui/alert-dialog";
+import { taskDetailOptions, useDeleteTask, usePromoteTask } from "@multica/core/tasks";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { paths } from "@multica/core/paths";
@@ -37,6 +48,8 @@ export function TaskDetailPage({ taskId }: TaskDetailPageProps) {
   const navigation = useNavigation();
   const { data: task, isLoading, isError } = useQuery(taskDetailOptions(wsId, taskId));
   const promote = usePromoteTask();
+  const deleteTask = useDeleteTask();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const backHref = workspace ? paths.workspace(workspace.slug).tasks() : "#";
 
@@ -51,6 +64,25 @@ export function TaskDetailPage({ taskId }: TaskDetailPageProps) {
       },
       onError: () => {
         toast.error(t(($) => $.detail.promote_failed));
+      },
+    });
+  };
+
+  const onDeleteConfirmed = () => {
+    if (!task || deleteTask.isPending) return;
+    deleteTask.mutate(task.id, {
+      onSuccess: () => {
+        setConfirmingDelete(false);
+        // Navigate back to the list before the user notices the detail
+        // route now 404s. Toast omitted — the row disappearing from the
+        // list is its own confirmation; piling a toast on a confirm-then-
+        // act flow is noise.
+        if (workspace) {
+          navigation.push(paths.workspace(workspace.slug).tasks());
+        }
+      },
+      onError: () => {
+        toast.error(t(($) => $.detail.delete_failed));
       },
     });
   };
@@ -86,18 +118,32 @@ export function TaskDetailPage({ taskId }: TaskDetailPageProps) {
                   {t(($) => $.status[task.status])}
                 </div>
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={onPromote}
-                disabled={promote.isPending}
-                className="shrink-0"
-              >
-                <ArrowUpRight className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-                {promote.isPending
-                  ? t(($) => $.detail.promote_pending)
-                  : t(($) => $.detail.promote_button)}
-              </Button>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={onPromote}
+                  disabled={promote.isPending || deleteTask.isPending}
+                >
+                  <ArrowUpRight className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                  {promote.isPending
+                    ? t(($) => $.detail.promote_pending)
+                    : t(($) => $.detail.promote_button)}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setConfirmingDelete(true)}
+                  disabled={promote.isPending || deleteTask.isPending}
+                  aria-label={t(($) => $.detail.delete_button)}
+                  // Icon-only button so the destructive action doesn't visually
+                  // compete with Promote (the constructive primary). Hover
+                  // surfaces destructive-red to make the intent obvious.
+                  className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4" aria-hidden />
+                </Button>
+              </div>
             </div>
             <div className="mt-6 whitespace-pre-wrap text-sm leading-relaxed">
               {task.description ?? (
@@ -107,6 +153,29 @@ export function TaskDetailPage({ taskId }: TaskDetailPageProps) {
           </article>
         )}
       </div>
+
+      <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t(($) => $.detail.delete_confirm_title)}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(($) => $.detail.delete_confirm_body)}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteTask.isPending}>
+              {t(($) => $.detail.delete_cancel)}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={onDeleteConfirmed}
+              disabled={deleteTask.isPending}
+              variant="destructive"
+            >
+              {t(($) => $.detail.delete_confirm_action)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

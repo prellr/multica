@@ -180,6 +180,49 @@ export function useUpdateTask() {
 }
 
 /**
+ * Delete a task with an optimistic remove. The row disappears from every
+ * list cache immediately; on error the snapshots are restored so the row
+ * comes back. Detail cache is dropped on success (refetching a deleted
+ * task would 404; better to evict than serve stale).
+ *
+ * No undo path in this hook — the surface that triggers delete is
+ * responsible for any "Undo" toast affordance if it wants one. The
+ * mutation rejects with the network/HTTP error if the request fails
+ * so the UI can surface it; the rollback happens automatically.
+ */
+export function useDeleteTask() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+
+  return useMutation({
+    mutationFn: (id: string) => api.deleteTask(id),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: taskKeys.all(wsId) });
+      const previousLists = qc.getQueriesData<ListTasksResponse>({
+        queryKey: taskKeys.all(wsId),
+      });
+      const previousDetail = qc.getQueryData<Task>(taskKeys.detail(wsId, id));
+      removeTaskFromLists(qc, wsId, id);
+      return { id, previousLists, previousDetail };
+    },
+    onSuccess: (_data, id) => {
+      // Forget the detail cache — refetching after delete would 404, and
+      // any subscriber on /tasks/:id should resolve to "not found" via
+      // the loader path (404 → toast or redirect, owned by the caller).
+      qc.removeQueries({ queryKey: taskKeys.detail(wsId, id) });
+    },
+    onError: (_err, _id, ctx) => {
+      ctx?.previousLists.forEach(([key, data]) => {
+        qc.setQueryData(key, data);
+      });
+      if (ctx?.previousDetail && ctx.id) {
+        qc.setQueryData(taskKeys.detail(wsId, ctx.id), ctx.previousDetail);
+      }
+    },
+  });
+}
+
+/**
  * Promote a task into a full issue. The task disappears from the task
  * surface and the resulting issue appears in the issue surface. The id
  * is preserved across the transition (server reuses the row), so a

@@ -17,7 +17,13 @@
     "promote_button": "升级为 issue",
     "promote_pending": "升级中…",
     "promote_success": "已升级为 {{identifier}}",
-    "promote_failed": "升级失败，请重试。"
+    "promote_failed": "升级失败，请重试。",
+    "delete_button": "删除",
+    "delete_confirm_title": "删除这个 task？",
+    "delete_confirm_body": "这个 task 将被永久删除，无法撤销。",
+    "delete_confirm_action": "删除 task",
+    "delete_cancel": "取消",
+    "delete_failed": "删除失败，请重试。"
   },
   "quick_add": {
     "placeholder": "添加一个 task，按 Enter 提交",

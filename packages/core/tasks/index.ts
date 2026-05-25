@@ -1,5 +1,11 @@
 export { taskKeys, taskListOptions, taskDetailOptions, TASK_PAGE_SIZE } from "./queries";
-export { useCreateTask, useUpdateTask, usePromoteTask, isTempTaskId } from "./mutations";
+export {
+  useCreateTask,
+  useUpdateTask,
+  useDeleteTask,
+  usePromoteTask,
+  isTempTaskId,
+} from "./mutations";
 export {
   prependTaskToLists,
   replaceTaskInLists,

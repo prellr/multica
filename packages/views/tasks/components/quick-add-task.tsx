@@ -5,13 +5,28 @@ import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useCreateTask } from "@multica/core/tasks";
 import { ApiError } from "@multica/core/api";
+import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 
+export interface QuickAddTaskProps {
+  /** When set, every task created from this input gets `parent_issue_id = parentIssueId`.
+   *  Used by the sidebar's children list to create subtasks under the
+   *  open task. Omit for the top-level list. */
+  parentIssueId?: string;
+  /** Overrides the default placeholder. The children-list mount uses a
+   *  shorter "Add subtask" prompt; the top-level list uses the full
+   *  "Add a task and press Enter" copy. */
+  placeholder?: string;
+  /** Surface size. Inherits a denser padding when nested inside a
+   *  child-list under the sidebar. */
+  size?: "default" | "compact";
+}
+
 /**
- * Inline-create row anchored at the top of the task list. The point of
- * this surface is speed — type a title, hit Enter, the row appears
- * immediately (optimistic), the input clears, focus stays on the input
- * for the next entry. No modal, no field-by-field form.
+ * Inline-create row. Used as the anchor at the top of the task list AND
+ * as the "Add subtask" affordance inside the children list on the detail
+ * sidebar. Both surfaces want the same UX (type, Enter, optimistic
+ * insert) but slightly different parent-binding and visual weight.
  *
  * Design notes:
  *  - Empty submissions are no-ops (no toast, no flash). Backend would
@@ -26,7 +41,7 @@ import { useT } from "../../i18n";
  *    repopulated for retry without losing context. Title is restored so
  *    the user doesn't lose what they typed.
  */
-export function QuickAddTask() {
+export function QuickAddTask({ parentIssueId, placeholder, size = "default" }: QuickAddTaskProps = {}) {
   const { t } = useT("tasks");
   const inputRef = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState("");
@@ -39,7 +54,9 @@ export function QuickAddTask() {
     const previous = value;
     setValue("");
     createTask.mutate(
-      { title },
+      // Spread parent_issue_id only when set so the request body stays
+      // minimal in the top-level case. Backend treats missing as null.
+      parentIssueId ? { title, parent_issue_id: parentIssueId } : { title },
       {
         onError: (err) => {
           // Restore so the user can retry without losing context.
@@ -83,12 +100,23 @@ export function QuickAddTask() {
     submit();
   };
 
+  const isCompact = size === "compact";
+
   return (
     <form
       onSubmit={onSubmit}
-      className="flex items-center gap-3 border-b bg-background px-4 py-2.5"
+      className={cn(
+        "flex items-center gap-3 border-b bg-background",
+        // Compact mode trims vertical padding so the input nestles into
+        // the children-list section under the sidebar without dominating
+        // the visual weight of the rows below.
+        isCompact ? "px-3 py-1.5 text-xs" : "px-4 py-2.5",
+      )}
     >
-      <Plus className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+      <Plus
+        className={cn("shrink-0 text-muted-foreground", isCompact ? "h-3.5 w-3.5" : "h-4 w-4")}
+        aria-hidden
+      />
       <input
         ref={inputRef}
         type="text"
@@ -97,9 +125,12 @@ export function QuickAddTask() {
         onKeyDown={onKeyDown}
         onCompositionStart={() => setIsComposing(true)}
         onCompositionEnd={() => setIsComposing(false)}
-        placeholder={t(($) => $.quick_add.placeholder)}
+        placeholder={placeholder ?? t(($) => $.quick_add.placeholder)}
         aria-label={t(($) => $.quick_add.submit)}
-        className="flex-1 bg-transparent text-sm placeholder:text-muted-foreground focus:outline-none"
+        className={cn(
+          "flex-1 bg-transparent placeholder:text-muted-foreground focus:outline-none",
+          isCompact ? "text-xs" : "text-sm",
+        )}
       />
     </form>
   );

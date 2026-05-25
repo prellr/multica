@@ -1,43 +1,68 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ListTodo } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from "@multica/ui/components/ui/resizable";
+import { useDefaultLayout } from "react-resizable-panels";
 import { taskListOptions } from "@multica/core/tasks";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useAuthStore } from "@multica/core/auth";
 import type { ListTasksParams } from "@multica/core/types";
 import { PageHeader } from "../../layout/page-header";
+import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 import { TaskRow } from "./task-row";
 import { QuickAddTask } from "./quick-add-task";
+import { TaskDetailSidebar } from "./task-detail-sidebar";
 
 type Scope = "mine" | "all";
 
 /**
- * Workspace task list with a Mine/All toggle. Defaults to "Mine" since
- * the sidebar entry lives under the user (per the brand spec) — framing
- * tasks as a personal surface. The toggle is a one-click escape valve to
- * the workspace-wide view; we don't paginate or filter beyond that
- * because the lightness thesis says tasks should never need it.
+ * Workspace task list, master-detail. Left panel: scoped task list with
+ * Mine/All toggle + inline quick-add. Right panel: detail sidebar for
+ * the selected task, with subtasks inline.
  *
- * Flat by design — no per-status buckets, no kanban, no view-mode
- * switcher. If the surface grows the equivalent of {@link IssuesPage},
- * the lightness thesis has failed and we should consolidate the two
- * surfaces instead.
+ * Selection state lives in the URL as `?task=<id>` (mirrors the inbox
+ * pattern). Clicking a row in either the main list or the subtasks list
+ * pushes to the same URL shape; clicking close clears the param. The
+ * legacy `/tasks/:id` route still resolves — it redirects here on mount,
+ * preserving any shared links.
+ *
+ * Flat list by design — no per-status buckets, no kanban. If the surface
+ * grows the equivalent of IssuesPage, the lightness thesis has failed
+ * and we should consolidate the two surfaces instead.
  */
 export function TasksPage() {
   const { t } = useT("tasks");
   const wsId = useWorkspaceId();
   const user = useAuthStore((s) => s.user);
+  const { searchParams, replace, pathname } = useNavigation();
   const [scope, setScope] = useState<Scope>("mine");
 
-  // The "mine" scope falls back to "all" if for some reason we don't have
-  // a user yet — better than passing a blank assignee_id and getting an
-  // empty list. The auth store is hydrated before this page mounts in
-  // practice, so this is a defensive fallback.
+  const selectedId = searchParams.get("task") ?? "";
+
+  const setSelected = useCallback(
+    (id: string) => {
+      const next = new URLSearchParams(searchParams);
+      if (id) next.set("task", id);
+      else next.delete("task");
+      const qs = next.toString();
+      replace(qs ? `${pathname}?${qs}` : pathname);
+    },
+    [pathname, replace, searchParams],
+  );
+
+  // Mine/All filter. Mine falls back to All when the user isn't hydrated
+  // yet — better than passing a blank assignee_id and getting an empty
+  // list. The auth store is normally hydrated before this page mounts;
+  // this is a defensive fallback.
   const filter: ListTasksParams = useMemo(
     () => (scope === "mine" && user?.id ? { assignee_id: user.id } : {}),
     [scope, user?.id],
@@ -45,38 +70,86 @@ export function TasksPage() {
 
   const { data: tasks = [], isLoading } = useQuery(taskListOptions(wsId, filter));
 
-  return (
-    <div className="flex h-full flex-col">
-      <PageHeader>
-        <ListTodo className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden />
-        <span className="text-sm font-medium">{t(($) => $.page.title)}</span>
-        <ScopeToggle scope={scope} onChange={setScope} />
-      </PageHeader>
+  // If the selected task isn't in the visible list (filtered out, deleted,
+  // never in this scope), clear the selection so the right panel doesn't
+  // show stale data. The detail query still drives the panel; this just
+  // keeps the URL honest when the user changes scope.
+  useEffect(() => {
+    if (!selectedId || isLoading) return;
+    if (!tasks.some((t) => t.id === selectedId)) {
+      // Don't auto-clear: a task could be a valid subtask of something in
+      // the visible list, OR the user opened the sidebar via a shared
+      // link. Leaving the selection lets the detail query 404 gracefully
+      // through its own error path.
+    }
+  }, [selectedId, tasks, isLoading]);
 
-      {/* Quick-add is always mounted (even in loading and empty states) so
-        * the user can start adding tasks immediately on first load — the
-        * surface's whole point is being fast. */}
-      <QuickAddTask />
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: "multica_tasks_layout",
+  });
 
-      {isLoading ? (
-        <div className="flex-1 overflow-auto">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="flex items-center gap-3 border-b px-4 py-2.5">
-              <Skeleton className="h-4 w-4 rounded-full" />
-              <Skeleton className="h-4 flex-1 max-w-md" />
-            </div>
-          ))}
+  const listHeader = (
+    <PageHeader>
+      <ListTodo className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden />
+      <span className="text-sm font-medium">{t(($) => $.page.title)}</span>
+      <ScopeToggle scope={scope} onChange={setScope} />
+    </PageHeader>
+  );
+
+  const listBody = isLoading ? (
+    <div className="flex-1 overflow-auto">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3 border-b px-4 py-2.5">
+          <Skeleton className="h-4 w-4 rounded-full" />
+          <Skeleton className="h-4 flex-1 max-w-md" />
         </div>
-      ) : tasks.length === 0 ? (
-        <EmptyState scope={scope} />
-      ) : (
-        <div className="flex-1 overflow-auto">
-          {tasks.map((task) => (
-            <TaskRow key={task.id} task={task} />
-          ))}
-        </div>
-      )}
+      ))}
     </div>
+  ) : tasks.length === 0 ? (
+    <EmptyState scope={scope} />
+  ) : (
+    <div className="flex-1 overflow-auto">
+      {tasks.map((task) => (
+        <TaskRow key={task.id} task={task} selected={task.id === selectedId} />
+      ))}
+    </div>
+  );
+
+  return (
+    <ResizablePanelGroup
+      orientation="horizontal"
+      className="flex-1 min-h-0"
+      defaultLayout={defaultLayout}
+      onLayoutChanged={onLayoutChanged}
+    >
+      <ResizablePanel
+        id="list"
+        defaultSize={380}
+        minSize={280}
+        maxSize={560}
+        groupResizeBehavior="preserve-pixel-size"
+      >
+        <div className="flex h-full flex-col border-r">
+          {listHeader}
+          {/* Quick-add is always mounted so the surface is ready to
+            * accept input immediately on first paint. */}
+          <QuickAddTask />
+          {listBody}
+        </div>
+      </ResizablePanel>
+      <ResizableHandle />
+      <ResizablePanel id="detail" minSize="40%">
+        {selectedId ? (
+          <TaskDetailSidebar
+            key={selectedId}
+            taskId={selectedId}
+            onClose={() => setSelected("")}
+          />
+        ) : (
+          <SelectPrompt />
+        )}
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }
 
@@ -85,10 +158,6 @@ interface ScopeToggleProps {
   onChange: (scope: Scope) => void;
 }
 
-/** Two-button scope toggle. Inline in the page header rather than a
- *  separate row to keep vertical density tight on the lightweight
- *  surface. Tiny by design — bigger filter UIs would push tasks toward
- *  the issue surface. */
 function ScopeToggle({ scope, onChange }: ScopeToggleProps) {
   const { t } = useT("tasks");
   return (
@@ -142,6 +211,18 @@ function EmptyState({ scope }: { scope: Scope }) {
           {t(($) => $.page[descKey])}
         </p>
       </div>
+    </div>
+  );
+}
+
+function SelectPrompt() {
+  const { t } = useT("tasks");
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
+      <ListTodo className="h-8 w-8 text-muted-foreground/60" aria-hidden />
+      <p className="max-w-xs text-sm text-muted-foreground">
+        {t(($) => $.detail.select_prompt)}
+      </p>
     </div>
   );
 }

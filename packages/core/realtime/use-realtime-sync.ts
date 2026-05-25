@@ -28,6 +28,7 @@ import {
   onIssueLabelsChanged,
   onIssueMetadataChanged,
 } from "../issues/ws-updaters";
+import { onUserTaskCreated, onUserTaskUpdated, onUserTaskDeleted } from "../tasks/ws-updaters";
 import { onInboxNew, onInboxInvalidate, onInboxIssueStatusChanged, onInboxIssueDeleted } from "../inbox/ws-updaters";
 import { inboxKeys } from "../inbox/queries";
 import { notificationPreferenceOptions } from "../notification-preferences/queries";
@@ -361,6 +362,11 @@ export function useRealtimeSync(
     const specificEvents = new Set([
       "workspace:updated",
       "issue:updated", "issue:created", "issue:deleted", "issue_labels:changed", "issue_metadata:changed", "inbox:new",
+      // User-task lifecycle. Same `task:` prefix as agent_task_queue events,
+      // distinguished by verb (created/updated/deleted vs queued/dispatch/...).
+      // Routing is by exact event name in ws-client subscriptions, so prefix
+      // collisions are notional only.
+      "task:created", "task:updated", "task:deleted",
       "comment:created", "comment:updated", "comment:deleted",
       "comment:resolved", "comment:unresolved",
       "activity:created",
@@ -473,6 +479,30 @@ export function useRealtimeSync(
         onIssueDeleted(qc, wsId, issue_id);
         onInboxIssueDeleted(qc, wsId, issue_id);
       }
+    });
+
+    // User-task lifecycle. The payload shape mirrors the issue events —
+    // server publishes `{ task: TaskResponse }` for create/update and
+    // `{ task_id: string }` for delete. See server task.go h.publish calls.
+    const unsubTaskCreated = ws.on("task:created", (p) => {
+      const { task } = (p ?? {}) as { task?: import("../types").Task };
+      if (!task?.id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onUserTaskCreated(qc, wsId, task);
+    });
+
+    const unsubTaskUpdated = ws.on("task:updated", (p) => {
+      const { task } = (p ?? {}) as { task?: import("../types").Task };
+      if (!task?.id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onUserTaskUpdated(qc, wsId, task);
+    });
+
+    const unsubTaskDeleted = ws.on("task:deleted", (p) => {
+      const { task_id } = (p ?? {}) as { task_id?: string };
+      if (!task_id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onUserTaskDeleted(qc, wsId, task_id);
     });
 
     const unsubIssueLabelsChanged = ws.on("issue_labels:changed", (p) => {
@@ -1212,6 +1242,9 @@ export function useRealtimeSync(
       unsubIssueUpdated();
       unsubIssueCreated();
       unsubIssueDeleted();
+      unsubTaskCreated();
+      unsubTaskUpdated();
+      unsubTaskDeleted();
       unsubIssueLabelsChanged();
       unsubIssueMetadataChanged();
       unsubInboxNew();

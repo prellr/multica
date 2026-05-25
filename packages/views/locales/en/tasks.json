@@ -15,7 +15,12 @@
     "no_description": "No description.",
     "back_to_tasks": "Back to tasks"
   },
+  "quick_add": {
+    "placeholder": "Add a task and press Enter",
+    "submit": "Add task"
+  },
   "errors": {
-    "load_failed": "Failed to load task."
+    "load_failed": "Failed to load task.",
+    "create_failed": "Couldn't create task. Please try again."
   }
 }

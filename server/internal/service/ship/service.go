@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -176,7 +177,32 @@ func (s *Service) SyncProject(ctx context.Context, workspaceID, projectID pgtype
 			// same code, so "Sync Now" is finally a real refresh
 			// rather than the no-op (or worse, regression) it was
 			// before PR1 + PR2 landed.
-			if mapPRState(pr) == db.PullRequestStateOpen {
+			//
+			// MERGED PRs: also refresh when the cached ci_status is
+			// `pending` or empty. Direct-to-prod repos auto-merge as
+			// soon as `mergeable=true` even if check-runs are still
+			// in-flight — if the final `check_run.completed` webhook
+			// lands after the merge OR gets dropped, the cache sticks
+			// at "pending" forever because the previous rule only
+			// refreshed open PRs (closed-list iteration is bounded at
+			// 25, and we skip success/failure rows to keep the GH-call
+			// budget tight — bursts of recently-merged PRs would
+			// otherwise add up to 25 extra calls per sync per project).
+			state := mapPRState(pr)
+			shouldRefresh := state == db.PullRequestStateOpen
+			if !shouldRefresh && state == db.PullRequestStateMerged {
+				if row, err := s.Q.GetPullRequestByNumber(ctx, db.GetPullRequestByNumberParams{
+					WorkspaceID: workspaceID,
+					RepoUrl:     repoURL,
+					PrNumber:    int32(pr.Number),
+				}); err == nil {
+					cached := strings.ToLower(textValue(row.CiStatus))
+					if cached == "" || cached == "pending" {
+						shouldRefresh = true
+					}
+				}
+			}
+			if shouldRefresh {
 				if err := s.refreshPRCIStatus(ctx, workspaceID, repoURL, owner, repo, pr); err != nil {
 					slog.Warn("ship: refresh PR ci_status failed",
 						"repo", result.Repo, "pr", pr.Number, "error", err)

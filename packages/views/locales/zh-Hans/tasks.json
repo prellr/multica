@@ -1,0 +1,21 @@
+{
+  "page": {
+    "title": "task",
+    "breadcrumb": "task",
+    "empty_title": "还没有 task",
+    "empty_description": "task 比 issue 更轻量 — 用它记快速待办和准备工作。创建一个开始使用。"
+  },
+  "status": {
+    "todo": "待办",
+    "in_progress": "进行中",
+    "done": "已完成",
+    "cancelled": "已取消"
+  },
+  "detail": {
+    "no_description": "暂无描述。",
+    "back_to_tasks": "返回 task 列表"
+  },
+  "errors": {
+    "load_failed": "加载 task 失败。"
+  }
+}

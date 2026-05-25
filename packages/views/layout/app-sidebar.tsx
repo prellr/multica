@@ -110,6 +110,7 @@ const EMPTY_INBOX: Awaited<ReturnType<typeof api.listInbox>> = [];
 type NavKey =
   | "inbox"
   | "myIssues"
+  | "tasks"
   | "issues"
   | "projects"
   | "memory"
@@ -127,6 +128,7 @@ type NavKey =
 type NavLabelKey =
   | "inbox"
   | "my_issues"
+  | "tasks"
   | "issues"
   | "projects"
   | "memory"
@@ -143,6 +145,10 @@ type NavLabelKey =
 const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
   { key: "inbox", labelKey: "inbox", icon: Inbox },
   { key: "myIssues", labelKey: "my_issues", icon: CircleUser },
+  // Tasks live under the user (next to My Issues) rather than under Workspace
+  // because they're a personal-feeling surface — see the brand spec. The
+  // workspace still owns the data; this is just where the entry-point lives.
+  { key: "tasks", labelKey: "tasks", icon: ListTodo },
 ];
 
 type NavItem = { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox };

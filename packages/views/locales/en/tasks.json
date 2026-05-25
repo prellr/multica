@@ -1,0 +1,21 @@
+{
+  "page": {
+    "title": "Tasks",
+    "breadcrumb": "Tasks",
+    "empty_title": "No tasks yet",
+    "empty_description": "Tasks are lighter than issues — use them for quick to-dos and prep work. Create one to get started."
+  },
+  "status": {
+    "todo": "To do",
+    "in_progress": "In progress",
+    "done": "Done",
+    "cancelled": "Cancelled"
+  },
+  "detail": {
+    "no_description": "No description.",
+    "back_to_tasks": "Back to tasks"
+  },
+  "errors": {
+    "load_failed": "Failed to load task."
+  }
+}

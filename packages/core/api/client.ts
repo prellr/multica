@@ -1,5 +1,10 @@
 import type {
   Issue,
+  Task,
+  ListTasksParams,
+  ListTasksResponse,
+  CreateTaskRequest,
+  UpdateTaskRequest,
   CreateIssueRequest,
   UpdateIssueRequest,
   ListIssuesResponse,
@@ -278,6 +283,8 @@ import {
   EMPTY_MCP_SERVER_RESPONSE,
   MCPServerDirectoryResponseSchema,
   EMPTY_MCP_SERVER_DIRECTORY_RESPONSE,
+  ListTasksResponseSchema,
+  EMPTY_LIST_TASKS_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -719,6 +726,51 @@ export class ApiClient {
 
   async deleteIssue(id: string): Promise<void> {
     await this.fetch(`/api/issues/${id}`, { method: "DELETE" });
+  }
+
+  // Tasks. Distinct from the agent_task_queue surface (see ws-client.ts and
+  // chat-related task: events) — these endpoints handle user-facing tasks
+  // (issue rows with kind='task'). The wire response intentionally omits
+  // `number`/`identifier`/`priority` (see TaskResponse on the server). All
+  // reads go through parseWithFallback so a server-side shape drift on this
+  // surface — older desktop builds talking to a newer backend — surfaces
+  // as the fallback rather than a white-screen.
+  async listTasks(params?: ListTasksParams): Promise<ListTasksResponse> {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    if (params?.offset) search.set("offset", String(params.offset));
+    if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
+    if (params?.status) search.set("status", params.status);
+    if (params?.assignee_id) search.set("assignee_id", params.assignee_id);
+    if (params?.creator_id) search.set("creator_id", params.creator_id);
+    if (params?.project_id) search.set("project_id", params.project_id);
+    if (params?.parent_issue_id) search.set("parent_issue_id", params.parent_issue_id);
+    const raw = await this.fetch<unknown>(`/api/tasks?${search}`);
+    return parseWithFallback(raw, ListTasksResponseSchema, EMPTY_LIST_TASKS_RESPONSE, {
+      endpoint: "GET /api/tasks",
+    });
+  }
+
+  async getTask(id: string): Promise<Task> {
+    return this.fetch(`/api/tasks/${id}`);
+  }
+
+  async createTask(data: CreateTaskRequest): Promise<Task> {
+    return this.fetch("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTask(id: string, data: UpdateTaskRequest): Promise<Task> {
+    return this.fetch(`/api/tasks/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTask(id: string): Promise<void> {
+    await this.fetch(`/api/tasks/${id}`, { method: "DELETE" });
   }
 
   async batchUpdateIssues(issueIds: string[], updates: UpdateIssueRequest): Promise<{ updated: number }> {

@@ -8,6 +8,7 @@ import {
 } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import { IssueDetailPage } from "./pages/issue-detail-page";
+import { TaskDetailPage } from "./pages/task-detail-page";
 import { ProjectDetailPage } from "./pages/project-detail-page";
 import { MemoryDetailPage } from "./pages/memory-detail-page";
 import { AutopilotDetailPage } from "./pages/autopilot-detail-page";
@@ -21,6 +22,7 @@ import { MemoryPage } from "@multica/views/memory/components";
 import { DashboardPage } from "@multica/views/dashboard";
 import { AutopilotsPage } from "@multica/views/autopilots/components";
 import { MyIssuesPage } from "@multica/views/my-issues";
+import { TasksPage } from "@multica/views/tasks";
 import { ShipPage, ShipReleasePage } from "@multica/views/ship";
 import { SkillsPage } from "@multica/views/skills";
 import { DesktopRuntimesPage } from "./components/desktop-runtimes-page";
@@ -148,6 +150,20 @@ export const appRoutes: RouteObject[] = [
             path: "my-issues",
             element: <MyIssuesPage />,
             handle: { title: "My Issues" },
+          },
+          {
+            path: "tasks",
+            element: (
+              <ErrorBoundary>
+                <TasksPage />
+              </ErrorBoundary>
+            ),
+            handle: { title: "Tasks" },
+          },
+          {
+            path: "tasks/:id",
+            element: <TaskDetailPage />,
+            handle: { title: "Task" },
           },
           {
             path: "ship",

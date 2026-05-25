@@ -1,4 +1,5 @@
 export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction } from "./issue";
+export type { Task, TaskStatus, TaskAssigneeType, ListTasksParams, ListTasksResponse, CreateTaskRequest, UpdateTaskRequest } from "./task";
 export type {
   Agent,
   AgentStatus,

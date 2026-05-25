@@ -134,16 +134,17 @@ func runShipHubDeployWorkflowPollOnce(ctx context.Context, queries *db.Queries, 
 		}
 
 		token := loadShipHubTokenForWorkspace(ctx, queries, ws)
-		if token == "" {
-			// Same skip behavior as the reconciler: a workspace with
-			// the feature enabled but no token can't make any GitHub
-			// calls at all, so we don't even attempt the public-API
-			// fallback (rate limit is too low for periodic polling).
-			slog.Debug("ship hub deploy poller: skipping workspace without token",
+		client, hasAuth := handler.ShipHubGitHubClientForBackground(ctx, queries, ws.ID, token)
+		if !hasAuth {
+			// Same skip behavior as the reconciler: a workspace with the
+			// feature enabled but neither App installation nor PAT can't
+			// make any GitHub calls at all, so we don't even attempt the
+			// public-API fallback (rate limit is too low for periodic
+			// polling).
+			slog.Debug("ship hub deploy poller: skipping workspace without GitHub auth",
 				"workspace_id", ws.ID)
 			continue
 		}
-		client := gh.NewClient(token)
 		pollWorkspaceDeployWorkflows(ctx, queries, bus, ws, client, stagingWf, prodWf)
 	}
 }

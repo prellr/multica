@@ -78,15 +78,31 @@ func (h *Handler) loadShipHubGitHubToken(ctx context.Context, ws db.Workspace) s
 // Read-only handlers (list PRs, list envs) call this with requireToken=false
 // — they're fine working off cached rows. Sync/refresh handlers call it
 // with requireToken=true.
+//
+// When a GitHub App is configured (GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY)
+// AND the workspace has a github_installation row, the returned client
+// uses installation tokens (own per-installation rate-limit quota,
+// independent of any personal PAT). Otherwise it falls back to the
+// workspace's stored personal token. The requireToken gate still applies
+// to the personal-token path so workspaces using the legacy flow get the
+// same UX as before.
 func (h *Handler) shipServiceFromWorkspace(w http.ResponseWriter, r *http.Request, ws db.Workspace, requireToken bool) (*ship.Service, bool) {
 	token := h.loadShipHubGitHubToken(r.Context(), ws)
-	if requireToken && token == "" {
+	// App path can authenticate without a personal token, so a missing
+	// PAT is only fatal when the App path is unavailable.
+	hasAppPath := false
+	if auth, _ := GitHubAppAuth(); auth != nil {
+		if _, ok := lookupInstallationID(r.Context(), h.Queries, ws.ID); ok {
+			hasAppPath = true
+		}
+	}
+	if requireToken && token == "" && !hasAppPath {
 		writeError(w, http.StatusBadRequest, "GitHub token not configured. Set it in workspace settings → Ship Hub.")
 		return nil, false
 	}
 	return &ship.Service{
 		Q:      h.Queries,
-		Github: gh.NewClient(token),
+		Github: shipHubGitHubClient(r.Context(), h.Queries, ws.ID, token),
 	}, true
 }
 

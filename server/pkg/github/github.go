@@ -58,13 +58,34 @@ var (
 	ErrConflict = errors.New("github: conflict")
 )
 
+// TokenSource yields a fresh GitHub auth token on demand. The Ship Hub
+// uses two implementations: a static personal access token (legacy path)
+// and a GitHub-App installation-token cache (app_auth.go), which mints a
+// new ~1-hour token before the cached one expires. Returning ("", nil)
+// is a valid no-auth call; returning a non-nil error fails the request.
+type TokenSource interface {
+	Token(ctx context.Context) (string, error)
+}
+
+// staticToken is the trivial TokenSource used by the legacy PAT path —
+// it ignores ctx and returns the constant. Kept unexported because
+// callers should use NewClient with a string for the static case.
+type staticToken string
+
+func (s staticToken) Token(context.Context) (string, error) { return string(s), nil }
+
 // Client is a thin REST wrapper. Zero-config construction (NewClient)
 // uses the default HTTP client and the public api.github.com base; tests
 // swap BaseURL and HTTPClient via the exported fields.
+//
+// Auth precedence: TokenSource wins when set; otherwise the static
+// Token field is used. The exported Token field stays so existing tests
+// and the PAT path keep working.
 type Client struct {
-	Token      string
-	BaseURL    string
-	HTTPClient *http.Client
+	Token       string
+	TokenSource TokenSource
+	BaseURL     string
+	HTTPClient  *http.Client
 }
 
 // NewClient builds a Client with sensible defaults. token may be empty —
@@ -75,6 +96,18 @@ func NewClient(token string) *Client {
 		Token:      token,
 		BaseURL:    apiBase,
 		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// NewClientWithTokenSource builds a Client that asks the given TokenSource
+// for an auth token on every request. Used for GitHub-App installation
+// tokens, which expire after ~1 hour and are refreshed transparently by
+// the cache in app_auth.go.
+func NewClientWithTokenSource(src TokenSource) *Client {
+	return &Client{
+		TokenSource: src,
+		BaseURL:     apiBase,
+		HTTPClient:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -501,8 +534,16 @@ func (c *Client) doWithBody(ctx context.Context, method, path string, reqBody, t
 		if bodyBytes != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
-		if c.Token != "" {
-			req.Header.Set("Authorization", "Bearer "+c.Token)
+		token := c.Token
+		if c.TokenSource != nil {
+			t, err := c.TokenSource.Token(ctx)
+			if err != nil {
+				return fmt.Errorf("github: token source: %w", err)
+			}
+			token = t
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
 		}
 
 		resp, err := httpClient.Do(req)

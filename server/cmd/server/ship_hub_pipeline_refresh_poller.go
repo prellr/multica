@@ -10,7 +10,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/service/ship"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	gh "github.com/multica-ai/multica/server/pkg/github"
 )
 
 // shipHubPipelineRefreshInterval is how often the pipeline-refresh
@@ -73,16 +72,18 @@ func runShipHubPipelineRefreshOnce(ctx context.Context, queries *db.Queries) {
 					"workspace_id", ws.ID, "error", err)
 			}
 		}
-		if token == "" {
-			// Feature enabled but no token configured — the introspector
-			// can't authenticate against GitHub. Skip quietly.
-			slog.Debug("ship hub pipeline refresh poller: skipping workspace without token",
+		client, hasAuth := handler.ShipHubGitHubClientForBackground(ctx, queries, ws.ID, token)
+		if !hasAuth {
+			// Feature enabled but neither a GitHub App installation nor
+			// a personal token is configured — the introspector can't
+			// authenticate. Skip quietly.
+			slog.Debug("ship hub pipeline refresh poller: skipping workspace without GitHub auth",
 				"workspace_id", ws.ID)
 			continue
 		}
 		svc := &ship.Service{
 			Q:      queries,
-			Github: gh.NewClient(token),
+			Github: client,
 		}
 		projects, err := queries.ListProjects(ctx, db.ListProjectsParams{
 			WorkspaceID:     ws.ID,

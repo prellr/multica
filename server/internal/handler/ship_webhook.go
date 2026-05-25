@@ -163,7 +163,7 @@ func (h *Handler) dispatchWebhook(d WebhookDispatch) {
 
 	svc := &ship.Service{
 		Q:      h.Queries,
-		Github: gh.NewClient(token),
+		Github: shipHubGitHubClient(ctx, h.Queries, d.WorkspaceID, token),
 	}
 	outcome, err := svc.ProcessWebhook(ctx, ship.WebhookEvent{
 		WorkspaceID: d.WorkspaceID,

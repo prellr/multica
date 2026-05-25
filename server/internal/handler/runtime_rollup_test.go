@@ -153,7 +153,14 @@ func TestRollupTaskUsageDaily_AggregatesAndIsIdempotent(t *testing.T) {
 	if _, err := testPool.Exec(ctx, `
 		UPDATE task_usage SET input_tokens = 1000, updated_at = $1
 		 WHERE task_id IN (
-		   SELECT id FROM agent_task_queue WHERE runtime_id = $2 AND created_at::date = $3::date
+		   -- tz-safe range — created_at::date follows the session tz, which
+		   -- silently drops rows on non-UTC servers (their UTC created_at
+		   -- maps to the prior local date). A half-open timestamptz range
+		   -- is unambiguous regardless of session tz.
+		   SELECT id FROM agent_task_queue
+		    WHERE runtime_id = $2
+		      AND created_at >= $3::timestamptz
+		      AND created_at <  $3::timestamptz + INTERVAL '1 day'
 		 )
 		   AND model = 'claude-3-5-sonnet'
 		   AND input_tokens = 100

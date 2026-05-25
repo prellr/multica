@@ -23,8 +23,16 @@ ORDER BY model;
 -- atq.created_at (task enqueue time), so tasks that queue one day and execute
 -- the next are attributed to the day tokens were actually produced. The since
 -- cutoff is truncated to start-of-day so `days=N` yields full calendar days.
+--
+-- Dates are bucketed in UTC explicitly (AT TIME ZONE 'UTC') rather than via
+-- bare DATE()/DATE_TRUNC, which would silently follow the Postgres session
+-- timezone. The rollup pipeline (migration 082) buckets per-runtime-tz; this
+-- workspace-level live query intentionally stays UTC so its dates are stable
+-- regardless of where the server runs (and don't shift when the operator
+-- happens to query late at night local time — the cause of the flaky
+-- TestWorkspaceUsage_BucketsByUsageTime).
 SELECT
-    DATE(tu.created_at) AS date,
+    (tu.created_at AT TIME ZONE 'UTC')::date AS date,
     tu.model,
     SUM(tu.input_tokens)::bigint AS total_input_tokens,
     SUM(tu.output_tokens)::bigint AS total_output_tokens,
@@ -35,13 +43,15 @@ FROM task_usage tu
 JOIN agent_task_queue atq ON atq.id = tu.task_id
 JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
-  AND tu.created_at >= DATE_TRUNC('day', @since::timestamptz)
-GROUP BY DATE(tu.created_at), tu.model
-ORDER BY DATE(tu.created_at) DESC, tu.model;
+  AND tu.created_at >= DATE_TRUNC('day', (@since::timestamptz) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+GROUP BY (tu.created_at AT TIME ZONE 'UTC')::date, tu.model
+ORDER BY (tu.created_at AT TIME ZONE 'UTC')::date DESC, tu.model;
 
 -- name: GetWorkspaceUsageSummary :many
 -- Filter by tu.created_at (usage report time), aligned to start-of-day, so
 -- `days=N` is interpreted as N full calendar days like the other usage queries.
+-- Cutoff bucketed in UTC explicitly — see GetWorkspaceUsageByDay above for
+-- the rationale (stability across server timezones).
 SELECT
     tu.model,
     SUM(tu.input_tokens)::bigint AS total_input_tokens,
@@ -53,7 +63,7 @@ FROM task_usage tu
 JOIN agent_task_queue atq ON atq.id = tu.task_id
 JOIN agent a ON a.id = atq.agent_id
 WHERE a.workspace_id = $1
-  AND tu.created_at >= DATE_TRUNC('day', @since::timestamptz)
+  AND tu.created_at >= DATE_TRUNC('day', (@since::timestamptz) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
 GROUP BY tu.model
 ORDER BY (SUM(tu.input_tokens) + SUM(tu.output_tokens)) DESC;
 

@@ -74,11 +74,16 @@ type IssueResponse struct {
 }
 
 func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
-	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
+	// Number is nullable as of migration 117 (tasks have no number). Issues
+	// always have a valid number, so reading `.Int32` is safe; for a stray
+	// task that flows through this issue-only converter, identifier collapses
+	// to "<PREFIX>-0" and Number is 0 — defensive, not user-facing in practice
+	// because the kind filter is upstream.
+	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number.Int32))
 	return IssueResponse{
 		ID:            uuidToString(i.ID),
 		WorkspaceID:   uuidToString(i.WorkspaceID),
-		Number:        i.Number,
+		Number:        i.Number.Int32,
 		Identifier:    identifier,
 		Kind:          i.Kind,
 		Title:         i.Title,
@@ -101,12 +106,13 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 }
 
 // issueListRowToResponse converts a list-query row (no description) to an IssueResponse.
+// See issueToResponse for the pgtype.Int4 .Int32 rationale.
 func issueListRowToResponse(i db.ListIssuesRow, issuePrefix string) IssueResponse {
-	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
+	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number.Int32))
 	return IssueResponse{
 		ID:            uuidToString(i.ID),
 		WorkspaceID:   uuidToString(i.WorkspaceID),
-		Number:        i.Number,
+		Number:        i.Number.Int32,
 		Identifier:    identifier,
 		Kind:          i.Kind,
 		Title:         i.Title,
@@ -160,11 +166,12 @@ func (h *Handler) labelsByIssue(ctx context.Context, wsUUID pgtype.UUID, issueID
 }
 
 func openIssueRowToResponse(i db.ListOpenIssuesRow, issuePrefix string) IssueResponse {
-	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
+	// See issueToResponse for the pgtype.Int4 .Int32 rationale.
+	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number.Int32))
 	return IssueResponse{
 		ID:            uuidToString(i.ID),
 		WorkspaceID:   uuidToString(i.WorkspaceID),
-		Number:        i.Number,
+		Number:        i.Number.Int32,
 		Identifier:    identifier,
 		Kind:          i.Kind,
 		Title:         i.Title,
@@ -1451,7 +1458,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 			Position:      0,
 			StartDate:     startDate,
 			DueDate:       dueDate,
-			Number:        issueNumber,
+			Number:        pgtype.Int4{Int32: issueNumber, Valid: true},
 			ProjectID:     projectID,
 			OriginType:    originType,
 			OriginID:      originID,
@@ -1471,7 +1478,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 			Position:      0,
 			StartDate:     startDate,
 			DueDate:       dueDate,
-			Number:        issueNumber,
+			Number:        pgtype.Int4{Int32: issueNumber, Valid: true},
 			ProjectID:     projectID,
 		})
 	}

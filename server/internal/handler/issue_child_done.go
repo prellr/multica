@@ -74,7 +74,7 @@ func (h *Handler) notifyParentOfChildDone(ctx context.Context, prev, issue db.Is
 	}
 
 	prefix := h.getIssuePrefix(ctx, issue.WorkspaceID)
-	identifier := prefix + "-" + strconv.Itoa(int(issue.Number))
+	identifier := prefix + "-" + strconv.Itoa(int(issue.Number.Int32))
 	childID := uuidToString(issue.ID)
 	title := sanitizeChildTitleForSystemComment(issue.Title)
 

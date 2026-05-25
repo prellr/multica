@@ -1821,7 +1821,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					if iid, err := util.ParseUUID(ti.ParentIssueID); err == nil {
 						if issue, err := h.Queries.GetIssue(r.Context(), iid); err == nil {
 							if ws, err := h.Queries.GetWorkspace(r.Context(), issue.WorkspaceID); err == nil {
-								resp.ThreadIssueParentIssueKey = fmt.Sprintf("%s-%d", ws.IssuePrefix, issue.Number)
+								resp.ThreadIssueParentIssueKey = fmt.Sprintf("%s-%d", ws.IssuePrefix, issue.Number.Int32)
 							}
 						}
 					}

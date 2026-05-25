@@ -26,11 +26,15 @@ const (
 	EventAgentArchived = "agent:archived"
 	EventAgentRestored = "agent:restored"
 
-	// Task events (server <-> daemon).
-	// Each event maps to a status transition on agent_task_queue. Front-end
-	// subscribes by `task:` prefix and invalidates the workspace task
-	// snapshot, so the granularity here is "what does the user want to see
-	// change" — not "every internal status flip".
+	// Agent task queue events (server <-> daemon).
+	// Each event maps to a status transition on agent_task_queue. These are
+	// the *agent execution lifecycle* — distinct from the user-facing task
+	// CRUD signals below (EventUserTask*), which fire on the issue table's
+	// kind='task' rows. The frontend subscribes to specific event names by
+	// exact match, so the shared `task:` prefix does not cause routing
+	// collisions, but readers comparing the two blocks should not conflate
+	// them: agent-task verbs are status transitions (queued, dispatch,
+	// running, ...); user-task verbs are CRUD (created, updated, deleted).
 	EventTaskQueued    = "task:queued"    // ∅ → queued (enqueue / retry create)
 	EventTaskDispatch  = "task:dispatch"  // queued → dispatched (daemon claim)
 	EventTaskRunning   = "task:running"   // dispatched → running (daemon started)
@@ -39,6 +43,13 @@ const (
 	EventTaskFailed    = "task:failed"    // running → failed
 	EventTaskMessage   = "task:message"
 	EventTaskCancelled = "task:cancelled" // * → cancelled
+
+	// User task events (CRUD on issue rows where kind='task'). See the
+	// agent-task block above for why these share the `task:` prefix without
+	// colliding — frontend subscribes to exact event names.
+	EventUserTaskCreated = "task:created"
+	EventUserTaskUpdated = "task:updated"
+	EventUserTaskDeleted = "task:deleted"
 
 	// Inbox events
 	EventInboxNew           = "inbox:new"

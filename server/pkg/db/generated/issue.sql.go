@@ -198,7 +198,7 @@ type CreateIssueParams struct {
 	Position      float64            `json:"position"`
 	StartDate     pgtype.Timestamptz `json:"start_date"`
 	DueDate       pgtype.Timestamptz `json:"due_date"`
-	Number        int32              `json:"number"`
+	Number        pgtype.Int4        `json:"number"`
 	ProjectID     pgtype.UUID        `json:"project_id"`
 }
 
@@ -277,7 +277,7 @@ type CreateIssueWithOriginParams struct {
 	Position      float64            `json:"position"`
 	StartDate     pgtype.Timestamptz `json:"start_date"`
 	DueDate       pgtype.Timestamptz `json:"due_date"`
-	Number        int32              `json:"number"`
+	Number        pgtype.Int4        `json:"number"`
 	ProjectID     pgtype.UUID        `json:"project_id"`
 	OriginType    pgtype.Text        `json:"origin_type"`
 	OriginID      pgtype.UUID        `json:"origin_id"`
@@ -447,7 +447,7 @@ WHERE workspace_id = $1 AND number = $2 AND kind = 'issue'
 
 type GetIssueByNumberParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Number      int32       `json:"number"`
+	Number      pgtype.Int4 `json:"number"`
 }
 
 // Numbers are issue-only by design (tasks have no human-readable identifier),
@@ -726,7 +726,7 @@ type ListIssuesRow struct {
 	DueDate       pgtype.Timestamptz `json:"due_date"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
-	Number        int32              `json:"number"`
+	Number        pgtype.Int4        `json:"number"`
 	ProjectID     pgtype.UUID        `json:"project_id"`
 	Metadata      []byte             `json:"metadata"`
 	Kind          string             `json:"kind"`
@@ -875,7 +875,7 @@ type ListOpenIssuesRow struct {
 	DueDate       pgtype.Timestamptz `json:"due_date"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
-	Number        int32              `json:"number"`
+	Number        pgtype.Int4        `json:"number"`
 	ProjectID     pgtype.UUID        `json:"project_id"`
 	Metadata      []byte             `json:"metadata"`
 	Kind          string             `json:"kind"`

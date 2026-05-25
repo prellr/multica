@@ -2,7 +2,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useAuthStore } from "../auth";
 import { useWorkspaceId } from "../hooks";
-import type { CreateTaskRequest, ListTasksResponse, Task, UpdateTaskRequest } from "../types";
+import { issueKeys } from "../issues/queries";
+import { onIssueCreated } from "../issues/ws-updaters";
+import type { CreateTaskRequest, Issue, ListTasksResponse, Task, UpdateTaskRequest } from "../types";
 import { taskKeys } from "./queries";
 import {
   prependTaskToLists,
@@ -173,6 +175,67 @@ export function useUpdateTask() {
     },
     onSettled: (_data, _err, vars) => {
       qc.invalidateQueries({ queryKey: taskKeys.detail(wsId, vars.id) });
+    },
+  });
+}
+
+/**
+ * Promote a task into a full issue. The task disappears from the task
+ * surface and the resulting issue appears in the issue surface. The id
+ * is preserved across the transition (server reuses the row), so a
+ * frontend that holds a reference doesn't need to re-resolve.
+ *
+ * Optimistic flow:
+ *   - Remove the row from every task list cache immediately.
+ *   - DON'T optimistically add to the issue cache — the server assigns
+ *     the workspace-scoped number + identifier, and we'd have to guess
+ *     them. A blank-number row in the issue cache would render with a
+ *     broken identifier link until the request lands.
+ *   - On success: seed the issue caches (list + detail) via the existing
+ *     onIssueCreated helper so it slots in to the right status bucket.
+ *   - On error: restore the task list snapshots so the row reappears.
+ *
+ * The caller is responsible for navigation (typically: after success,
+ * push("/{slug}/issues/:id")). Keeping nav out of the hook lets the
+ * promote affordance ship from multiple surfaces (row context menu,
+ * detail page button) with different post-success behavior.
+ */
+export function usePromoteTask() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+
+  return useMutation({
+    mutationFn: (id: string) => api.promoteTask(id),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: taskKeys.all(wsId) });
+      const previousLists = qc.getQueriesData<ListTasksResponse>({
+        queryKey: taskKeys.all(wsId),
+      });
+      // Snapshot the task detail too — on error we restore it so the
+      // /tasks/:id route the user came from still renders while they
+      // retry. removeTaskFromLists doesn't touch the detail cache.
+      const previousDetail = qc.getQueryData<Task>(taskKeys.detail(wsId, id));
+
+      removeTaskFromLists(qc, wsId, id);
+      return { id, previousLists, previousDetail };
+    },
+    onSuccess: (issue, _id, _ctx) => {
+      // Seed the issue caches. onIssueCreated handles bucket placement,
+      // child-progress recomputation, and the my-issues fan-out — same
+      // path a fresh issue:created WS event takes.
+      onIssueCreated(qc, wsId, issue);
+      qc.setQueryData<Issue>(issueKeys.detail(wsId, issue.id), issue);
+      // The task detail cache for this id is now stale — the same id is
+      // now an issue. Remove rather than refetch (refetch would 404).
+      qc.removeQueries({ queryKey: taskKeys.detail(wsId, issue.id) });
+    },
+    onError: (_err, _id, ctx) => {
+      ctx?.previousLists.forEach(([key, data]) => {
+        qc.setQueryData(key, data);
+      });
+      if (ctx?.previousDetail && ctx.id) {
+        qc.setQueryData(taskKeys.detail(wsId, ctx.id), ctx.previousDetail);
+      }
     },
   });
 }

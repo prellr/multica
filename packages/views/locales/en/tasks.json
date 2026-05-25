@@ -13,7 +13,11 @@
   },
   "detail": {
     "no_description": "No description.",
-    "back_to_tasks": "Back to tasks"
+    "back_to_tasks": "Back to tasks",
+    "promote_button": "Promote to issue",
+    "promote_pending": "Promoting…",
+    "promote_success": "Promoted to {{identifier}}",
+    "promote_failed": "Couldn't promote task. Please try again."
   },
   "quick_add": {
     "placeholder": "Add a task and press Enter",

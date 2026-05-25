@@ -80,3 +80,21 @@ RETURNING *;
 -- A handler bug routing an issue UUID through the task delete endpoint
 -- silently no-ops rather than destroying an issue row.
 DELETE FROM issue WHERE id = $1 AND workspace_id = $2 AND kind = 'task';
+
+-- name: PromoteTaskToIssue :one
+-- Promote a task to a full issue. Flips kind='task' -> 'issue' and stamps the
+-- row with a workspace-scoped number. The handler does the IncrementIssueCounter
+-- bump alongside this UPDATE inside a single transaction, so a crash between
+-- the two would leave the workspace counter advanced but no row claiming it
+-- (acceptable — the counter is monotonic, gaps are fine and far less
+-- disruptive than a duplicate number).
+--
+-- The `kind = 'task'` predicate is the safety net: passing an issue UUID
+-- through the promote endpoint is a no-op (zero rows updated). This mirrors
+-- the safety pattern used by UpdateTask / DeleteTask.
+UPDATE issue SET
+    kind = 'issue',
+    number = $3,
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND kind = 'task'
+RETURNING *;

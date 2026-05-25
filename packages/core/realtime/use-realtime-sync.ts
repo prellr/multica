@@ -28,7 +28,7 @@ import {
   onIssueLabelsChanged,
   onIssueMetadataChanged,
 } from "../issues/ws-updaters";
-import { onUserTaskCreated, onUserTaskUpdated, onUserTaskDeleted } from "../tasks/ws-updaters";
+import { onUserTaskCreated, onUserTaskUpdated, onUserTaskDeleted, onUserTaskPromoted } from "../tasks/ws-updaters";
 import { onInboxNew, onInboxInvalidate, onInboxIssueStatusChanged, onInboxIssueDeleted } from "../inbox/ws-updaters";
 import { inboxKeys } from "../inbox/queries";
 import { notificationPreferenceOptions } from "../notification-preferences/queries";
@@ -366,7 +366,7 @@ export function useRealtimeSync(
       // distinguished by verb (created/updated/deleted vs queued/dispatch/...).
       // Routing is by exact event name in ws-client subscriptions, so prefix
       // collisions are notional only.
-      "task:created", "task:updated", "task:deleted",
+      "task:created", "task:updated", "task:deleted", "task:promoted",
       "comment:created", "comment:updated", "comment:deleted",
       "comment:resolved", "comment:unresolved",
       "activity:created",
@@ -503,6 +503,19 @@ export function useRealtimeSync(
       if (!task_id) return;
       const wsId = getCurrentWsId();
       if (wsId) onUserTaskDeleted(qc, wsId, task_id);
+    });
+
+    // task:promoted is the atomic task -> issue transition. See the
+    // EventUserTaskPromoted comment in server pkg/protocol/events.go for
+    // why this is a single event rather than task:deleted + issue:created.
+    const unsubTaskPromoted = ws.on("task:promoted", (p) => {
+      const { task_id, issue } = (p ?? {}) as {
+        task_id?: string;
+        issue?: import("../types").Issue;
+      };
+      if (!task_id || !issue?.id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onUserTaskPromoted(qc, wsId, task_id, issue);
     });
 
     const unsubIssueLabelsChanged = ws.on("issue_labels:changed", (p) => {
@@ -1245,6 +1258,7 @@ export function useRealtimeSync(
       unsubTaskCreated();
       unsubTaskUpdated();
       unsubTaskDeleted();
+      unsubTaskPromoted();
       unsubIssueLabelsChanged();
       unsubIssueMetadataChanged();
       unsubInboxNew();

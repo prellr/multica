@@ -13,7 +13,11 @@
   },
   "detail": {
     "no_description": "暂无描述。",
-    "back_to_tasks": "返回 task 列表"
+    "back_to_tasks": "返回 task 列表",
+    "promote_button": "升级为 issue",
+    "promote_pending": "升级中…",
+    "promote_success": "已升级为 {{identifier}}",
+    "promote_failed": "升级失败，请重试。"
   },
   "quick_add": {
     "placeholder": "添加一个 task，按 Enter 提交",

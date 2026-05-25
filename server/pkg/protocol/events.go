@@ -47,9 +47,16 @@ const (
 	// User task events (CRUD on issue rows where kind='task'). See the
 	// agent-task block above for why these share the `task:` prefix without
 	// colliding — frontend subscribes to exact event names.
-	EventUserTaskCreated = "task:created"
-	EventUserTaskUpdated = "task:updated"
-	EventUserTaskDeleted = "task:deleted"
+	EventUserTaskCreated  = "task:created"
+	EventUserTaskUpdated  = "task:updated"
+	EventUserTaskDeleted  = "task:deleted"
+	// Promote-to-issue lifecycle. Payload: { task_id, issue } so a single
+	// event drives both cache transitions on the receiver — the task list
+	// removes the row, the issue list adds it. Firing task:deleted +
+	// issue:created separately would race (a client receiving only one
+	// half mid-network-blip would render an inconsistent view); the
+	// combined event keeps the transition atomic.
+	EventUserTaskPromoted = "task:promoted"
 
 	// Inbox events
 	EventInboxNew           = "inbox:new"

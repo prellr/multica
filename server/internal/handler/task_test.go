@@ -218,6 +218,117 @@ func TestTaskStatusValidation(t *testing.T) {
 	})
 }
 
+// TestPromoteTask round-trips a task through the promote endpoint and
+// asserts the post-promotion invariants:
+//   - The promoted row is now an issue: it appears in ListIssues and
+//     disappears from ListTasks.
+//   - It carries a workspace-scoped number + identifier (the response
+//     IssueResponse has both set).
+//   - The original UUID is preserved (so a frontend that already had a
+//     reference can refetch by id).
+func TestPromoteTask(t *testing.T) {
+	// Seed a task.
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/tasks?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "promote me",
+	})
+	testHandler.CreateTask(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateTask: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var task TaskResponse
+	json.NewDecoder(w.Body).Decode(&task)
+	originalID := task.ID
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, originalID)
+	})
+
+	// Promote.
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/tasks/"+originalID+"/promote", nil)
+	req = withURLParam(req, "id", originalID)
+	testHandler.PromoteTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PromoteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var promoted IssueResponse
+	if err := json.NewDecoder(w.Body).Decode(&promoted); err != nil {
+		t.Fatalf("decode promote: %v", err)
+	}
+	if promoted.ID != originalID {
+		t.Fatalf("PromoteTask: expected id preserved (%s), got %s", originalID, promoted.ID)
+	}
+	if promoted.Kind != "issue" {
+		t.Fatalf("PromoteTask: expected kind 'issue', got %q", promoted.Kind)
+	}
+	if promoted.Number <= 0 {
+		t.Fatalf("PromoteTask: expected positive number, got %d", promoted.Number)
+	}
+	if promoted.Identifier == "" {
+		t.Fatalf("PromoteTask: expected non-empty identifier, got %q", promoted.Identifier)
+	}
+
+	// The row should no longer surface as a task.
+	w = httptest.NewRecorder()
+	req = newRequest("GET", "/api/tasks/"+originalID, nil)
+	req = withURLParam(req, "id", originalID)
+	testHandler.GetTask(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GetTask after promote: expected 404, got %d", w.Code)
+	}
+
+	// It should surface as an issue. Look it up by the identifier the
+	// promote endpoint returned — this exercises the GetIssueByNumber path
+	// the resolveIssueByIdentifier helper sits on, and confirms the
+	// post-promote row is reachable through the issue surface.
+	iss, ok := testHandler.resolveIssueByIdentifier(
+		context.Background(),
+		promoted.Identifier,
+		testWorkspaceID,
+	)
+	if !ok {
+		t.Fatalf("resolveIssueByIdentifier didn't find promoted issue %s", promoted.Identifier)
+	}
+	if uuidToString(iss.ID) != originalID {
+		t.Fatalf("resolveIssueByIdentifier: expected promoted id %s, got %s",
+			originalID, uuidToString(iss.ID))
+	}
+	// Sanity: the original task title is preserved through promotion.
+	if iss.Title != "promote me" {
+		t.Fatalf("promote: expected title preserved, got %q", iss.Title)
+	}
+}
+
+// TestPromoteTaskRejectsIssueUUID confirms that hitting promote with an
+// issue UUID (not a task UUID) returns 404 — the loadTaskForUser loader
+// is the kind safety net, so this is really a test that the loader is on
+// the promote path.
+func TestPromoteTaskRejectsIssueUUID(t *testing.T) {
+	// Seed a real issue.
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "i'm an issue not a task",
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var issue IssueResponse
+	json.NewDecoder(w.Body).Decode(&issue)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issue.ID)
+	})
+
+	// Promote — should 404.
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/tasks/"+issue.ID+"/promote", nil)
+	req = withURLParam(req, "id", issue.ID)
+	testHandler.PromoteTask(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("PromoteTask on issue UUID: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // TestTaskResponseHasNoNumber confirms the wire contract excludes `number`
 // and `identifier`. JSON-marshal the response and verify neither key is
 // present — frontend code must not assume tasks have either.

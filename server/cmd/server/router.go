@@ -462,6 +462,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/", h.UpdateTask)
 					r.Patch("/", h.UpdateTask)
 					r.Delete("/", h.DeleteTask)
+					// Promote-to-issue. POST (not PATCH) — the operation
+					// is a one-shot state transition with side effects
+					// (workspace counter bump, identifier assignment), not
+					// a partial update.
+					r.Post("/promote", h.PromoteTask)
 				})
 			})
 

@@ -20,7 +20,7 @@ func (m *mockResolver) GetWorkspace(_ context.Context, _ pgtype.UUID) (db.Worksp
 }
 
 func (m *mockResolver) GetIssueByNumber(_ context.Context, arg db.GetIssueByNumberParams) (db.Issue, error) {
-	if issue, ok := m.issues[arg.Number]; ok {
+	if issue, ok := m.issues[arg.Number.Int32]; ok {
 		return issue, nil
 	}
 	return db.Issue{}, fmt.Errorf("not found")
@@ -42,7 +42,7 @@ func TestExpandIssueIdentifiers(t *testing.T) {
 	resolver := &mockResolver{
 		prefix: "MUL",
 		issues: map[int32]db.Issue{
-			117: {ID: issueID, Number: 117},
+			117: {ID: issueID, Number: pgtype.Int4{Int32: 117, Valid: true}},
 		},
 	}
 

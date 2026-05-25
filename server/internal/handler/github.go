@@ -760,7 +760,7 @@ func (h *Handler) lookupIssueByIdentifier(ctx context.Context, workspaceID pgtyp
 	}
 	issue, err := h.Queries.GetIssueByNumber(ctx, db.GetIssueByNumberParams{
 		WorkspaceID: workspaceID,
-		Number:      int32(n),
+		Number:      pgtype.Int4{Int32: int32(n), Valid: true},
 	})
 	if err != nil {
 		return db.Issue{}, false

@@ -89,10 +89,12 @@ func ExpandIssueIdentifiers(ctx context.Context, resolver Resolver, workspaceID 
 			continue
 		}
 
-		// Look up the issue.
+		// Look up the issue. Number is nullable at the column level (tasks have
+		// NULL), so the param is pgtype.Int4 — `Valid: true` because we always
+		// look up by a concrete number here.
 		issue, err := resolver.GetIssueByNumber(ctx, db.GetIssueByNumberParams{
 			WorkspaceID: workspaceID,
-			Number:      int32(num),
+			Number:      pgtype.Int4{Int32: int32(num), Valid: true},
 		})
 		if err != nil {
 			continue // Issue doesn't exist — leave as-is.

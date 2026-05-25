@@ -66,7 +66,7 @@ func TestQuickCreateCompletion_SubscribesRequester(t *testing.T) {
 		Priority:    "none",
 		CreatorType: "agent",
 		CreatorID:   parseUUID(agentID),
-		Number:      number,
+		Number:      pgtype.Int4{Int32: number, Valid: true},
 		OriginType:  pgtype.Text{String: "quick_create", Valid: true},
 		OriginID:    task.ID,
 	})

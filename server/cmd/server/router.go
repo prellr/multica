@@ -446,7 +446,28 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				})
 			})
 
-			// Task messages (user-facing, not daemon auth)
+			// User tasks (kind='task' in the issue table). Distinct from the
+			// agent_task_queue endpoints below — see pkg/protocol/events.go for
+			// the naming-conflict rationale. These routes use {id} (UUID only,
+			// no human-readable identifier; promote-to-issue assigns the
+			// identifier later).
+			r.Route("/api/tasks", func(r chi.Router) {
+				r.Get("/", h.ListTasks)
+				r.Post("/", h.CreateTask)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetTask)
+					// PUT + PATCH on the same handler mirrors the issue API
+					// (see UpdateIssue note above re: MCP client only having
+					// a `patch()` method).
+					r.Put("/", h.UpdateTask)
+					r.Patch("/", h.UpdateTask)
+					r.Delete("/", h.DeleteTask)
+				})
+			})
+
+			// Agent task messages (user-facing read of agent_task_queue rows).
+			// Path-wildcard {taskId} structurally distinct from the user-task
+			// {id} above because of the trailing `/messages` segment.
 			r.Get("/api/tasks/{taskId}/messages", h.ListTaskMessagesByUser)
 
 			// Labels

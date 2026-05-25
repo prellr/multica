@@ -2387,11 +2387,21 @@ func (s *TaskService) AutoUnresolveThreadOnReply(ctx context.Context, parent *db
 }
 
 func issueToMap(issue db.Issue, issuePrefix string) map[string]any {
+	// Number is nullable now (tasks have no identifier). issueToMap is only
+	// used for the legacy issue payload shape, where Number is always present
+	// — but defend in depth: zero out the number and emit a bare identifier
+	// when Valid is false, so a misrouted task row doesn't panic.
+	var number int32
+	identifier := issuePrefix + "-"
+	if issue.Number.Valid {
+		number = issue.Number.Int32
+		identifier = issuePrefix + "-" + strconv.Itoa(int(number))
+	}
 	return map[string]any{
 		"id":              util.UUIDToString(issue.ID),
 		"workspace_id":    util.UUIDToString(issue.WorkspaceID),
-		"number":          issue.Number,
-		"identifier":      issuePrefix + "-" + strconv.Itoa(int(issue.Number)),
+		"number":          number,
+		"identifier":      identifier,
 		"title":           issue.Title,
 		"description":     util.TextToPtr(issue.Description),
 		"status":          issue.Status,
@@ -2535,7 +2545,7 @@ func (s *TaskService) notifyQuickCreateCompleted(ctx context.Context, task db.Ag
 		})
 	}
 	prefix := s.getIssuePrefix(workspaceID)
-	identifier := fmt.Sprintf("%s-%d", prefix, issue.Number)
+	identifier := fmt.Sprintf("%s-%d", prefix, issue.Number.Int32)
 	details, _ := json.Marshal(map[string]any{
 		"task_id":         util.UUIDToString(task.ID),
 		"agent_id":        util.UUIDToString(task.AgentID),

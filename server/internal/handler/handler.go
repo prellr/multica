@@ -513,7 +513,7 @@ func (h *Handler) resolveIssueByIdentifier(ctx context.Context, id, workspaceID 
 	}
 	issue, err := h.Queries.GetIssueByNumber(ctx, db.GetIssueByNumberParams{
 		WorkspaceID: wsUUID,
-		Number:      parts.number,
+		Number:      pgtype.Int4{Int32: parts.number, Valid: true},
 	})
 	if err != nil {
 		return db.Issue{}, false

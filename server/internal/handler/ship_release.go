@@ -131,7 +131,7 @@ func (a *releaseIssueOps) CreateReleaseIssue(
 		CreatorType: creatorType,
 		CreatorID:   creator,
 		Position:    0,
-		Number:      number,
+		Number:      pgtype.Int4{Int32: number, Valid: true},
 		ProjectID:   projectID,
 	})
 	if err != nil {

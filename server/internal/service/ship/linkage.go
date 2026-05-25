@@ -176,7 +176,7 @@ func (s *Service) findIssueByCombined(
 func (s *Service) lookupIssueByNumber(ctx context.Context, workspaceID pgtype.UUID, number int32) (db.Issue, bool) {
 	issue, err := s.Q.GetIssueByNumber(ctx, db.GetIssueByNumberParams{
 		WorkspaceID: workspaceID,
-		Number:      number,
+		Number:      pgtype.Int4{Int32: number, Valid: true},
 	})
 	if err != nil {
 		if !isNoRows(err) {

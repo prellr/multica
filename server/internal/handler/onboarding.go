@@ -472,7 +472,7 @@ func (h *Handler) ImportStarterContent(w http.ResponseWriter, r *http.Request) {
 			AssigneeID:   welcomeAgentID,
 			CreatorType:  "member",
 			CreatorID:    actorID,
-			Number:       welcomeNumber,
+			Number:       pgtype.Int4{Int32: welcomeNumber, Valid: true},
 		})
 		if err != nil {
 			slog.Warn("import starter content: create welcome issue failed", append(logger.RequestAttrs(r), "error", err)...)
@@ -520,7 +520,7 @@ func (h *Handler) ImportStarterContent(w http.ResponseWriter, r *http.Request) {
 			AssigneeID:   assigneeID,
 			CreatorType:  "member",
 			CreatorID:    actorID,
-			Number:       number,
+			Number:       pgtype.Int4{Int32: number, Valid: true},
 			ProjectID:    project.ID,
 		})
 		if err != nil {

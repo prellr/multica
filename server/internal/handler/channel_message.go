@@ -1096,7 +1096,7 @@ func (h *Handler) DispatchThreadIssueTask(w http.ResponseWriter, r *http.Request
 		parentIssueUUID = iid
 		ws, err := h.Queries.GetWorkspace(r.Context(), wsID)
 		if err == nil {
-			parentIssueKey = fmt.Sprintf("%s-%d", ws.IssuePrefix, issue.Number)
+			parentIssueKey = fmt.Sprintf("%s-%d", ws.IssuePrefix, issue.Number.Int32)
 		}
 	}
 

@@ -208,11 +208,13 @@ import {
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_SQUAD_MEMBER_STATUS_LIST,
   EMPTY_TIMELINE_ENTRIES,
+  EMPTY_USER,
   ListIssuesResponseSchema,
   MarketplaceSearchResultSchema,
   SquadMemberStatusListResponseSchema,
   SubscribersListSchema,
   TimelineEntriesSchema,
+  UserSchema,
   ListShipProjectsResponseSchema,
   ListPullRequestsResponseSchema,
   ListDeployEnvironmentsResponseSchema,
@@ -544,7 +546,10 @@ export class ApiClient {
   }
 
   async getMe(): Promise<User> {
-    return this.fetch("/api/me");
+    const raw = await this.fetch<unknown>("/api/me");
+    return parseWithFallback(raw, UserSchema, EMPTY_USER, {
+      endpoint: "GET /api/me",
+    });
   }
 
   async markOnboardingComplete(payload?: {
@@ -605,9 +610,12 @@ export class ApiClient {
   }
 
   async updateMe(data: UpdateMeRequest): Promise<User> {
-    return this.fetch("/api/me", {
+    const raw = await this.fetch<unknown>("/api/me", {
       method: "PATCH",
       body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, UserSchema, EMPTY_USER, {
+      endpoint: "PATCH /api/me",
     });
   }
 
@@ -623,6 +631,9 @@ export class ApiClient {
     if (params?.assignee_ids?.length) search.set("assignee_ids", params.assignee_ids.join(","));
     if (params?.creator_id) search.set("creator_id", params.creator_id);
     if (params?.project_id) search.set("project_id", params.project_id);
+    if (params?.metadata && Object.keys(params.metadata).length > 0) {
+      search.set("metadata", JSON.stringify(params.metadata));
+    }
     if (params?.open_only) search.set("open_only", "true");
     const path = `/api/issues?${search}`;
     const raw = await this.fetch<unknown>(path);

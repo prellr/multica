@@ -52,12 +52,15 @@ import { collectThreadReplies } from "./thread-utils";
 import { AgentLiveCard } from "./agent-live-card";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
+import { useGitHubSettings } from "@multica/core/github";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { issueListOptions, issueDetailOptions, childIssuesOptions, issueUsageOptions, issueAttachmentsOptions, referencingIssuesOptions } from "@multica/core/issues/queries";
+import { projectDetailOptions } from "@multica/core/projects/queries";
+import { ProjectIcon } from "../../projects/components/project-icon";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
 import { useRecentIssuesStore } from "@multica/core/issues/stores";
 import { useIssueSelectionStore } from "@multica/core/issues/stores/selection-store";
@@ -416,7 +419,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   const [detailsOpen, setDetailsOpen] = useState(true);
   const [parentIssueOpen, setParentIssueOpen] = useState(true);
   const [pullRequestsOpen, setPullRequestsOpen] = useState(true);
+  const [metadataOpen, setMetadataOpen] = useState(true);
   const [tokenUsageOpen, setTokenUsageOpen] = useState(true);
+  const githubSettings = useGitHubSettings();
   // Virtuoso's `customScrollParent` wants the HTMLElement, not a ref. A plain
   // `useRef.current` does not trigger a re-render when it populates, so the
   // Virtuoso prop would never receive the element. Callback ref + state fixes
@@ -654,6 +659,14 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     ...issueDetailOptions(wsId, parentIssueId ?? ""),
     enabled: !!parentIssueId,
     initialData: () => allIssues.find((i) => i.id === parentIssueId),
+  });
+
+  // Project segment in the breadcrumb. The issue's project_id is the source of
+  // truth — same URL renders the same breadcrumb regardless of entry path.
+  const issueProjectId = issue?.project_id;
+  const { data: breadcrumbProject = null, isError: breadcrumbProjectError } = useQuery({
+    ...projectDetailOptions(wsId, issueProjectId ?? ""),
+    enabled: !!issueProjectId,
   });
   const { data: childIssues = [] } = useQuery({
     ...childIssuesOptions(wsId, id),
@@ -905,17 +918,48 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         </div>
       )}
 
-      {/* Pull requests */}
-      <div>
-        <button
-          className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors mb-2 hover:bg-accent/70 ${pullRequestsOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
-          onClick={() => setPullRequestsOpen(!pullRequestsOpen)}
-        >
-          {t(($) => $.detail.section_pull_requests)}
-          <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${pullRequestsOpen ? "rotate-90" : ""}`} />
-        </button>
-        {pullRequestsOpen && <div className="pl-2"><PullRequestList issueId={id} /></div>}
-      </div>
+      {/* Pull requests — hidden when the workspace disables the PR sidebar
+          (or the GitHub master switch is off). Backend data is kept either
+          way so re-enabling restores the section instantly. */}
+      {githubSettings.prSidebar && (
+        <div>
+          <button
+            className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors mb-2 hover:bg-accent/70 ${pullRequestsOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
+            onClick={() => setPullRequestsOpen(!pullRequestsOpen)}
+          >
+            {t(($) => $.detail.section_pull_requests)}
+            <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${pullRequestsOpen ? "rotate-90" : ""}`} />
+          </button>
+          {pullRequestsOpen && <div className="pl-2"><PullRequestList issueId={id} /></div>}
+        </div>
+      )}
+
+      {/* Metadata — read-only KV strip. Agents write via the CLI / metadata
+          API; UI editing is intentionally not in V1. Section hides itself
+          when the issue has no keys to keep the sidebar quiet for the
+          common case where metadata is never set. */}
+      {Object.keys(issue.metadata ?? {}).length > 0 && (
+        <div>
+          <button
+            className={`flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors mb-2 hover:bg-accent/70 ${metadataOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
+            onClick={() => setMetadataOpen(!metadataOpen)}
+          >
+            {t(($) => $.detail.section_metadata)}
+            <ChevronRight className={`!size-3 shrink-0 stroke-[2.5] text-muted-foreground transition-transform ${metadataOpen ? "rotate-90" : ""}`} />
+          </button>
+          {metadataOpen && (
+            <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 pl-2">
+              {Object.entries(issue.metadata ?? {}).map(([k, v]) => (
+                <PropRow key={k} label={k} interactive={false}>
+                  <span className="truncate text-muted-foreground">
+                    {typeof v === "boolean" ? (v ? "true" : "false") : String(v)}
+                  </span>
+                </PropRow>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Details */}
       <div>
@@ -1084,6 +1128,26 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 >
                   {workspace.name}
                 </AppLink>
+                <ChevronRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />
+              </>
+            )}
+            {issueProjectId && (
+              <>
+                {breadcrumbProject ? (
+                  <AppLink
+                    href={paths.projectDetail(breadcrumbProject.id)}
+                    className="flex items-center gap-1 min-w-0 max-w-72 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <ProjectIcon project={breadcrumbProject} size="sm" />
+                    <span className="min-w-0 truncate">{breadcrumbProject.title}</span>
+                  </AppLink>
+                ) : breadcrumbProjectError ? (
+                  <span className="italic text-muted-foreground/70 shrink-0">
+                    {t(($) => $.detail.breadcrumb_project_unknown)}
+                  </span>
+                ) : (
+                  <Skeleton className="h-3.5 w-20 shrink-0" />
+                )}
                 <ChevronRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />
               </>
             )}

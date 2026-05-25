@@ -6,7 +6,11 @@ import {
   agentTaskSnapshotKeys,
   agentTasksKeys,
 } from "../agents/queries";
-import { onIssueDeleted, onIssueLabelsChanged } from "./ws-updaters";
+import {
+  onIssueDeleted,
+  onIssueLabelsChanged,
+  onIssueMetadataChanged,
+} from "./ws-updaters";
 import { issueKeys } from "./queries";
 import { labelKeys } from "../labels/queries";
 import type {
@@ -65,6 +69,7 @@ const baseIssue: Issue = {
   project_id: null,
   position: 0,
   due_date: null,
+  metadata: {},
   labels: [labelA],
   created_at: "2025-01-01T00:00:00Z",
   updated_at: "2025-01-01T00:00:00Z",
@@ -149,6 +154,43 @@ describe("onIssueLabelsChanged", () => {
 
     const detail = qc.getQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID));
     expect(detail?.labels).toEqual([labelB]);
+  });
+});
+
+describe("onIssueMetadataChanged", () => {
+  let qc: QueryClient;
+
+  beforeEach(() => {
+    qc = new QueryClient();
+  });
+
+  it("replaces metadata in both detail and list caches (no merge)", () => {
+    qc.setQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID), {
+      ...baseIssue,
+      metadata: { pr_number: 1, stale: "yes" },
+    });
+    qc.setQueryData<ListIssuesCache>(issueKeys.list(WS_ID), {
+      byStatus: {
+        todo: {
+          issues: [{ ...baseIssue, metadata: { pr_number: 1 } }],
+          total: 1,
+        },
+      },
+    });
+
+    onIssueMetadataChanged(qc, WS_ID, ISSUE_ID, { pr_number: 2 });
+
+    const detail = qc.getQueryData<Issue>(issueKeys.detail(WS_ID, ISSUE_ID));
+    expect(detail?.metadata).toEqual({ pr_number: 2 });
+    const list = qc.getQueryData<ListIssuesCache>(issueKeys.list(WS_ID));
+    expect(list?.byStatus.todo?.issues[0]?.metadata).toEqual({ pr_number: 2 });
+  });
+
+  it("leaves untouched caches as undefined (no spurious writes)", () => {
+    onIssueMetadataChanged(qc, WS_ID, ISSUE_ID, { foo: "bar" });
+
+    expect(qc.getQueryData(issueKeys.detail(WS_ID, ISSUE_ID))).toBeUndefined();
+    expect(qc.getQueryData(issueKeys.list(WS_ID))).toBeUndefined();
   });
 });
 

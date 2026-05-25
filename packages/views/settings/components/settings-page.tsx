@@ -13,6 +13,7 @@ import {
   Bell,
   Server,
 } from "lucide-react";
+import { GitHubMark } from "./github-mark";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multica/ui/components/ui/tabs";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
@@ -25,6 +26,7 @@ import { TokensTab } from "./tokens-tab";
 import { WorkspaceTab } from "./workspace-tab";
 import { MembersTab } from "./members-tab";
 import { RepositoriesTab } from "./repositories-tab";
+import { GitHubTab } from "./github-tab";
 import { IntegrationsTab } from "./integrations-tab";
 import { ConnectedAppsTab } from "./connected-apps-tab";
 import { LabsTab } from "./labs-tab";
@@ -44,10 +46,20 @@ const ACCOUNT_TAB_ICONS = {
   tokens: Plug,
 } as const;
 
-const WORKSPACE_TAB_KEYS = ["general", "repositories", "integrations", "connected-apps", "system", "labs", "members"] as const;
+const WORKSPACE_TAB_KEYS = [
+  "general",
+  "repositories",
+  "github",
+  "integrations",
+  "connected-apps",
+  "system",
+  "labs",
+  "members",
+] as const;
 const WORKSPACE_TAB_VALUES = {
   general: "workspace",
   repositories: "repositories",
+  github: "github",
   integrations: "integrations",
   "connected-apps": "connected-apps",
   system: "system",
@@ -57,6 +69,7 @@ const WORKSPACE_TAB_VALUES = {
 const WORKSPACE_TAB_ICONS = {
   general: Settings,
   repositories: FolderGit2,
+  github: GitHubMark,
   integrations: Plug,
   "connected-apps": AppWindow,
   system: Server,
@@ -179,6 +192,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <TabsContent value="tokens"><TokensTab /></TabsContent>
           <TabsContent value="workspace"><WorkspaceTab /></TabsContent>
           <TabsContent value="repositories"><RepositoriesTab /></TabsContent>
+          <TabsContent value="github"><GitHubTab /></TabsContent>
           <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
           <TabsContent value="connected-apps"><ConnectedAppsTab /></TabsContent>
           {isAdmin && <TabsContent value="system"><SystemTab /></TabsContent>}

@@ -28,7 +28,9 @@
     "members_label": "成员",
     "members_description": "分配给成员的 issue",
     "agents_label": "智能体",
-    "agents_description": "分配给智能体的 issue"
+    "agents_description": "分配给智能体的 issue",
+    "working_label": "处理中",
+    "working_description": "只看有智能体正在处理的 issue"
   },
   "filters": {
     "tooltip": "筛选",
@@ -116,6 +118,7 @@
   },
   "detail": {
     "not_found": "这个 issue 不存在或已在该工作区被删除。",
+    "breadcrumb_project_unknown": "未知项目",
     "back_to_issues": "返回 issue 列表",
     "title_placeholder": "issue 标题",
     "desc_placeholder": "添加描述...",
@@ -128,6 +131,7 @@
     "section_properties": "属性",
     "section_parent_issue": "父 issue",
     "section_pull_requests": "Pull Request",
+    "section_metadata": "元数据",
     "section_details": "详情",
     "section_token_usage": "Token 用量",
     "pull_requests_loading": "加载中…",
@@ -234,6 +238,14 @@
     "placeholder": "回复...",
     "expand_tooltip": "展开",
     "collapse_tooltip": "收起"
+  },
+  "agent_activity": {
+    "hover_header_other": "{{count}} 个智能体正在工作",
+    "status_running": "正在工作",
+    "status_queued": "排队中",
+    "chip_label": "工作中",
+    "empty_hover": "当前没有智能体在工作",
+    "filter_active_label": "正在查看工作中的智能体"
   },
   "agent_live": {
     "is_working": "{{name}} 正在处理",

@@ -24,7 +24,7 @@ var runtimeGOOS = runtime.GOOS
 //
 // CR/LF and other whitespace control bytes collapse to a single space; other
 // C0 controls and DEL are dropped; markdown structural characters that have
-// meaning in inline context (`*`, `_`, “ ` “, `\`, `[`, `]`, `<`) are
+// meaning in inline context (`*`, `_`, `` ` ``, `\`, `[`, `]`, `<`) are
 // backslash-escaped. Trailing whitespace is trimmed.
 func sanitizeNameForBriefMarkdown(name string) string {
 	var b strings.Builder
@@ -326,6 +326,9 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("  - Use `--parent` to reply to a specific comment; `--attachment` may be repeated.\n")
 	b.WriteString("- `multica issue create` / `multica issue update` accept the same three modes for `--description`: `--description \"...\"`, `--description-stdin`, or `--description-file <path>`.\n")
 	b.WriteString("- `multica issue comment delete <comment-id>` — Delete a comment\n")
+	b.WriteString("- `multica issue metadata list <issue-id> [--output json]` — List every metadata key pinned to an issue. Empty `{}` is normal.\n")
+	b.WriteString("- `multica issue metadata set <issue-id> --key <k> --value <v> [--type string|number|bool]` — Pin (or overwrite) a single metadata key. The CLI auto-infers JSON primitives, so URLs and plain text are stored as strings — pass `--type number` or `--type bool` only when the semantic type matters.\n")
+	b.WriteString("- `multica issue metadata delete <issue-id> --key <k>` — Remove a metadata key.\n")
 	b.WriteString("- `multica label create --name \"...\" --color \"#hex\"` — Define a new workspace label (use this only when the label you need does not exist yet; reuse existing labels via `multica label list` first)\n")
 	b.WriteString("- `multica autopilot create --title \"...\" --agent <name> --mode create_issue|run_only [--description \"...\"]` — Create an autopilot\n")
 	b.WriteString("- `multica autopilot update <id> [--title X] [--description X] [--status active|paused] [--mode create_issue|run_only]` — Update an autopilot\n")
@@ -472,6 +475,20 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		writeArtifacts("Other", unknown)
 	}
 
+	// Issue Metadata semantics — emitted only for tasks that operate on a real
+	// issue (comment-triggered or assignment-triggered). Chat / quick-create /
+	// run-only autopilot don't carry an issue id and would just generate a
+	// failed `metadata list` call on every entry.
+	hasIssueContext := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == ""
+	if hasIssueContext {
+		b.WriteString("## Issue Metadata\n\n")
+		b.WriteString("Each issue carries a small KV `metadata` bag — a high-signal scratchpad where agents pin facts that future runs will need to find without re-parsing 200 comments (PR URLs, deploy URLs, external links, who you're waiting on, the final decision on a debated point).\n\n")
+		b.WriteString("- **Read on entry.** Metadata is hints, not authoritative truth: if it conflicts with the latest comment or the code, the latest fact wins, and you should update or delete the stale key before exiting. Empty `{}` and CLI failures are normal — do not stop or ask the user.\n")
+		b.WriteString("- **Write on exit.** If this run produced a fact future agents will want one-glance access to — opened PR, deploy URL, external ticket, current blocker — pin it with `multica issue metadata set`. If a key you saw on entry is now stale (e.g. `pipeline_status=waiting_review` but the PR has merged), overwrite it with the new value or `multica issue metadata delete` it. Don't let metadata rot — that recreates the comment-archaeology problem this feature is meant to solve.\n")
+		b.WriteString("- **What NOT to pin.** No secrets, tokens, or API keys. No logs, long quotes, or description / comment summaries — that's what description and comments are for. No runtime bookkeeping (`attempts`, run timestamps, agent ids) — metadata is the agent's editorial notebook, not a run log.\n")
+		b.WriteString("- **Recommended keys** (reuse these names so queries stay consistent across the workspace; coin a new key only when none fits): `pr_url`, `pr_number`, `pipeline_status`, `deploy_url`, `external_issue_url`, `waiting_on`, `blocked_reason`, `decision`. Use snake_case ASCII.\n\n")
+	}
+
 	b.WriteString("### Workflow\n\n")
 
 	if ctx.ChatSessionID != "" {
@@ -529,33 +546,51 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		// Comment-triggered: focus on reading and replying
 		b.WriteString("**This task was triggered by a NEW comment.** Your primary job is to respond to THIS specific comment, even if you have handled similar requests before in this session.\n\n")
 		fmt.Fprintf(&b, "1. Run `multica issue get %s --output json` to understand the issue context\n", ctx.IssueID)
-		fmt.Fprintf(&b, "2. Run `multica issue comment list %s --output json` to read the conversation (returns all comments, capped server-side at 2000)\n", ctx.IssueID)
-		b.WriteString("   - For incremental polling, use `--since <RFC3339-timestamp>` to fetch only comments newer than a known cursor\n")
-		fmt.Fprintf(&b, "3. Find the triggering comment (ID: `%s`) and understand what is being asked — do NOT confuse it with previous comments\n", ctx.TriggerCommentID)
+		fmt.Fprintf(&b, "2. Run `multica issue metadata list %s --output json` to see what prior agents pinned — best-effort, empty `{}` and CLI failures are normal. See the `## Issue Metadata` section above for what to look for.\n", ctx.IssueID)
+		fmt.Fprintf(&b, "3. Read the triggering thread first — that is what this comment is actually about. Default to the 30 most recent replies in that thread: `multica issue comment list %s --thread %s --tail 30 --output json` returns the root + the 30 newest replies (root is always included, even at `--tail 0`).\n", ctx.IssueID, ctx.TriggerCommentID)
+		b.WriteString("   - If 30 replies aren't enough, walk older replies in the same thread one page at a time using the stderr `Next reply cursor: --before <ts> --before-id <reply-id>` line — pass the same pair back as `--before <ts> --before-id <reply-id>` on the next call. Under `--thread --tail` the cursor walks older *replies*, not older threads.\n")
+		fmt.Fprintf(&b, "   - If you also need cross-thread background, pull the most recently active threads on the issue: `multica issue comment list %s --recent 20 --output json`. Under `--recent` the same `--before` / `--before-id` flags walk older *threads* instead of older replies, and the stderr line is `Next thread cursor: --before <ts> --before-id <root-id>`. Pass the pair back to scroll to older threads when 20 still isn't enough.\n", ctx.IssueID)
+		b.WriteString("   - Avoid the unfiltered `multica issue comment list <issue-id> --output json` form on long-running issues — it dumps the entire flat timeline (cap 2000) and wastes context on chatter unrelated to the trigger. `--since <RFC3339-timestamp>` is still available for incremental polling against a known cursor and may combine with `--thread --tail` or `--recent`.\n")
+		fmt.Fprintf(&b, "4. Find the triggering comment (ID: `%s`) inside the thread you just read and understand what is being asked — do NOT confuse it with previous comments\n", ctx.TriggerCommentID)
 		if ctx.IsSquadLeader {
-			b.WriteString("4. **Decide whether a reply is warranted.** If you produced actual work this turn (investigated, fixed, answered a real question), post the result via step 6 — that is a normal reply, not a noise comment. If the triggering comment was a pure acknowledgment / thanks / sign-off from another agent AND you produced no work this turn, do NOT post a reply — and do NOT post a comment saying 'No reply needed' or similar. Simply exit with no output. Silence is a valid and preferred way to end agent-to-agent conversations.\n")
+			b.WriteString("5. **Decide whether a reply is warranted.** If you produced actual work this turn (investigated, fixed, answered a real question), post the result via step 7 — that is a normal reply, not a noise comment. If the triggering comment was a pure acknowledgment / thanks / sign-off from another agent AND you produced no work this turn, do NOT post a reply — and do NOT post a comment saying 'No reply needed' or similar. Simply exit with no output. Silence is a valid and preferred way to end agent-to-agent conversations.\n")
 			fmt.Fprintf(&b, "   - **Squad leader rule:** If your evaluation outcome is `no_action`, call `multica squad activity %s no_action --reason \"...\"` and then EXIT IMMEDIATELY. DO NOT post any comment whose only purpose is to announce that you are taking no action, exiting silently, or acknowledging another agent. A comment like \"No action needed\" or \"Exiting silently\" is noise — the `squad activity` call already records your decision in the timeline.\n", ctx.IssueID)
 		} else {
-			b.WriteString("4. **Decide whether a reply is warranted.** If you produced actual work this turn (investigated, fixed, answered a real question), post the result via step 6 — that is a normal reply, not a noise comment. If the triggering comment was a pure acknowledgment / thanks / sign-off from another agent AND you produced no work this turn, do NOT post a reply — and do NOT post a comment saying 'No reply needed' or similar. Simply exit with no output. Silence is a valid and preferred way to end agent-to-agent conversations.\n")
+			b.WriteString("5. **Decide whether a reply is warranted.** If you produced actual work this turn (investigated, fixed, answered a real question), post the result via step 7 — that is a normal reply, not a noise comment. If the triggering comment was a pure acknowledgment / thanks / sign-off from another agent AND you produced no work this turn, do NOT post a reply — and do NOT post a comment saying 'No reply needed' or similar. Simply exit with no output. Silence is a valid and preferred way to end agent-to-agent conversations.\n")
 		}
-		b.WriteString("5. If a reply IS warranted: do any requested work first, then **decide whether to include any `@mention` link.** The default is NO mention. Only mention when you are escalating to a human owner who is not yet involved, delegating a concrete new sub-task to another agent for the first time, or the user explicitly asked you to loop someone in. Never @mention the agent you are replying to as a thank-you or sign-off.\n")
-		b.WriteString("6. **If you reply, post it as a comment — this step is mandatory when you reply.** Text in your terminal or run logs is NOT delivered to the user. ")
+		b.WriteString("6. If a reply IS warranted: do any requested work first, then **decide whether to include any `@mention` link.** The default is NO mention. Only mention when you are escalating to a human owner who is not yet involved, delegating a concrete new sub-task to another agent for the first time, or the user explicitly asked you to loop someone in. Never @mention the agent you are replying to as a thank-you or sign-off.\n")
+		b.WriteString("7. **If you reply, post it as a comment — this step is mandatory when you reply.** Text in your terminal or run logs is NOT delivered to the user. ")
 		b.WriteString(BuildCommentReplyInstructions(provider, ctx.IssueID, ctx.TriggerCommentID))
-		b.WriteString("7. Do NOT change the issue status unless the comment explicitly asks for it\n\n")
+		b.WriteString("8. Before exiting: if this run produced a fact worth pinning (PR URL, deploy URL, external link, current blocker) or noticed a metadata key that is now stale, pin or clear it via `multica issue metadata set`/`delete`. Optional — only act when you actually have a high-signal change to record. See the `## Issue Metadata` section above.\n")
+		b.WriteString("9. Do NOT change the issue status unless the comment explicitly asks for it\n\n")
 	} else {
 		// Assignment-triggered: defer to agent Skills for workflow specifics.
 		b.WriteString("You are responsible for managing the issue status throughout your work.\n\n")
 		fmt.Fprintf(&b, "1. Run `multica issue get %s --output json` to understand your task\n", ctx.IssueID)
-		fmt.Fprintf(&b, "2. Run `multica issue comment list %s --output json` to read the full comment history (returns all comments, capped server-side at 2000) — this is mandatory, not optional. Earlier comments often carry context the issue body lacks (e.g. which repo to work in, the prior agent's findings, the reason the issue was reassigned to you). Skipping this step is the most common cause of agents acting on stale or incomplete instructions.\n", ctx.IssueID)
-		fmt.Fprintf(&b, "3. Run `multica issue status %s in_progress`\n", ctx.IssueID)
-		b.WriteString("4. Follow your Skills and Agent Identity to complete the task (write code, investigate, etc.)\n")
+		fmt.Fprintf(&b, "2. Run `multica issue metadata list %s --output json` to see what prior agents pinned — best-effort, empty `{}` and CLI failures are normal. See the `## Issue Metadata` section above for what to look for.\n", ctx.IssueID)
+		fmt.Fprintf(&b, "3. Run `multica issue comment list %s --output json` to read the full comment history (returns all comments, capped server-side at 2000) — this is mandatory, not optional. Earlier comments often carry context the issue body lacks (e.g. which repo to work in, the prior agent's findings, the reason the issue was reassigned to you). Skipping this step is the most common cause of agents acting on stale or incomplete instructions. When the flat dump is too large to ingest in one shot, treat `--recent 20 --output json` plus the `--before` / `--before-id` cursor (from the stderr `Next thread cursor:` line) as a paging strategy: keep walking older threads until you have read enough history to satisfy this mandatory step. `--recent` is a way to read the full history page-by-page, not a shortcut that replaces it.\n", ctx.IssueID)
+		fmt.Fprintf(&b, "4. Run `multica issue status %s in_progress`\n", ctx.IssueID)
+		b.WriteString("5. Follow your Skills and Agent Identity to complete the task (write code, investigate, etc.)\n")
 		if ctx.IsSquadLeader {
-			fmt.Fprintf(&b, "5. **Post your final results as a comment** (unless your outcome is `no_action` — in that case, calling `multica squad activity %s no_action --reason \"...\"` alone is sufficient; you MUST exit without posting any comment. DO NOT post a comment announcing no_action or saying you are exiting silently): `multica issue comment add %s --content \"...\"`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID, ctx.IssueID)
+			fmt.Fprintf(&b, "6. **Post your final results as a comment** (unless your outcome is `no_action` — in that case, calling `multica squad activity %s no_action --reason \"...\"` alone is sufficient; you MUST exit without posting any comment. DO NOT post a comment announcing no_action or saying you are exiting silently): `multica issue comment add %s --content \"...\"`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID, ctx.IssueID)
 		} else {
-			fmt.Fprintf(&b, "5. **Post your final results as a comment — this step is mandatory**: `multica issue comment add %s --content \"...\"`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
+			fmt.Fprintf(&b, "6. **Post your final results as a comment — this step is mandatory**: `multica issue comment add %s --content \"...\"`. Your results are only visible to the user if posted via this CLI call; text in your terminal or run logs is NOT delivered.\n", ctx.IssueID)
 		}
-		fmt.Fprintf(&b, "6. When done, run `multica issue status %s in_review`\n", ctx.IssueID)
-		fmt.Fprintf(&b, "7. If blocked, run `multica issue status %s blocked` and post a comment explaining why\n\n", ctx.IssueID)
+		b.WriteString("7. Before exiting: if this run produced a fact worth pinning (PR URL, deploy URL, external link, current blocker) or noticed a metadata key that is now stale, pin or clear it via `multica issue metadata set`/`delete`. Optional — only act when you actually have a high-signal change to record. See the `## Issue Metadata` section above.\n")
+		fmt.Fprintf(&b, "8. When done, run `multica issue status %s in_review`\n", ctx.IssueID)
+		fmt.Fprintf(&b, "9. If blocked, run `multica issue status %s blocked` and post a comment explaining why\n\n", ctx.IssueID)
+	}
+
+	// Sub-issue creation semantics — the only piece of the old Parent /
+	// Sub-issue Protocol (PR #2918) that still belongs in the brief. The
+	// parent-notification guidance was dropped in MUL-2538: the platform
+	// now posts a system comment on the parent itself when a child enters
+	// `done`, and the agent has nothing to do or avoid on that path.
+	// Section is skipped for chat, quick-create, and run-only autopilot
+	// runs (no parent/child semantics there).
+	if ctx.IssueID != "" && ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" {
+		b.WriteString("## Sub-issue Creation\n\n")
+		b.WriteString("**Choosing `--status` when creating sub-issues.** `--status todo` = **start now** (the default — an agent assignee fires immediately). `--status backlog` = **wait** (assignee is set but no trigger fires; promote later with `multica issue status <child-id> todo`). Parallel children: all `--status todo`. Strict serial Step 1→2→3: only Step 1 is `todo`; Steps 2/3 are `--status backlog` from the start, promoted in turn.\n\n")
 	}
 
 	if len(ctx.AgentSkills) > 0 {

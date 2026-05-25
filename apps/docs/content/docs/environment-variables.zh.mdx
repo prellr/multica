@@ -166,12 +166,12 @@ Multica 存储用户上传的附件（评论里的图片、文件等）。**优�
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `GITHUB_APP_SLUG` | 空 | 你的 GitHub App slug（`https://github.com/apps/<slug>` 的尾部）。Settings → Integrations 里安装按钮的跳转 URL 用它拼 |
+| `GITHUB_APP_SLUG` | 空 | 你的 GitHub App slug（`https://github.com/apps/<slug>` 的尾部）。Settings → GitHub 里安装按钮的跳转 URL 用它拼 |
 | `GITHUB_WEBHOOK_SECRET` | 空 | 你在 GitHub App 上设置的 Webhook secret。每条 `pull_request` / `installation` delivery 都用它做 HMAC-SHA256 校验；同一个值也用作 setup 回调里 state token 的签名密钥 |
 
 **任一变量未设时：**
 
-- Settings → Integrations 里 `Connect GitHub` 按钮 **disable**，对 admin 显示「not configured」提示
+- Settings → GitHub 里 `Connect GitHub` 按钮 **disable**，对 admin 显示「not configured」提示
 - `/api/webhooks/github` 直接返回 **`503 github webhooks not configured`**——secret 没配置时 Multica 拒绝处理任何 webhook 事件，而不是把所有签名当 valid
 
 **注意：** `GITHUB_WEBHOOK_SECRET` 同时被复用为 install 流程里 state token 的签名密钥，所以运维只需要维护一个 secret。它**不是** GitHub App 的 *Client* secret——Client secret 是 OAuth 用的，和本集成无关。完整配置流程见 [GitHub 集成 → Self-Host 配置](/github-integration#self-host-配置)。

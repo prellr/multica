@@ -14,6 +14,7 @@ import type {
   MCPServer,
   MCPServerDirectoryResponse,
   TimelineEntry,
+  User,
 } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -263,6 +264,11 @@ export const CommentSchema = z.object({
 
 export const CommentsListSchema = z.array(CommentSchema);
 
+// Metadata is primitive-only by API/DB contract. Stay lenient on shape:
+// unknown keys land as `unknown` to a caller, but the field itself defaults
+// to {} so consumers never need to nil-guard `issue.metadata`.
+const IssueMetadataSchema = z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({});
+
 const IssueSchema = z.object({
   id: z.string(),
   workspace_id: z.string(),
@@ -280,6 +286,7 @@ const IssueSchema = z.object({
   project_id: z.string().nullable(),
   position: z.number(),
   due_date: z.string().nullable(),
+  metadata: IssueMetadataSchema,
   reactions: z.array(z.unknown()).optional(),
   labels: z.array(z.unknown()).optional(),
   created_at: z.string(),
@@ -1358,3 +1365,42 @@ export const BackupStatusSchema = z.object({
 }).loose();
 
 export type BackupStatus = z.infer<typeof BackupStatusSchema>;
+
+// ---------------------------------------------------------------------------
+// User (`/api/me` GET + PATCH). The auth store and Settings → Account both
+// trust this shape — a drift here would knock both surfaces out. Kept
+// lenient by the same rules as IssueSchema: enums stay `z.string()`,
+// nullable fields are unioned with `null`, unknown server fields pass
+// through via `.loose()`. `profile_description` is the field added in
+// MUL-2406; the server emits `""` when unset (NOT NULL DEFAULT ''), so
+// the schema defaults to `""` too — keeps the type tight without
+// breaking older backends that don't return the column yet.
+// ---------------------------------------------------------------------------
+
+export const UserSchema = z.object({
+  id: z.string(),
+  name: z.string().default(""),
+  email: z.string().default(""),
+  avatar_url: z.string().nullable().default(null),
+  onboarded_at: z.string().nullable().default(null),
+  onboarding_questionnaire: z.record(z.string(), z.unknown()).default({}),
+  starter_content_state: z.string().nullable().default(null),
+  language: z.string().nullable().default(null),
+  profile_description: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const EMPTY_USER: User = {
+  id: "",
+  name: "",
+  email: "",
+  avatar_url: null,
+  onboarded_at: null,
+  onboarding_questionnaire: {},
+  starter_content_state: null,
+  language: null,
+  profile_description: "",
+  created_at: "",
+  updated_at: "",
+};

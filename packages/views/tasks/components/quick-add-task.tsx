@@ -4,6 +4,7 @@ import { useRef, useState, type KeyboardEvent, type FormEvent } from "react";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useCreateTask } from "@multica/core/tasks";
+import { ApiError } from "@multica/core/api";
 import { useT } from "../../i18n";
 
 /**
@@ -40,11 +41,25 @@ export function QuickAddTask() {
     createTask.mutate(
       { title },
       {
-        onError: () => {
+        onError: (err) => {
           // Restore so the user can retry without losing context.
           setValue(previous);
           inputRef.current?.focus();
-          toast.error(t(($) => $.errors.create_failed));
+          // Surface the server's actual error message when available
+          // (ApiError.message carries the parsed response body's `error`
+          // field). Without this the user sees only the generic toast
+          // and we have no way to diagnose what the backend rejected.
+          // Falls back to the generic message for network failures and
+          // anything else that isn't an ApiError.
+          const message =
+            err instanceof ApiError && err.message
+              ? err.message
+              : t(($) => $.errors.create_failed);
+          toast.error(message);
+          // Also log the full error so a quick check in dev tools tells
+          // us the status + response body. Cheap; only fires on failure.
+          // eslint-disable-next-line no-console
+          console.error("[tasks] create failed", err);
         },
       },
     );

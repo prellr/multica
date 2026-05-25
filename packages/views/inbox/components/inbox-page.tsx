@@ -24,6 +24,7 @@ import {
 import { IssueDetail } from "../../issues/components";
 import { ErrorBoundary } from "@multica/ui/components/common/error-boundary";
 import { useNavigation } from "../../navigation";
+import { AppLink } from "../../navigation";
 import { toast } from "sonner";
 import {
   MoreHorizontal,
@@ -105,6 +106,12 @@ export function InboxPage() {
       setSelectedKey("");
       return;
     }
+    // Without a resolved item we don't know whether this is a task or
+    // issue — fall back to issue detail since that's the surface most
+    // shared inbox links point at. For task UUIDs this 404s, which is
+    // acceptable for the orphan-shared-link edge case. When the item IS
+    // resolved (the common case), the kind-aware branch on the detail
+    // panel below avoids the broken render entirely.
     replace(wsPaths.issueDetail(selectedKey));
   }, [loading, selectedKey, selected, replace, wsPaths, setSelectedKey]);
 
@@ -256,7 +263,26 @@ export function InboxPage() {
     </div>
   );
 
-  const detailContent = selected?.issue_id ? (
+  const detailContent = selected?.issue_id && selected.issue_kind === "task" ? (
+    // Task inbox items don't render an inline detail today — the
+    // IssueDetail component below assumes the issue surface (identifier,
+    // priority, etc.) which doesn't apply to tasks. We surface a small
+    // stub with a link out to the task page so the user can act on the
+    // notification without seeing a broken issue render. A richer
+    // task-detail-in-inbox component is a future polish.
+    <div className="p-6">
+      <h2 className="text-lg font-semibold">{selected.title}</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {typeLabels[selected.type]} · {timeAgo(selected.created_at)}
+      </p>
+      <AppLink
+        href={wsPaths.taskDetail(selected.issue_id)}
+        className="mt-4 inline-flex items-center gap-1 text-sm text-primary hover:underline"
+      >
+        {t(($) => $.detail.open_task)}
+      </AppLink>
+    </div>
+  ) : selected?.issue_id ? (
     // Key by issue_id (not inbox-item id): a new comment/reaction generates a
     // new inbox notification for the same issue, and the dedup helper picks the
     // newest one — keying on its id would remount IssueDetail on every event,

@@ -34,6 +34,11 @@ export interface InboxItem {
   title: string;
   body: string | null;
   issue_status: IssueStatus | null;
+  /** Kind of the linked row when issue_id is set — discriminates issue
+   *  from task so the click-through can route to the right detail page.
+   *  Older backends won't include this field; treat missing as 'issue'
+   *  since the field was introduced after tasks shipped. */
+  issue_kind?: "issue" | "task" | null;
   read: boolean;
   archived: boolean;
   created_at: string;

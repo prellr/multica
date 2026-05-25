@@ -1,6 +1,11 @@
 -- name: ListInboxItems :many
+-- The issue join also surfaces `kind` so the frontend can route an inbox
+-- click to /tasks/:id or /issues/:id without an extra round trip — see
+-- PR 1/2 for the kind discriminator, and the inbox click handler on the
+-- frontend for the routing branch.
 SELECT i.*,
-       iss.status as issue_status
+       iss.status as issue_status,
+       iss.kind as issue_kind
 FROM inbox_item i
 LEFT JOIN issue iss ON iss.id = i.issue_id
 WHERE i.workspace_id = $1 AND i.recipient_type = $2 AND i.recipient_id = $3 AND i.archived = false

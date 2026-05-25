@@ -460,42 +460,136 @@ func (c *Client) doWithBody(ctx context.Context, method, path string, reqBody, t
 	if base == "" {
 		base = apiBase
 	}
-	var bodyReader io.Reader
+	// Marshal the body ONCE outside the retry loop — a *bytes.Reader is
+	// consumed by Do() so each attempt must build a fresh reader from the
+	// captured bytes.
+	var bodyBytes []byte
 	if reqBody != nil {
 		buf, err := json.Marshal(reqBody)
 		if err != nil {
 			return fmt.Errorf("github: encode request body: %w", err)
 		}
-		bodyReader = bytes.NewReader(buf)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, base+path, bodyReader)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if reqBody != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+		bodyBytes = buf
 	}
 
 	httpClient := c.HTTPClient
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
+	// At most one retry: if the first attempt hits primary or secondary
+	// rate-limit AND the server tells us when to retry, sleep + retry once.
+	// Rationale: bursty workloads (deploys + agents + ship reconciler ticks
+	// overlapping) occasionally clip the per-hour budget for a few seconds
+	// — a single short backoff smooths those out without papering over a
+	// real exhaustion (which is bounded to ~60s wait and then surfaces).
+	// ROA-373.
+	const maxAttempts = 2
+	const maxRetryWait = 60 * time.Second
 
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		var bodyReader io.Reader
+		if bodyBytes != nil {
+			bodyReader = bytes.NewReader(bodyBytes)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, base+path, bodyReader)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+		if bodyBytes != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if c.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.Token)
+		}
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return err
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return readErr
+		}
+
+		// Detect rate-limit on the response BEFORE classifying so we can
+		// decide to retry. Only 403s with the rate-limit signals qualify.
+		if resp.StatusCode == http.StatusForbidden && attempt < maxAttempts {
+			if isRateLimited(resp.Header, body) {
+				wait := rateLimitRetryAfter(resp.Header, maxRetryWait)
+				if wait > 0 {
+					timer := time.NewTimer(wait)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return ctx.Err()
+					case <-timer.C:
+					}
+					continue // re-attempt
+				}
+			}
+		}
+
+		return c.classifyResponse(method, path, resp, body, target)
+	}
+	// Unreachable: loop always returns inside.
+	return fmt.Errorf("github: %s %s: exhausted retries", method, path)
+}
+
+// isRateLimited reports whether a 403 response was caused by hitting GitHub's
+// primary or secondary rate limit. Mirrors the classification in
+// classifyResponse so the retry-decision and the error-translation agree.
+func isRateLimited(header http.Header, body []byte) bool {
+	if header.Get("X-RateLimit-Remaining") == "0" {
+		return true
+	}
+	if strings.Contains(strings.ToLower(string(body)), "secondary rate limit") {
+		return true
+	}
+	return false
+}
+
+// rateLimitRetryAfter computes how long to wait before retrying a
+// rate-limited response. Honors `Retry-After` (seconds or HTTP-date) and
+// falls back to `X-RateLimit-Reset` (Unix timestamp). Returns 0 when no
+// usable signal is present or the wait exceeds maxWait — the latter is the
+// "don't paper over a real exhaustion" guard.
+func rateLimitRetryAfter(header http.Header, maxWait time.Duration) time.Duration {
+	if ra := header.Get("Retry-After"); ra != "" {
+		if secs, err := strconv.Atoi(ra); err == nil && secs > 0 {
+			d := time.Duration(secs) * time.Second
+			if d > maxWait {
+				return 0
+			}
+			return d
+		}
+		if when, err := http.ParseTime(ra); err == nil {
+			d := time.Until(when)
+			if d <= 0 || d > maxWait {
+				return 0
+			}
+			return d
+		}
+	}
+	if reset := header.Get("X-RateLimit-Reset"); reset != "" {
+		if ts, err := strconv.ParseInt(reset, 10, 64); err == nil && ts > 0 {
+			d := time.Until(time.Unix(ts, 0))
+			if d <= 0 || d > maxWait {
+				return 0
+			}
+			return d
+		}
+	}
+	return 0
+}
+
+// classifyResponse turns the raw HTTP response into a typed error or
+// successful decode. Factored out so the retry loop in doWithBody can call
+// it once after deciding to NOT retry.
+func (c *Client) classifyResponse(method, path string, resp *http.Response, body []byte, target any) error {
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated, http.StatusAccepted, http.StatusNoContent:
 		if target == nil || len(body) == 0 {

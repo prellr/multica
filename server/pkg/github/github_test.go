@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -379,4 +380,115 @@ func TestUnauthClientNoAuthHeader(t *testing.T) {
 	if _, err := c.ListPullRequests(context.Background(), "o", "r", ListOptions{}); err != nil {
 		t.Fatalf("ListPullRequests: %v", err)
 	}
+}
+
+// TestDoWithBody_RateLimitRetry covers ROA-373's defensive backoff:
+// a 403 with X-RateLimit-Remaining: 0 and a near-future X-RateLimit-Reset
+// triggers exactly one short sleep + retry. A reset too far in the future
+// (or no headers) falls straight through as ErrRateLimited so the caller
+// sees the real exhaustion.
+func TestDoWithBody_RateLimitRetry(t *testing.T) {
+	t.Run("retries once on primary rate-limit with usable Retry-After", func(t *testing.T) {
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if calls == 1 {
+				w.Header().Set("X-RateLimit-Remaining", "0")
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{}`))
+		}))
+		defer srv.Close()
+
+		c := NewClient("")
+		c.BaseURL = srv.URL
+		start := time.Now()
+		err := c.do(context.Background(), "GET", "/anything", &struct{}{})
+		if err != nil {
+			t.Fatalf("expected retry to succeed, got %v", err)
+		}
+		if calls != 2 {
+			t.Errorf("expected 2 attempts, got %d", calls)
+		}
+		if elapsed := time.Since(start); elapsed < 800*time.Millisecond {
+			t.Errorf("expected at least ~1s wait between attempts, got %v", elapsed)
+		}
+	})
+
+	t.Run("does not retry when reset is far in the future", func(t *testing.T) {
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			// Reset 10 minutes out — beyond maxRetryWait (60s). Should
+			// surface as ErrRateLimited without sleeping or retrying.
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset",
+				strconv.FormatInt(time.Now().Add(10*time.Minute).Unix(), 10))
+			w.WriteHeader(http.StatusForbidden)
+		}))
+		defer srv.Close()
+
+		c := NewClient("")
+		c.BaseURL = srv.URL
+		start := time.Now()
+		err := c.do(context.Background(), "GET", "/anything", &struct{}{})
+		if !errors.Is(err, ErrRateLimited) {
+			t.Fatalf("expected ErrRateLimited, got %v", err)
+		}
+		if calls != 1 {
+			t.Errorf("expected exactly 1 attempt (no retry), got %d", calls)
+		}
+		if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+			t.Errorf("expected immediate return without sleep, took %v", elapsed)
+		}
+	})
+
+	t.Run("respects context cancellation during backoff", func(t *testing.T) {
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("Retry-After", "5") // would sleep 5s if not cancelled
+			w.WriteHeader(http.StatusForbidden)
+		}))
+		defer srv.Close()
+
+		c := NewClient("")
+		c.BaseURL = srv.URL
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			cancel()
+		}()
+		err := c.do(ctx, "GET", "/anything", &struct{}{})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+		if calls != 1 {
+			t.Errorf("expected 1 attempt before cancel, got %d", calls)
+		}
+	})
+
+	t.Run("does not retry on plain 403 (forbidden, not rate-limit)", func(t *testing.T) {
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			// No rate-limit headers — a real permission 403.
+			w.WriteHeader(http.StatusForbidden)
+		}))
+		defer srv.Close()
+
+		c := NewClient("")
+		c.BaseURL = srv.URL
+		err := c.do(context.Background(), "GET", "/anything", &struct{}{})
+		if !errors.Is(err, ErrForbidden) {
+			t.Fatalf("expected ErrForbidden, got %v", err)
+		}
+		if calls != 1 {
+			t.Errorf("expected 1 attempt (no retry on plain 403), got %d", calls)
+		}
+	})
 }

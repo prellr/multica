@@ -15,6 +15,7 @@ import type {
   MCPServerDirectoryResponse,
   TimelineEntry,
   User,
+  ListTasksResponse,
 } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -301,6 +302,44 @@ export const ListIssuesResponseSchema = z.object({
 
 export const EMPTY_LIST_ISSUES_RESPONSE: ListIssuesResponse = {
   issues: [],
+  total: 0,
+};
+
+// Tasks. Same leniency rules as IssueSchema: string enums stay as
+// `z.string()`, optionals are nullable, arrays default to []. Distinct from
+// IssueSchema because tasks have no `number`, `identifier`, or `priority`
+// — those are deliberately absent on the wire (see server task.go's
+// TaskResponse). `.loose()` lets the server add fields later without
+// stripping them in transit.
+const TaskSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  kind: z.string(),
+  title: z.string(),
+  description: z.string().nullable(),
+  status: z.string(),
+  assignee_type: z.string().nullable(),
+  assignee_id: z.string().nullable(),
+  creator_type: z.string(),
+  creator_id: z.string(),
+  parent_issue_id: z.string().nullable(),
+  project_id: z.string().nullable(),
+  position: z.number(),
+  start_date: z.string().nullable(),
+  due_date: z.string().nullable(),
+  metadata: IssueMetadataSchema,
+  labels: z.array(z.unknown()).optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const ListTasksResponseSchema = z.object({
+  tasks: z.array(TaskSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_TASKS_RESPONSE: ListTasksResponse = {
+  tasks: [],
   total: 0,
 };
 

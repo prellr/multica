@@ -86,6 +86,7 @@ vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({
     inbox: () => "/acme/inbox",
     myIssues: () => "/acme/my-issues",
+    tasks: () => "/acme/tasks",
     issues: () => "/acme/issues",
     projects: () => "/acme/projects",
     memory: () => "/acme/memory",

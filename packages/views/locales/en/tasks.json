@@ -3,7 +3,11 @@
     "title": "Tasks",
     "breadcrumb": "Tasks",
     "empty_title": "No tasks yet",
-    "empty_description": "Tasks are lighter than issues — use them for quick to-dos and prep work. Create one to get started."
+    "empty_description": "Tasks are lighter than issues — use them for quick to-dos and prep work. Create one to get started.",
+    "scope_mine": "Mine",
+    "scope_all": "All",
+    "empty_mine_title": "Nothing on your plate",
+    "empty_mine_description": "Tasks assigned to you will show up here. Switch to All to see everyone's tasks."
   },
   "status": {
     "todo": "To do",

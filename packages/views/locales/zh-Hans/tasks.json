@@ -3,7 +3,11 @@
     "title": "task",
     "breadcrumb": "task",
     "empty_title": "还没有 task",
-    "empty_description": "task 比 issue 更轻量 — 用它记快速待办和准备工作。创建一个开始使用。"
+    "empty_description": "task 比 issue 更轻量 — 用它记快速待办和准备工作。创建一个开始使用。",
+    "scope_mine": "我的",
+    "scope_all": "全部",
+    "empty_mine_title": "你这里没有 task",
+    "empty_mine_description": "分给你的 task 会显示在这里。切换到「全部」查看团队的所有 task。"
   },
   "status": {
     "todo": "待办",

@@ -159,4 +159,25 @@ describe("ShipDeploySwimlanes", () => {
     render(<ShipDeploySwimlanes projectId="p-1" />, { wrapper: I18nWrapper });
     expect(screen.getByText(/No deploys logged yet/i)).toBeInTheDocument();
   });
+
+  it("hides phantom staging env for direct_to_prod projects, shows production", () => {
+    envsRef.current = [
+      makeEnv({ kind: "staging", name: "Staging" }),
+      makeEnv({ id: "env-2", kind: "production", name: "Production" }),
+    ];
+    deploysRef.current = [];
+    render(
+      <ShipDeploySwimlanes projectId="p-1" pipelineKind="direct_to_prod" />,
+      { wrapper: I18nWrapper },
+    );
+    // Production lane must be visible.
+    expect(screen.getAllByText(/Production/i).length).toBeGreaterThan(0);
+    // Staging lane must NOT render. The translated "Staging" label only
+    // appears as the swimlane kind header; the env name sub-text uses the
+    // env.name field (also "Staging" in this fixture), so we check the
+    // swimlane count: with pipelineKind=direct_to_prod there should be no
+    // exact "Staging" text nodes rendered.
+    const laneHeaders = screen.queryAllByText(/^Staging$/);
+    expect(laneHeaders).toHaveLength(0);
+  });
 });

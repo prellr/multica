@@ -24,6 +24,11 @@ import { LogDeployDialog } from "./log-deploy-dialog";
 
 interface ShipDeploySwimlanesProps {
   projectId: string;
+  /** The project's pipeline kind — used to suppress phantom staging
+   *  environments for direct_to_prod projects. Mirrors the same check
+   *  in ShipReleasePage's StageProgressBar. Defaults to showing staging
+   *  while the project row is still loading. */
+  pipelineKind?: string;
 }
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -466,20 +471,24 @@ function Swimlane({ env, repoUrl }: SwimlaneProps) {
   );
 }
 
-export function ShipDeploySwimlanes({ projectId }: ShipDeploySwimlanesProps) {
+export function ShipDeploySwimlanes({ projectId, pipelineKind }: ShipDeploySwimlanesProps) {
   const { t } = useT("ship");
   const { data, isLoading } = useDeployEnvironments(projectId);
   const envs = useMemo(() => data?.environments ?? [], [data]);
   // Render staging on top, production below. Falling back to API order
   // when neither matches (e.g. preview environments in a future phase).
+  // Staging environments are suppressed for direct_to_prod projects —
+  // phantom staging env rows can exist in the DB for projects that
+  // never had a staging step, and showing them confuses users.
   const sorted = useMemo(() => {
-    const staging = envs.filter((e) => e.kind === "staging");
+    const hasStaging = pipelineKind !== "direct_to_prod";
+    const staging = hasStaging ? envs.filter((e) => e.kind === "staging") : [];
     const production = envs.filter((e) => e.kind === "production");
     const other = envs.filter(
       (e) => e.kind !== "staging" && e.kind !== "production",
     );
     return [...staging, ...production, ...other];
-  }, [envs]);
+  }, [envs, pipelineKind]);
 
   const [createOpen, setCreateOpen] = useState(false);
 

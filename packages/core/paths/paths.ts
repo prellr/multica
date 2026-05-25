@@ -35,7 +35,12 @@ function workspaceScoped(slug: string) {
     inbox: () => `${ws}/inbox`,
     myIssues: () => `${ws}/my-issues`,
     tasks: () => `${ws}/tasks`,
-    taskDetail: (id: string) => `${ws}/tasks/${encode(id)}`,
+    // Sidebar-style URL: clicking a task opens the detail in the master-
+    // detail sidebar on the tasks page, with the selection synced to
+    // ?task=<id>. The /tasks/:id route still exists for legacy shared
+    // links and redirects here on mount. Callers everywhere (TaskRow,
+    // inbox "Open task" link) get the sidebar UX for free.
+    taskDetail: (id: string) => `${ws}/tasks?task=${encode(id)}`,
     channels: () => `${ws}/channels`,
     channelDetail: (id: string) => `${ws}/channels/${encode(id)}`,
     ship: () => `${ws}/ship`,

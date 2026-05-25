@@ -18,6 +18,8 @@
   "detail": {
     "no_description": "暂无描述。",
     "back_to_tasks": "返回 task 列表",
+    "close": "关闭",
+    "select_prompt": "选中一个 task 查看详情和子 task。",
     "promote_button": "升级为 issue",
     "promote_pending": "升级中…",
     "promote_success": "已升级为 {{identifier}}",
@@ -27,10 +29,13 @@
     "delete_confirm_body": "这个 task 将被永久删除，无法撤销。",
     "delete_confirm_action": "删除 task",
     "delete_cancel": "取消",
-    "delete_failed": "删除失败，请重试。"
+    "delete_failed": "删除失败，请重试。",
+    "subtasks_heading": "子 task",
+    "subtasks_empty": "暂无子 task。"
   },
   "quick_add": {
     "placeholder": "添加一个 task，按 Enter 提交",
+    "subtask_placeholder": "添加一个子 task",
     "submit": "添加 task"
   },
   "errors": {

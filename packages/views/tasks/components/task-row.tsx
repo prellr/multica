@@ -28,6 +28,12 @@ const STATUS_COLOR: Record<TaskStatus, string> = {
 
 interface TaskRowProps {
   task: Task;
+  /** Master-detail highlight. The page passes `task.id === ?task` so the
+   *  currently-open row visually stays anchored when the sidebar is
+   *  open. Omit when the row is rendered outside a master-detail (e.g.
+   *  embedded in a children list inside the sidebar itself — though in
+   *  that case clicking still re-routes selection to the child). */
+  selected?: boolean;
 }
 
 /**
@@ -42,7 +48,7 @@ function nextStatusForToggle(s: TaskStatus): TaskStatus {
   return "done";
 }
 
-export function TaskRow({ task }: TaskRowProps) {
+export function TaskRow({ task, selected = false }: TaskRowProps) {
   const { t } = useT("tasks");
   const workspace = useCurrentWorkspace();
   const updateTask = useUpdateTask();
@@ -69,7 +75,13 @@ export function TaskRow({ task }: TaskRowProps) {
   return (
     <AppLink
       href={href}
-      className="group flex items-center gap-3 border-b px-4 py-2.5 hover:bg-muted/40 focus:bg-muted/60 focus:outline-none"
+      aria-current={selected ? "true" : undefined}
+      className={cn(
+        "group flex items-center gap-3 border-b px-4 py-2.5 hover:bg-muted/40 focus:bg-muted/60 focus:outline-none",
+        // Selection highlight: muted background plus a 2px left accent
+        // so the row stays visually anchored when the sidebar opens.
+        selected && "bg-muted/60 hover:bg-muted/60",
+      )}
     >
       <button
         type="button"

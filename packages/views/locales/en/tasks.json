@@ -41,5 +41,9 @@
   "errors": {
     "load_failed": "Failed to load task.",
     "create_failed": "Couldn't create task. Please try again."
+  },
+  "dnd": {
+    "cycle_blocked": "Can't make a task a child of one of its own subtasks.",
+    "reorder_failed": "Couldn't save the change. Please try again."
   }
 }

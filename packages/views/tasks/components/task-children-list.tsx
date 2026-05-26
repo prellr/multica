@@ -4,8 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import { taskListOptions } from "@multica/core/tasks";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { TaskRow } from "./task-row";
 import { QuickAddTask } from "./quick-add-task";
+import { SortableTaskRow } from "./sortable-task-row";
+import { TaskDndProvider } from "./task-dnd-context";
 import { useT } from "../../i18n";
 
 interface TaskChildrenListProps {
@@ -56,7 +57,16 @@ export function TaskChildrenList({ parentId }: TaskChildrenListProps) {
             {t(($) => $.detail.subtasks_empty)}
           </div>
         ) : (
-          children.map((child) => <TaskRow key={child.id} task={child} />)
+          // Children list: subtasks can be reordered but NOT reparented
+          // onto sibling subtasks (would create a grandchild — confusing
+          // nesting). parentScope keeps the reorder from accidentally
+          // promoting a subtask to top-level (the patch carries
+          // parent_issue_id = parentId explicitly).
+          <TaskDndProvider items={children} parentScope={parentId}>
+            {children.map((child) => (
+              <SortableTaskRow key={child.id} task={child} />
+            ))}
+          </TaskDndProvider>
         )}
       </div>
     </section>

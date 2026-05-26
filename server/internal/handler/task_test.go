@@ -218,6 +218,73 @@ func TestTaskStatusValidation(t *testing.T) {
 	})
 }
 
+// TestUpdateTaskPreservesNullableFieldsOnPartialPatch confirms that a
+// partial patch (e.g. status-only) doesn't accidentally null out
+// parent_issue_id / project_id / assignee / dates. The SQL uses bare
+// sqlc.narg for these columns — "missing" arg means SET NULL, so the
+// handler MUST pre-fill the params from the loaded row's current
+// values. Without this, status-toggling a subtask would silently
+// promote it to top-level (un-parent it).
+func TestUpdateTaskPreservesNullableFieldsOnPartialPatch(t *testing.T) {
+	// Seed a parent task.
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/tasks?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "parent",
+	})
+	testHandler.CreateTask(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateTask parent: %d", w.Code)
+	}
+	var parent TaskResponse
+	json.NewDecoder(w.Body).Decode(&parent)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, parent.ID)
+	})
+
+	// Seed a child task with parent_issue_id set.
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/tasks?workspace_id="+testWorkspaceID, map[string]any{
+		"title":           "child",
+		"parent_issue_id": parent.ID,
+	})
+	testHandler.CreateTask(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateTask child: %d: %s", w.Code, w.Body.String())
+	}
+	var child TaskResponse
+	json.NewDecoder(w.Body).Decode(&child)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, child.ID)
+	})
+	if child.ParentIssueID == nil || *child.ParentIssueID != parent.ID {
+		t.Fatalf("CreateTask child: expected parent_issue_id=%s, got %v", parent.ID, child.ParentIssueID)
+	}
+
+	// Partial patch — status only. parent_issue_id is NOT in the body.
+	w = httptest.NewRecorder()
+	req = newRequest("PATCH", "/api/tasks/"+child.ID, map[string]any{
+		"status": "done",
+	})
+	req = withURLParam(req, "id", child.ID)
+	testHandler.UpdateTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateTask status-only: %d: %s", w.Code, w.Body.String())
+	}
+	var updated TaskResponse
+	json.NewDecoder(w.Body).Decode(&updated)
+
+	// The bug being guarded against: parent_issue_id silently nulled.
+	if updated.ParentIssueID == nil {
+		t.Fatalf("UpdateTask partial patch un-parented the task — parent_issue_id is null. Was %s before the patch.", parent.ID)
+	}
+	if *updated.ParentIssueID != parent.ID {
+		t.Fatalf("UpdateTask partial patch changed parent_issue_id from %s to %s", parent.ID, *updated.ParentIssueID)
+	}
+	if updated.Status != "done" {
+		t.Fatalf("UpdateTask: expected status=done, got %s", updated.Status)
+	}
+}
+
 // TestPromoteTask round-trips a task through the promote endpoint and
 // asserts the post-promotion invariants:
 //   - The promoted row is now an issue: it appears in ListIssues and

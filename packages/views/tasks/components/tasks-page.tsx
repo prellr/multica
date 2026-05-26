@@ -18,9 +18,10 @@ import type { ListTasksParams } from "@multica/core/types";
 import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
-import { TaskRow } from "./task-row";
 import { QuickAddTask } from "./quick-add-task";
 import { TaskDetailSidebar } from "./task-detail-sidebar";
+import { SortableTaskRow } from "./sortable-task-row";
+import { TaskDndProvider } from "./task-dnd-context";
 
 type Scope = "mine" | "all";
 
@@ -108,10 +109,18 @@ export function TasksPage() {
   ) : tasks.length === 0 ? (
     <EmptyState scope={scope} />
   ) : (
+    // Drag-and-drop wiring. acceptReparent=true so the user can drop a
+    // task onto another row to make it a child. parentScope=null
+    // because the main list mixes top-level and subtask rows — see
+    // task-dnd-context's reorder branch for how it preserves each
+    // dragged row's existing parent_issue_id (the backend fix in
+    // PR-fix-task-update prevents stale-parent regressions).
     <div className="flex-1 overflow-auto">
-      {tasks.map((task) => (
-        <TaskRow key={task.id} task={task} selected={task.id === selectedId} />
-      ))}
+      <TaskDndProvider items={tasks} acceptReparent>
+        {tasks.map((task) => (
+          <SortableTaskRow key={task.id} task={task} selected={task.id === selectedId} />
+        ))}
+      </TaskDndProvider>
     </div>
   );
 

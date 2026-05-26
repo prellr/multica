@@ -52,7 +52,7 @@ describe("computeInsertPosition", () => {
   it("handles float positions converging without collisions", () => {
     // After 5 midpoint inserts between 0 and 1 — should stay strictly
     // between, not collide. (Float precision exhausts much later.)
-    let lo = 0;
+    const lo = 0;
     let hi = 1;
     for (let i = 0; i < 5; i++) {
       const mid = computeInsertPosition(lo, hi);

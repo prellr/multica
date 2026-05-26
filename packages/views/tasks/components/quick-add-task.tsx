@@ -75,7 +75,6 @@ export function QuickAddTask({ parentIssueId, placeholder, size = "default" }: Q
           toast.error(message);
           // Also log the full error so a quick check in dev tools tells
           // us the status + response body. Cheap; only fires on failure.
-          // eslint-disable-next-line no-console
           console.error("[tasks] create failed", err);
         },
       },

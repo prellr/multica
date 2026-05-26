@@ -41,5 +41,9 @@
   "errors": {
     "load_failed": "加载 task 失败。",
     "create_failed": "创建 task 失败，请重试。"
+  },
+  "dnd": {
+    "cycle_blocked": "不能把 task 放到它自己的子 task 下。",
+    "reorder_failed": "保存失败，请重试。"
   }
 }

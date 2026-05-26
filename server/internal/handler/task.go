@@ -502,20 +502,46 @@ func (h *Handler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		projectID = id
 	}
 
-	updated, err := h.Queries.UpdateTask(r.Context(), db.UpdateTaskParams{
+	// Pre-fill nullable fields (the SQL columns that bind to a bare
+	// sqlc.narg rather than COALESCE) with the loaded row's current
+	// values. Without this, a partial patch like {status: "done"}
+	// would null parent_issue_id / project_id / dates / assignee on
+	// every status toggle — silently un-parenting subtasks, clearing
+	// dates, unassigning. Mirrors the pattern in UpdateIssue handler.
+	// Fields the request explicitly set above (validated, parsed) are
+	// applied below; the rest carry the previous row's values through.
+	params := db.UpdateTaskParams{
 		ID:            task.ID,
 		WorkspaceID:   task.WorkspaceID,
 		Title:         title,
 		Description:   description,
 		Status:        status,
-		AssigneeType:  assigneeType,
-		AssigneeID:    assigneeID,
+		AssigneeType:  task.AssigneeType,
+		AssigneeID:    task.AssigneeID,
 		Position:      position,
-		StartDate:     startDate,
-		DueDate:       dueDate,
-		ParentIssueID: parentIssueID,
-		ProjectID:     projectID,
-	})
+		StartDate:     task.StartDate,
+		DueDate:       task.DueDate,
+		ParentIssueID: task.ParentIssueID,
+		ProjectID:     task.ProjectID,
+	}
+	if assigneePresent {
+		params.AssigneeType = assigneeType
+		params.AssigneeID = assigneeID
+	}
+	if req.StartDate != nil {
+		params.StartDate = startDate
+	}
+	if req.DueDate != nil {
+		params.DueDate = dueDate
+	}
+	if req.ParentIssueID != nil {
+		params.ParentIssueID = parentIssueID
+	}
+	if req.ProjectID != nil {
+		params.ProjectID = projectID
+	}
+
+	updated, err := h.Queries.UpdateTask(r.Context(), params)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update task")
 		return

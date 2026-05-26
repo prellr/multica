@@ -32,6 +32,7 @@ import (
 
 func RegisterAllMCPTools(srv *server.MCPServer, c *cli.APIClient) {
 	registerIssueTools(srv, c)
+	registerTaskTools(srv, c)
 	registerAgentTools(srv, c)
 	registerChannelTools(srv, c)
 	registerMentionTools(srv, c)
@@ -197,6 +198,13 @@ func boolStr(v bool, ok bool) string {
 // ---------------------------------------------------------------------------
 
 var issueStatusEnum = []string{"todo", "in_progress", "in_review", "done", "blocked", "backlog", "cancelled"}
+
+// Tasks intentionally use a narrower status set than issues — no
+// backlog / in_review / blocked. The handler validates this server-side
+// (see server/internal/handler/task.go isValidTaskStatus); enforcing it
+// here too keeps the MCP picker from showing options the API will
+// reject.
+var taskStatusEnum = []string{"todo", "in_progress", "done", "cancelled"}
 var issuePriorityEnum = []string{"urgent", "high", "medium", "low", "none"}
 var assigneeTypeEnum = []string{"member", "agent"}
 
@@ -473,6 +481,210 @@ func registerIssueTools(srv *server.MCPServer, c *cli.APIClient) {
 			}
 			var out json.RawMessage
 			if err := c.GetJSON(ctx, "/api/issues/"+url.PathEscape(issueID)+"/task-runs", &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}),
+	)
+}
+
+// ---------------------------------------------------------------------------
+// Tasks — lighter human-centric work items (issue rows with kind='task').
+// Same workspace, same comments + activity + agent backbone as issues, but
+// no number / identifier / priority. The MCP picker should reach for tasks
+// when the work is short-lived to-do/prep — and for issues when the work
+// has structure (priority, status workflow, identifier worth quoting).
+// Promote-to-issue (multica_task_promote) bridges the surface when a task
+// outgrows the lightweight form.
+// ---------------------------------------------------------------------------
+
+func registerTaskTools(srv *server.MCPServer, c *cli.APIClient) {
+	srv.AddTool(
+		mcp.NewTool(
+			"multica_task_list",
+			mcp.WithDescription("List tasks in the active workspace with optional filters. Tasks are the lighter cousin of issues — fewer fields, no identifier. Use small limits (e.g. 20) when scanning so the response stays under a few KB."),
+			mcp.WithString("status", mcp.Description("Task status filter."), mcp.Enum(taskStatusEnum...)),
+			mcp.WithString("assignee_id", mcp.Description("Filter by assignee (member OR agent UUID).")),
+			mcp.WithString("creator_id", mcp.Description("Filter by creator member UUID.")),
+			mcp.WithString("project_id", mcp.Description("Filter by project UUID.")),
+			mcp.WithString("parent_issue_id", mcp.Description("Filter by parent — pass a task or issue UUID to fetch its subtasks.")),
+			mcp.WithNumber("limit", mcp.Description("Default 100; cap 200.")),
+			mcp.WithNumber("offset", mcp.Description("Skip the first N results.")),
+		),
+		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+			limit, hasLim := argInt(req, "limit")
+			offset, hasOff := argInt(req, "offset")
+			path := "/api/tasks" + queryString(
+				[2]string{"status", argString(req, "status")},
+				[2]string{"assignee_id", argString(req, "assignee_id")},
+				[2]string{"creator_id", argString(req, "creator_id")},
+				[2]string{"project_id", argString(req, "project_id")},
+				[2]string{"parent_issue_id", argString(req, "parent_issue_id")},
+				[2]string{"limit", intStr(limit, hasLim)},
+				[2]string{"offset", intStr(offset, hasOff)},
+			)
+			var out json.RawMessage
+			if err := c.GetJSON(ctx, path, &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}),
+	)
+
+	srv.AddTool(
+		mcp.NewTool(
+			"multica_task_get",
+			mcp.WithDescription("Fetch full task details by UUID. Tasks have no human-readable identifier (unlike issues' 'MUL-123' form) — pass a UUID."),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Task UUID.")),
+		),
+		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+			id, errResult := requireString(req, "id")
+			if errResult != nil {
+				return errResult, nil
+			}
+			var out json.RawMessage
+			if err := c.GetJSON(ctx, "/api/tasks/"+url.PathEscape(id), &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}),
+	)
+
+	srv.AddTool(
+		mcp.NewTool(
+			"multica_task_create",
+			mcp.WithDescription("Create a new task. Title is required; everything else is optional. Tasks are for quick to-dos and prep work that doesn't warrant the full issue treatment. Pass parent_issue_id to create as a subtask of an existing task or issue. Promote later with multica_task_promote when scope grows."),
+			mcp.WithString("title", mcp.Required()),
+			mcp.WithString("description"),
+			mcp.WithString("status", mcp.Description("Defaults to 'todo'."), mcp.Enum(taskStatusEnum...)),
+			mcp.WithString("assignee_type", mcp.Enum(assigneeTypeEnum...)),
+			mcp.WithString("assignee_id"),
+			mcp.WithString("parent_issue_id", mcp.Description("Make this task a subtask of a parent (task OR issue UUID).")),
+			mcp.WithString("project_id"),
+			mcp.WithString("start_date", mcp.Description("RFC3339 timestamp.")),
+			mcp.WithString("due_date", mcp.Description("RFC3339 timestamp.")),
+		),
+		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+			title, errResult := requireString(req, "title")
+			if errResult != nil {
+				return errResult, nil
+			}
+			// Build the request body explicitly rather than always setting
+			// every field — keeps the wire payload tight, and matches the
+			// shape the frontend's QuickAddTask sends for title-only
+			// creates (the common case for an agent-driven task add).
+			body := map[string]any{
+				"title":           title,
+				"description":     nullableString(argString(req, "description")),
+				"status":          stringOrDefault(argString(req, "status"), "todo"),
+				"assignee_type":   nullableString(argString(req, "assignee_type")),
+				"assignee_id":     nullableString(argString(req, "assignee_id")),
+				"parent_issue_id": nullableString(argString(req, "parent_issue_id")),
+				"project_id":      nullableString(argString(req, "project_id")),
+				"start_date":      nullableString(argString(req, "start_date")),
+				"due_date":        nullableString(argString(req, "due_date")),
+			}
+			var out json.RawMessage
+			if err := c.PostJSON(ctx, "/api/tasks", body, &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}),
+	)
+
+	srv.AddTool(
+		mcp.NewTool(
+			"multica_task_update",
+			mcp.WithDescription("Patch one or more task fields. Only fields you pass are updated; everything else is preserved (see #167 — earlier partial patches incorrectly nulled fields, fixed). Use multica_task_status for the common status-only flip."),
+			mcp.WithString("id", mcp.Required()),
+			mcp.WithString("title"),
+			mcp.WithString("description"),
+			mcp.WithString("status", mcp.Enum(taskStatusEnum...)),
+			mcp.WithString("assignee_type", mcp.Enum(assigneeTypeEnum...)),
+			mcp.WithString("assignee_id", mcp.Description("Pass empty string to unassign.")),
+			mcp.WithString("parent_issue_id", mcp.Description("Move under a different parent (task OR issue UUID). Pass empty string to make top-level.")),
+			mcp.WithString("project_id"),
+			mcp.WithString("start_date"),
+			mcp.WithString("due_date"),
+		),
+		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+			id, errResult := requireString(req, "id")
+			if errResult != nil {
+				return errResult, nil
+			}
+			body := map[string]any{}
+			setIfPresent(body, "title", argRaw(req, "title"))
+			setIfPresent(body, "description", argRaw(req, "description"))
+			setIfPresent(body, "status", argRaw(req, "status"))
+			setIfPresent(body, "assignee_type", argRaw(req, "assignee_type"))
+			setIfPresent(body, "assignee_id", argRaw(req, "assignee_id"))
+			setIfPresent(body, "parent_issue_id", argRaw(req, "parent_issue_id"))
+			setIfPresent(body, "project_id", argRaw(req, "project_id"))
+			setIfPresent(body, "start_date", argRaw(req, "start_date"))
+			setIfPresent(body, "due_date", argRaw(req, "due_date"))
+			var out json.RawMessage
+			if err := c.PatchJSON(ctx, "/api/tasks/"+url.PathEscape(id), body, &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}),
+	)
+
+	srv.AddTool(
+		mcp.NewTool(
+			"multica_task_status",
+			mcp.WithDescription("Convenience wrapper for status-only updates — the most common task mutation (mark done, reopen)."),
+			mcp.WithString("id", mcp.Required()),
+			mcp.WithString("status", mcp.Required(), mcp.Enum(taskStatusEnum...)),
+		),
+		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+			id, errResult := requireString(req, "id")
+			if errResult != nil {
+				return errResult, nil
+			}
+			status, errResult := requireString(req, "status")
+			if errResult != nil {
+				return errResult, nil
+			}
+			var out json.RawMessage
+			if err := c.PatchJSON(ctx, "/api/tasks/"+url.PathEscape(id), map[string]any{"status": status}, &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}),
+	)
+
+	srv.AddTool(
+		mcp.NewTool(
+			"multica_task_delete",
+			mcp.WithDescription("Permanently delete a task. No undo — prefer setting status to 'cancelled' if the task might still be useful as a record. Returns no body on success."),
+			mcp.WithString("id", mcp.Required()),
+		),
+		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+			id, errResult := requireString(req, "id")
+			if errResult != nil {
+				return errResult, nil
+			}
+			if err := c.DeleteJSON(ctx, "/api/tasks/"+url.PathEscape(id)); err != nil {
+				return nil, err
+			}
+			return map[string]any{"deleted": true, "id": id}, nil
+		}),
+	)
+
+	srv.AddTool(
+		mcp.NewTool(
+			"multica_task_promote",
+			mcp.WithDescription("Promote a task to a full issue — the task's UUID is preserved, but it gains a workspace-scoped number + identifier and joins the issue surface (status workflow, priority slot, etc.). Returns the resulting Issue payload with .identifier populated. Use when a task outgrows the lightweight form."),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Task UUID to promote.")),
+		),
+		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+			id, errResult := requireString(req, "id")
+			if errResult != nil {
+				return errResult, nil
+			}
+			var out json.RawMessage
+			if err := c.PostJSON(ctx, "/api/tasks/"+url.PathEscape(id)+"/promote", nil, &out); err != nil {
 				return nil, err
 			}
 			return out, nil

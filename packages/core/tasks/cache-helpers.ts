@@ -19,7 +19,7 @@ import { taskKeys } from "./queries";
 
 export function prependTaskToLists(qc: QueryClient, wsId: string, task: Task): void {
   qc.setQueriesData<ListTasksResponse>(
-    { queryKey: taskKeys.all(wsId) },
+    { queryKey: taskKeys.lists(wsId) },
     (old) => {
       if (!old) return old;
       // Defensive: if the same id is already present (WS event landed first),
@@ -32,7 +32,7 @@ export function prependTaskToLists(qc: QueryClient, wsId: string, task: Task): v
 
 export function replaceTaskInLists(qc: QueryClient, wsId: string, task: Task): void {
   qc.setQueriesData<ListTasksResponse>(
-    { queryKey: taskKeys.all(wsId) },
+    { queryKey: taskKeys.lists(wsId) },
     (old) => {
       if (!old) return old;
       let touched = false;
@@ -50,7 +50,7 @@ export function replaceTaskInLists(qc: QueryClient, wsId: string, task: Task): v
 
 export function removeTaskFromLists(qc: QueryClient, wsId: string, taskId: string): void {
   qc.setQueriesData<ListTasksResponse>(
-    { queryKey: taskKeys.all(wsId) },
+    { queryKey: taskKeys.lists(wsId) },
     (old) => {
       if (!old) return old;
       const before = old.tasks.length;
@@ -68,7 +68,7 @@ export function removeTaskFromLists(qc: QueryClient, wsId: string, taskId: strin
  */
 export function swapTempTask(qc: QueryClient, wsId: string, tempId: string, task: Task): void {
   qc.setQueriesData<ListTasksResponse>(
-    { queryKey: taskKeys.all(wsId) },
+    { queryKey: taskKeys.lists(wsId) },
     (old) => {
       if (!old) return old;
       const tasks = old.tasks.map((t) => (t.id === tempId ? task : t));

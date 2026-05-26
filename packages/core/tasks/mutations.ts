@@ -133,12 +133,17 @@ export function useUpdateTask() {
       // Snapshot every list cache that contains this task so we can roll
       // back if the request fails. Detail cache is snapshotted separately
       // because it has its own queryKey.
-      const previousLists = qc.getQueriesData<ListTasksResponse>({ queryKey: taskKeys.all(wsId) });
+      //
+      // taskKeys.lists() rather than taskKeys.all() is critical here —
+      // the latter prefix also matches detail caches (a single Task,
+      // not {tasks, total}), and the list-shape updater below would
+      // crash on `old.tasks.map(...)` because `tasks` is undefined.
+      const previousLists = qc.getQueriesData<ListTasksResponse>({ queryKey: taskKeys.lists(wsId) });
       const previousDetail = qc.getQueryData<Task>(taskKeys.detail(wsId, id));
 
       // Patch every list cache that contains this task.
       qc.setQueriesData<ListTasksResponse>(
-        { queryKey: taskKeys.all(wsId) },
+        { queryKey: taskKeys.lists(wsId) },
         (old) => {
           if (!old) return old;
           const tasks = old.tasks.map((t) =>
@@ -198,8 +203,9 @@ export function useDeleteTask() {
     mutationFn: (id: string) => api.deleteTask(id),
     onMutate: async (id) => {
       await qc.cancelQueries({ queryKey: taskKeys.all(wsId) });
+      // See useUpdateTask onMutate for the lists() vs all() rationale.
       const previousLists = qc.getQueriesData<ListTasksResponse>({
-        queryKey: taskKeys.all(wsId),
+        queryKey: taskKeys.lists(wsId),
       });
       const previousDetail = qc.getQueryData<Task>(taskKeys.detail(wsId, id));
       removeTaskFromLists(qc, wsId, id);
@@ -251,8 +257,9 @@ export function usePromoteTask() {
     mutationFn: (id: string) => api.promoteTask(id),
     onMutate: async (id) => {
       await qc.cancelQueries({ queryKey: taskKeys.all(wsId) });
+      // See useUpdateTask onMutate for the lists() vs all() rationale.
       const previousLists = qc.getQueriesData<ListTasksResponse>({
-        queryKey: taskKeys.all(wsId),
+        queryKey: taskKeys.lists(wsId),
       });
       // Snapshot the task detail too — on error we restore it so the
       // /tasks/:id route the user came from still renders while they

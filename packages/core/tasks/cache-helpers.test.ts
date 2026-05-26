@@ -132,6 +132,67 @@ describe("task cache helpers", () => {
     });
   });
 
+  // Regression for the cache-prefix leak: the helpers used to match
+  // taskKeys.all(wsId) which also captures detail caches (shape: a
+  // single Task, not {tasks, total}). Running a list-shape updater on
+  // a detail cache threw "Cannot read properties of undefined (reading
+  // 'map')" — the exact runtime crash the user saw on quick-add.
+  // taskKeys.lists() narrows the prefix to list caches only.
+  describe("helpers do not touch detail caches (taskKeys.lists prefix)", () => {
+    it("prependTaskToLists leaves detail cache untouched", () => {
+      seed(qc, [makeTask({ id: "a" })]);
+      const detail = makeTask({ id: "detail-1", title: "in detail cache" });
+      qc.setQueryData<Task>(taskKeys.detail(WS_ID, detail.id), detail);
+
+      // This would previously crash because `(detail as ListTasksResponse).tasks`
+      // is undefined → .some() / [...undefined] / .map() throws.
+      expect(() => prependTaskToLists(qc, WS_ID, makeTask({ id: "b" }))).not.toThrow();
+
+      // Detail cache still holds the Task it was given — no mutation.
+      const after = qc.getQueryData<Task>(taskKeys.detail(WS_ID, detail.id));
+      expect(after).toBe(detail);
+    });
+
+    it("replaceTaskInLists leaves detail cache untouched", () => {
+      seed(qc, [makeTask({ id: "a", title: "old" })]);
+      const detail = makeTask({ id: "a", title: "detail copy" });
+      qc.setQueryData<Task>(taskKeys.detail(WS_ID, "a"), detail);
+
+      expect(() =>
+        replaceTaskInLists(qc, WS_ID, makeTask({ id: "a", title: "new" })),
+      ).not.toThrow();
+
+      // Detail unchanged (the dedicated detail setter is the only thing
+      // allowed to touch it).
+      const after = qc.getQueryData<Task>(taskKeys.detail(WS_ID, "a"));
+      expect(after).toBe(detail);
+    });
+
+    it("removeTaskFromLists leaves detail cache untouched", () => {
+      seed(qc, [makeTask({ id: "a" })]);
+      const detail = makeTask({ id: "a" });
+      qc.setQueryData<Task>(taskKeys.detail(WS_ID, "a"), detail);
+
+      expect(() => removeTaskFromLists(qc, WS_ID, "a")).not.toThrow();
+
+      const after = qc.getQueryData<Task>(taskKeys.detail(WS_ID, "a"));
+      expect(after).toBe(detail);
+    });
+
+    it("swapTempTask leaves detail cache untouched", () => {
+      seed(qc, [makeTask({ id: "temp-task-x", title: "in flight" })]);
+      const detail = makeTask({ id: "real", title: "detail" });
+      qc.setQueryData<Task>(taskKeys.detail(WS_ID, "real"), detail);
+
+      expect(() =>
+        swapTempTask(qc, WS_ID, "temp-task-x", makeTask({ id: "real" })),
+      ).not.toThrow();
+
+      const after = qc.getQueryData<Task>(taskKeys.detail(WS_ID, "real"));
+      expect(after).toBe(detail);
+    });
+  });
+
   describe("taskMatchesFilter", () => {
     it("matches when no filter fields are set", () => {
       expect(taskMatchesFilter(makeTask(), {})).toBe(true);

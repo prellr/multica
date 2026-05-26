@@ -10,8 +10,20 @@ import type { ListTasksParams } from "../types";
  */
 export const taskKeys = {
   all: (wsId: string) => ["tasks", wsId] as const,
+  /**
+   * Prefix that matches every filtered list cache for this workspace
+   * — used by the cache helpers / WS updaters when patching across
+   * "all", "mine", and any future filter combination at once.
+   *
+   * Do NOT use {@link all} as the prefix for setQueriesData / similar
+   * cache mutations: it would also match {@link detail} caches (a
+   * single Task), and the list-shape helpers would read `old.tasks` as
+   * undefined and throw. Always go through `lists` for list-shaped
+   * cache patching and `detail` for per-task patching.
+   */
+  lists: (wsId: string) => [...taskKeys.all(wsId), "list"] as const,
   list: (wsId: string, filter: ListTasksParams) =>
-    [...taskKeys.all(wsId), "list", filter] as const,
+    [...taskKeys.lists(wsId), filter] as const,
   detail: (wsId: string, id: string) =>
     [...taskKeys.all(wsId), "detail", id] as const,
 };

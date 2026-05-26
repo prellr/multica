@@ -114,6 +114,14 @@ type Client struct {
 	appMissMu   sync.Mutex
 	appMissOwn  map[string]time.Time // owner → cache expiry
 	appMissNow  func() time.Time     // injectable for tests
+
+	// rateLimit captures per-resource X-RateLimit-* snapshots from every
+	// GitHub response, emitting warn-level logs below 20 % remaining
+	// (throttled to once per minute per resource) and info-level
+	// window-summary logs at reset boundaries. Zero value is usable;
+	// observeResponse no-ops cleanly when headers are absent. See
+	// rate_limit.go for the full contract.
+	rateLimit rateLimitState
 }
 
 // NewClient builds a Client with sensible defaults. token may be empty —
@@ -677,6 +685,13 @@ func (c *Client) doWithBody(ctx context.Context, method, path string, reqBody, t
 		if readErr != nil {
 			return readErr
 		}
+
+		// Observability: snapshot the rate-limit headers and emit logs
+		// per the per-resource policy in rate_limit.go. Runs on every
+		// attempt (including the retries below) because each response
+		// carries an updated Remaining value — the retry path is itself
+		// load-bearing data when diagnosing pressure.
+		c.rateLimit.observeResponse(path, resp.Header)
 
 		// Rate-limit backoff (one-shot regardless of which token path
 		// we're on). Only 403s with the rate-limit signals qualify.

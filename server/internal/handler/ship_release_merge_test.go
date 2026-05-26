@@ -284,6 +284,85 @@ func TestMergeTrain_ConflictMidTrain_PausesAtPR2(t *testing.T) {
 	}
 }
 
+func TestMergeTrain_RateLimitWaitsAndRetriesOnce(t *testing.T) {
+	enableMergeTest(t)
+	projectID := createShipProject(t, "https://github.com/multica-ai/merge-rate-limit")
+	releaseID, prIDs := seedReleaseWithPRs(t, projectID, "https://github.com/multica-ai/merge-rate-limit", 1)
+
+	var channelID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO channel (
+			workspace_id, name, kind, visibility,
+			created_by_type, created_by_id
+		)
+		VALUES ($1, $2, 'channel', 'public', 'system', gen_random_uuid())
+		RETURNING id`,
+		testWorkspaceID, "merge-rate-limit-"+t.Name()).Scan(&channelID); err != nil {
+		t.Fatalf("insert release channel: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE ship_release SET channel_id = $1 WHERE id = $2`,
+		channelID, releaseID); err != nil {
+		t.Fatalf("attach channel id: %v", err)
+	}
+
+	var attempts atomic.Int32
+	ghClient := &fakeShipGithub{
+		mergeFn: func(_ context.Context, _, _ string, prNumber int, _, _ string) (*gh.MergeResult, error) {
+			n := attempts.Add(1)
+			if n == 1 {
+				return nil, gh.ErrRateLimited
+			}
+			return &gh.MergeResult{SHA: fmt.Sprintf("sha%d", prNumber), Merged: true}, nil
+		},
+	}
+	var postMu sync.Mutex
+	var posts []string
+	svc := &ship.Service{Q: testHandler.Queries, Github: ghClient}
+	deps := &ship.MergeTrainDeps{
+		Publisher:           &recordingPublisher{},
+		ParentCtx:           context.Background(),
+		RateLimitRetryDelay: time.Millisecond,
+		PostToReleaseChannel: func(_ context.Context, _ pgtype.UUID, content string) error {
+			postMu.Lock()
+			defer postMu.Unlock()
+			posts = append(posts, content)
+			return nil
+		},
+	}
+
+	if err := svc.StartMerge(context.Background(), parseUUID(releaseID), parseUUID(testUserID), "", "", deps); err != nil {
+		t.Fatalf("StartMerge: %v", err)
+	}
+	waitFor(t, "stage=in_staging", func() bool {
+		return readReleaseStage(t, releaseID) == "in_staging"
+	})
+
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("expected rate-limit retry to merge on second attempt, got %d attempts", got)
+	}
+	if readReleasePaused(t, releaseID) {
+		t.Fatalf("expected train to continue after rate-limit retry")
+	}
+	states := readMergeStates(t, releaseID)
+	if states[prIDs[0]] != "merged" {
+		t.Fatalf("expected pr merged after rate-limit retry, got %q", states[prIDs[0]])
+	}
+
+	postMu.Lock()
+	defer postMu.Unlock()
+	foundWaitPost := false
+	for _, post := range posts {
+		if strings.Contains(post, "GitHub rate limit hit") && strings.Contains(post, "waiting 60 s") {
+			foundWaitPost = true
+			break
+		}
+	}
+	if !foundWaitPost {
+		t.Fatalf("expected rate-limit wait channel post, got %v", posts)
+	}
+}
+
 // TestMergeTrain_Resume_AfterConflictResolved — caller resumes after
 // fixing the conflict: PR 2 now merges, PR 3 follows, release
 // reaches in_staging.

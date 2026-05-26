@@ -45,6 +45,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -145,6 +146,14 @@ type MergeTrainDeps struct {
 	// merge orchestrator posts progress lines into the release's
 	// auto-created channel; nil disables.
 	PostToReleaseChannel func(ctx context.Context, channelID pgtype.UUID, content string) error
+	// InterMergeDelay is the pause between successful PR merges. A small
+	// value (1-3 s) avoids GitHub's secondary rate limits triggered when
+	// many PRs merge in rapid succession (each merge triggers background
+	// mergeability re-checks on all open PRs). Zero = disabled (tests).
+	InterMergeDelay time.Duration
+	// RateLimitRetryDelay is the pause before the one-shot retry after a
+	// GitHub secondary rate limit. Zero uses the production default.
+	RateLimitRetryDelay time.Duration
 	// Now is the clock. nil → time.Now. Lets tests pin event ts.
 	Now func() time.Time
 }
@@ -161,6 +170,20 @@ func (d *MergeTrainDeps) parentCtx() context.Context {
 		return context.Background()
 	}
 	return d.ParentCtx
+}
+
+func (d *MergeTrainDeps) interMergeDelay() time.Duration {
+	if d == nil {
+		return 0
+	}
+	return d.InterMergeDelay
+}
+
+func (d *MergeTrainDeps) rateLimitRetryDelay() time.Duration {
+	if d == nil || d.RateLimitRetryDelay <= 0 {
+		return 60 * time.Second
+	}
+	return d.RateLimitRetryDelay
 }
 
 // StartMerge transitions a release from assembling → merging and
@@ -575,7 +598,8 @@ func (s *Service) runMergeTrain(
 				errors.Is(mergeErr, gh.ErrUnauthorized) ||
 				errors.Is(mergeErr, gh.ErrForbidden) ||
 				errors.Is(mergeErr, gh.ErrNotFound) ||
-				errors.Is(mergeErr, gh.ErrConflict) {
+				errors.Is(mergeErr, gh.ErrConflict) ||
+				errors.Is(mergeErr, gh.ErrRateLimited) {
 				break
 			}
 			if ctx.Err() != nil {
@@ -588,6 +612,20 @@ func (s *Service) runMergeTrain(
 				return
 			case <-time.After(time.Duration(attempt) * time.Second):
 			}
+		}
+
+		if errors.Is(mergeErr, gh.ErrRateLimited) {
+			delay := deps.rateLimitRetryDelay()
+			postReleaseChannel(deps, ctx, releaseRow.ChannelID,
+				"⏳ GitHub rate limit hit — waiting 60 s before retrying PR #"+
+					strconv.Itoa(int(pr.PrNumber)))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+			mergeResult, mergeErr = s.Github.MergePullRequest(
+				ctx, owner, repo, int(pr.PrNumber), mergeMethod, "")
 		}
 
 		if mergeErr != nil {
@@ -653,6 +691,13 @@ func (s *Service) runMergeTrain(
 			"✅ Merged #%d (%s) · sha=%s · %d/%d",
 			pr.PrNumber, pr.Title, shortSha, mergedNow, total,
 		))
+		if delay := deps.interMergeDelay(); delay > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+		}
 	}
 
 	// All queued PRs consumed. Did anything actually merge? If every
@@ -983,6 +1028,8 @@ func summarizeMergeError(err error) string {
 		return "PR is not mergeable (conflict / branch protection)"
 	case errors.Is(err, gh.ErrUnauthorized):
 		return "GitHub token unauthorized — check workspace settings"
+	case errors.Is(err, gh.ErrRateLimited):
+		return "GitHub rate limit exceeded — train paused; resume once the limit resets (~60 s)"
 	case errors.Is(err, gh.ErrForbidden):
 		return "GitHub denied the merge (permissions / SSO)"
 	case errors.Is(err, gh.ErrConflict):

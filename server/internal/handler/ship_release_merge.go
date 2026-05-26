@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
@@ -64,6 +65,7 @@ func (h *Handler) mergeTrainDeps(workspaceID pgtype.UUID) *ship.MergeTrainDeps {
 		ChannelOps:           &releaseChannelOps{h: h},
 		Publisher:            &busMergePublisher{bus: h.Bus},
 		PostToReleaseChannel: h.makeReleaseChannelPoster(workspaceID),
+		InterMergeDelay:      2 * time.Second,
 	}
 }
 

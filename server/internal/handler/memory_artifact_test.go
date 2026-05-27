@@ -352,6 +352,164 @@ func TestMemoryArtifactRejectsInvalidKind(t *testing.T) {
 	}
 }
 
+// TestMemoryArtifactAcceptsSessionAndDispatchEventKinds covers the
+// 2026-05-27 expansion that promotes orchestrator session logging to
+// first-class kinds. Both must round-trip through create + get.
+func TestMemoryArtifactAcceptsSessionAndDispatchEventKinds(t *testing.T) {
+	for _, kind := range []string{"session", "dispatch_event"} {
+		t.Run(kind, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := newRequest("POST", "/api/memory?workspace_id="+testWorkspaceID, map[string]any{
+				"kind":    kind,
+				"title":   "smoke-" + kind,
+				"content": "test row",
+			})
+			testHandler.CreateMemoryArtifact(w, req)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("create kind=%s: expected 201, got %d %s", kind, w.Code, w.Body.String())
+			}
+			var created MemoryArtifactResponse
+			json.NewDecoder(w.Body).Decode(&created)
+			if created.Kind != kind {
+				t.Fatalf("kind round-trip: want %s, got %s", kind, created.Kind)
+			}
+			t.Cleanup(func() {
+				req := newRequest("DELETE", "/api/memory/"+created.ID, nil)
+				req = withURLParam(req, "id", created.ID)
+				testHandler.DeleteMemoryArtifact(httptest.NewRecorder(), req)
+			})
+		})
+	}
+}
+
+// TestMemoryArtifactAnchorByIdentifier — anchor_type='issue' accepts
+// the human identifier form ("MUL-NNN" / "ROA-NNN" etc.) in addition
+// to a raw UUID. Mirrors the issue endpoints' existing convention so
+// callers can anchor to an issue they already have an identifier for
+// without an extra UUID-fetch round-trip.
+func TestMemoryArtifactAnchorByIdentifier(t *testing.T) {
+	// Create an issue and capture its identifier (e.g. "TST-1").
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "Anchor target — identifier form",
+	})
+	testHandler.CreateIssue(w, req)
+	var issue IssueResponse
+	json.NewDecoder(w.Body).Decode(&issue)
+	defer func() {
+		req := newRequest("DELETE", "/api/issues/"+issue.ID, nil)
+		req = withURLParam(req, "id", issue.ID)
+		testHandler.DeleteIssue(httptest.NewRecorder(), req)
+	}()
+	if issue.Identifier == "" {
+		t.Fatalf("issue create returned empty identifier — workspace setup missing prefix?")
+	}
+
+	// Create a memory artifact anchored via the human identifier.
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/memory?workspace_id="+testWorkspaceID, map[string]any{
+		"kind":        "agent_note",
+		"title":       "Anchored via identifier",
+		"content":     "test",
+		"anchor_type": "issue",
+		"anchor_id":   issue.Identifier, // <- the path that previously 400'd
+	})
+	testHandler.CreateMemoryArtifact(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create with identifier anchor: %d %s", w.Code, w.Body.String())
+	}
+	var created MemoryArtifactResponse
+	json.NewDecoder(w.Body).Decode(&created)
+	t.Cleanup(func() {
+		req := newRequest("DELETE", "/api/memory/"+created.ID, nil)
+		req = withURLParam(req, "id", created.ID)
+		testHandler.DeleteMemoryArtifact(httptest.NewRecorder(), req)
+	})
+
+	// Server-side: anchor_id should now hold the issue's UUID, not the
+	// identifier string. Identifier was resolved on the way in.
+	if created.AnchorID == nil || *created.AnchorID != issue.ID {
+		t.Fatalf("anchor_id should resolve to issue UUID: got %v, want %s",
+			created.AnchorID, issue.ID)
+	}
+}
+
+// TestMemoryArtifactListTagsFilter — the new ?tags=foo,bar query param
+// returns rows whose `tags` column overlaps with the supplied set. OR
+// semantics: a row tagged ['session'] matches a query for 'session' OR
+// 'decision' OR 'session,decision'. Mirrors the SQL `tags && $arg`
+// semantics added in this PR.
+func TestMemoryArtifactListTagsFilter(t *testing.T) {
+	mk := func(title string, tags []string) MemoryArtifactResponse {
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/memory?workspace_id="+testWorkspaceID, map[string]any{
+			"kind":    "agent_note",
+			"title":   title,
+			"content": "test",
+			"tags":    tags,
+		})
+		testHandler.CreateMemoryArtifact(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create %q: %d %s", title, w.Code, w.Body.String())
+		}
+		var a MemoryArtifactResponse
+		json.NewDecoder(w.Body).Decode(&a)
+		t.Cleanup(func() {
+			req := newRequest("DELETE", "/api/memory/"+a.ID, nil)
+			req = withURLParam(req, "id", a.ID)
+			testHandler.DeleteMemoryArtifact(httptest.NewRecorder(), req)
+		})
+		return a
+	}
+	sessionRow := mk("session-tagged", []string{"session", "live-test"})
+	decisionRow := mk("decision-tagged", []string{"decision"})
+	otherRow := mk("other-tagged", []string{"runbook"})
+
+	// Helper: list with a `tags` param, return the set of IDs present.
+	listIDs := func(tagsCSV string) map[string]bool {
+		w := httptest.NewRecorder()
+		req := newRequest("GET", "/api/memory?workspace_id="+testWorkspaceID+"&tags="+tagsCSV+"&limit=200", nil)
+		testHandler.ListMemoryArtifacts(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("list tags=%s: %d %s", tagsCSV, w.Code, w.Body.String())
+		}
+		var resp struct {
+			Artifacts []MemoryArtifactResponse `json:"memory_artifacts"`
+		}
+		json.NewDecoder(w.Body).Decode(&resp)
+		got := map[string]bool{}
+		for _, a := range resp.Artifacts {
+			got[a.ID] = true
+		}
+		return got
+	}
+
+	// Single tag: only the session row.
+	got := listIDs("session")
+	if !got[sessionRow.ID] || got[decisionRow.ID] || got[otherRow.ID] {
+		t.Fatalf("tags=session: expected only sessionRow, got %v", got)
+	}
+
+	// Two tags (OR): session and decision rows; not other.
+	got = listIDs("session,decision")
+	if !got[sessionRow.ID] || !got[decisionRow.ID] || got[otherRow.ID] {
+		t.Fatalf("tags=session,decision: expected session+decision, got %v", got)
+	}
+
+	// Shared tag: only the session row was tagged 'live-test'.
+	got = listIDs("live-test")
+	if !got[sessionRow.ID] || got[decisionRow.ID] || got[otherRow.ID] {
+		t.Fatalf("tags=live-test: expected only sessionRow, got %v", got)
+	}
+
+	// No filter: all three appear (plus any other workspace rows; just
+	// assert ours are all there).
+	got = listIDs("")
+	if !got[sessionRow.ID] || !got[decisionRow.ID] || !got[otherRow.ID] {
+		t.Fatalf("no-tags filter: expected all three rows, got %v", got)
+	}
+}
+
 // TestMemoryArtifactRejectsMismatchedAnchor — both anchor fields must
 // be set together.
 func TestMemoryArtifactRejectsMismatchedAnchor(t *testing.T) {

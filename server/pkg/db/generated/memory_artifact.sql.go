@@ -61,23 +61,27 @@ SELECT count(*) FROM memory_artifact
 WHERE workspace_id = $1
   AND ($2::text IS NULL OR kind = $2)
   AND ($3::uuid IS NULL OR parent_id = $3)
-  AND ($4::bool OR archived_at IS NULL)
+  AND ($4::text[] IS NULL OR tags && $4::text[])
+  AND ($5::bool OR archived_at IS NULL)
 `
 
 type CountMemoryArtifactsParams struct {
 	WorkspaceID     pgtype.UUID `json:"workspace_id"`
 	Kind            pgtype.Text `json:"kind"`
 	ParentID        pgtype.UUID `json:"parent_id"`
+	Tags            []string    `json:"tags"`
 	IncludeArchived bool        `json:"include_archived"`
 }
 
 // Companion to ListMemoryArtifacts so the UI can paginate without an
-// extra round-trip per page.
+// extra round-trip per page. Filter clauses must mirror the list query
+// exactly or the totals desync.
 func (q *Queries) CountMemoryArtifacts(ctx context.Context, arg CountMemoryArtifactsParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countMemoryArtifacts,
 		arg.WorkspaceID,
 		arg.Kind,
 		arg.ParentID,
+		arg.Tags,
 		arg.IncludeArchived,
 	)
 	var count int64
@@ -325,16 +329,18 @@ SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anc
 WHERE workspace_id = $1
   AND ($2::text IS NULL OR kind = $2)
   AND ($3::uuid IS NULL OR parent_id = $3)
-  AND ($4::bool OR archived_at IS NULL)
+  AND ($4::text[] IS NULL OR tags && $4::text[])
+  AND ($5::bool OR archived_at IS NULL)
 ORDER BY created_at DESC
-LIMIT  $6::int
-OFFSET $5::int
+LIMIT  $7::int
+OFFSET $6::int
 `
 
 type ListMemoryArtifactsParams struct {
 	WorkspaceID     pgtype.UUID `json:"workspace_id"`
 	Kind            pgtype.Text `json:"kind"`
 	ParentID        pgtype.UUID `json:"parent_id"`
+	Tags            []string    `json:"tags"`
 	IncludeArchived bool        `json:"include_archived"`
 	Offset          int32       `json:"offset"`
 	Limit           int32       `json:"limit"`
@@ -347,11 +353,20 @@ type ListMemoryArtifactsParams struct {
 // "no filter" without coercing nil to a specific value. include_archived
 // defaults FALSE so paginated UI doesn't accidentally surface archived
 // rows after a redeploy.
+//
+// Tags: when non-null, the filter uses the `&&` overlap operator so
+// the caller can pass either a single tag (matches rows that have it)
+// or several tags (matches rows that have at least one — OR semantics).
+// AND semantics across multiple tags would use `@>` but isn't needed
+// by current callers; revisit if a "must have all these tags" surface
+// shows up. The `tags` column has a GIN index from migration 068 so
+// this stays cheap at scale.
 func (q *Queries) ListMemoryArtifacts(ctx context.Context, arg ListMemoryArtifactsParams) ([]MemoryArtifact, error) {
 	rows, err := q.db.Query(ctx, listMemoryArtifacts,
 		arg.WorkspaceID,
 		arg.Kind,
 		arg.ParentID,
+		arg.Tags,
 		arg.IncludeArchived,
 		arg.Offset,
 		arg.Limit,

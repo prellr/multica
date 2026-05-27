@@ -6,10 +6,19 @@
 -- "no filter" without coercing nil to a specific value. include_archived
 -- defaults FALSE so paginated UI doesn't accidentally surface archived
 -- rows after a redeploy.
+--
+-- Tags: when non-null, the filter uses the `&&` overlap operator so
+-- the caller can pass either a single tag (matches rows that have it)
+-- or several tags (matches rows that have at least one — OR semantics).
+-- AND semantics across multiple tags would use `@>` but isn't needed
+-- by current callers; revisit if a "must have all these tags" surface
+-- shows up. The `tags` column has a GIN index from migration 068 so
+-- this stays cheap at scale.
 SELECT * FROM memory_artifact
 WHERE workspace_id = $1
   AND (sqlc.narg('kind')::text IS NULL OR kind = sqlc.narg('kind'))
   AND (sqlc.narg('parent_id')::uuid IS NULL OR parent_id = sqlc.narg('parent_id'))
+  AND (sqlc.narg('tags')::text[] IS NULL OR tags && sqlc.narg('tags')::text[])
   AND (sqlc.arg('include_archived')::bool OR archived_at IS NULL)
 ORDER BY created_at DESC
 LIMIT  sqlc.arg('limit')::int
@@ -17,11 +26,13 @@ OFFSET sqlc.arg('offset')::int;
 
 -- name: CountMemoryArtifacts :one
 -- Companion to ListMemoryArtifacts so the UI can paginate without an
--- extra round-trip per page.
+-- extra round-trip per page. Filter clauses must mirror the list query
+-- exactly or the totals desync.
 SELECT count(*) FROM memory_artifact
 WHERE workspace_id = $1
   AND (sqlc.narg('kind')::text IS NULL OR kind = sqlc.narg('kind'))
   AND (sqlc.narg('parent_id')::uuid IS NULL OR parent_id = sqlc.narg('parent_id'))
+  AND (sqlc.narg('tags')::text[] IS NULL OR tags && sqlc.narg('tags')::text[])
   AND (sqlc.arg('include_archived')::bool OR archived_at IS NULL);
 
 -- name: GetMemoryArtifact :one

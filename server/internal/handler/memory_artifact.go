@@ -53,11 +53,23 @@ const (
 //   - "agent_note" — agent-authored finding / decision / dead-end
 //   - "runbook" — operational procedure
 //   - "decision" — architectural decision record
+//   - "session" — root of an orchestrator session (a sequence of agent
+//     dispatches against a single investigation). Has child artifacts of
+//     kind="dispatch_event" via parent_id. Anchored to the work the
+//     session is about (issue / project / agent / channel). Validated
+//     by a 2026-05-27 live-test that confirmed memory_artifact subsumes
+//     the proposed `agent_session` table.
+//   - "dispatch_event" — one agent invocation inside a session. Always
+//     has parent_id pointing at a session row; carries the dispatch's
+//     prompt, outcome, and lesson in content; metadata stores agent
+//     name, duration, outcome enum (action | no_action | failed).
 var allowedMemoryKinds = map[string]bool{
-	"wiki_page":  true,
-	"agent_note": true,
-	"runbook":    true,
-	"decision":   true,
+	"wiki_page":      true,
+	"agent_note":     true,
+	"runbook":        true,
+	"decision":       true,
+	"session":        true,
+	"dispatch_event": true,
 }
 
 // allowedAnchorTypes enumerates the entity types a memory artifact can

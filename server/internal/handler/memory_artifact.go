@@ -345,7 +345,21 @@ func parseListPagination(r *http.Request) (limit, offset int32) {
 
 // validateAnchor checks the type/id pair. Either both must be non-nil
 // (real anchor) or both nil (free-floating). Mismatched is a 400.
-func validateAnchor(w http.ResponseWriter, anchorType, anchorID *string) (pgtype.Text, pgtype.UUID, bool) {
+// validateAnchor parses the (anchor_type, anchor_id) pair from a request.
+// Returns the typed pair plus an ok flag; on error writes a 4xx response
+// and returns ok=false so the caller short-circuits.
+//
+// anchor_id accepts two forms:
+//   - UUID (any anchor type): parsed directly.
+//   - Human identifier like "ROA-427" (anchor_type='issue' only): resolved
+//     to its UUID via resolveIssueByIdentifier. This mirrors what the
+//     issue endpoints already accept and removes the workflow friction
+//     where an MCP caller has to grab the UUID from a separate call
+//     before creating a memory_artifact anchored to an issue.
+//
+// Non-issue anchor types don't have human-readable identifiers, so they
+// stay UUID-only — no caller convenience to invent there.
+func (h *Handler) validateAnchor(r *http.Request, w http.ResponseWriter, anchorType, anchorID *string) (pgtype.Text, pgtype.UUID, bool) {
 	if anchorType == nil && anchorID == nil {
 		return pgtype.Text{}, pgtype.UUID{}, true
 	}
@@ -358,7 +372,25 @@ func validateAnchor(w http.ResponseWriter, anchorType, anchorID *string) (pgtype
 		writeError(w, http.StatusBadRequest, "anchor_type must be one of: issue, project, agent, channel")
 		return pgtype.Text{}, pgtype.UUID{}, false
 	}
-	id, ok := parseUUIDOrBadRequest(w, *anchorID, "anchor_id")
+	raw := strings.TrimSpace(*anchorID)
+
+	// Identifier-form resolution for issue anchors. Falls through to UUID
+	// parsing if the string isn't an identifier OR if the identifier
+	// doesn't resolve in this workspace — the parseUUIDOrBadRequest call
+	// then surfaces the appropriate 400 for unparseable inputs. Note: we
+	// only attempt resolution when anchor_type='issue'; for project /
+	// agent / channel anchors there's no human-readable identifier, so
+	// passing one is a user error that the UUID parser will surface.
+	if t == "issue" {
+		workspaceID := h.resolveWorkspaceID(r)
+		if workspaceID != "" {
+			if issue, ok := h.resolveIssueByIdentifier(r.Context(), raw, workspaceID); ok {
+				return pgtype.Text{String: t, Valid: true}, issue.ID, true
+			}
+		}
+	}
+
+	id, ok := parseUUIDOrBadRequest(w, raw, "anchor_id")
 	if !ok {
 		return pgtype.Text{}, pgtype.UUID{}, false
 	}
@@ -388,6 +420,20 @@ func (h *Handler) ListMemoryArtifacts(w http.ResponseWriter, r *http.Request) {
 		}
 		parentFilter = id
 	}
+	// Tags filter: CSV in the query string, OR-semantics in the SQL
+	// (`tags && $arg`). Pass a single tag to match rows that have it; pass
+	// multiple to match rows that have at least one. Empty entries from
+	// trailing commas are skipped so `?tags=session,` doesn't pass a "" tag
+	// to Postgres (which would never match anything anyway, but the
+	// query plan is cleaner without empty array entries).
+	var tagsFilter []string
+	if t := r.URL.Query().Get("tags"); t != "" {
+		for _, raw := range strings.Split(t, ",") {
+			if s := strings.TrimSpace(raw); s != "" {
+				tagsFilter = append(tagsFilter, s)
+			}
+		}
+	}
 	includeArchived := r.URL.Query().Get("include_archived") == "true"
 	limit, offset := parseListPagination(r)
 
@@ -395,6 +441,7 @@ func (h *Handler) ListMemoryArtifacts(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID:     wsUUID,
 		Kind:            kindFilter,
 		ParentID:        parentFilter,
+		Tags:            tagsFilter,
 		IncludeArchived: includeArchived,
 		Limit:           limit,
 		Offset:          offset,
@@ -408,6 +455,7 @@ func (h *Handler) ListMemoryArtifacts(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID:     wsUUID,
 		Kind:            kindFilter,
 		ParentID:        parentFilter,
+		Tags:            tagsFilter,
 		IncludeArchived: includeArchived,
 	})
 	if err != nil {
@@ -462,9 +510,25 @@ func (h *Handler) ListMemoryArtifactsByAnchor(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "anchor type must be one of: issue, project, agent, channel")
 		return
 	}
-	anchorID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "anchorId"), "anchor id")
-	if !ok {
-		return
+	rawAnchorID := chi.URLParam(r, "anchorId")
+	// Identifier-form resolution mirrors h.validateAnchor: for issue
+	// anchors we try "ROA-427" → UUID before parsing as a raw UUID.
+	// Non-issue anchor types keep UUID-only since they don't have
+	// human-readable identifiers.
+	var anchorID pgtype.UUID
+	resolved := false
+	if anchorType == "issue" {
+		if issue, ok := h.resolveIssueByIdentifier(r.Context(), rawAnchorID, workspaceID); ok {
+			anchorID = issue.ID
+			resolved = true
+		}
+	}
+	if !resolved {
+		var ok bool
+		anchorID, ok = parseUUIDOrBadRequest(w, rawAnchorID, "anchor id")
+		if !ok {
+			return
+		}
 	}
 	// Default 50, cap 200 — same as ListMemoryArtifacts. Anchor lookup
 	// is the daemon's hot path, so worth a generous default.
@@ -630,7 +694,7 @@ func (h *Handler) CreateMemoryArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Anchor: type + id together or both nil.
-	anchorTypeParam, anchorIDParam, ok := validateAnchor(w, req.AnchorType, req.AnchorID)
+	anchorTypeParam, anchorIDParam, ok := h.validateAnchor(r, w, req.AnchorType, req.AnchorID)
 	if !ok {
 		return
 	}
@@ -767,7 +831,7 @@ func (h *Handler) UpdateMemoryArtifact(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.AnchorType != nil || req.AnchorID != nil {
-		at, aid, ok := validateAnchor(w, req.AnchorType, req.AnchorID)
+		at, aid, ok := h.validateAnchor(r, w, req.AnchorType, req.AnchorID)
 		if !ok {
 			return
 		}

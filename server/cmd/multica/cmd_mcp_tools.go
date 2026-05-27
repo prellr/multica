@@ -115,6 +115,24 @@ func argStringSlice(req mcp.CallToolRequest, name string) []string {
 	return out
 }
 
+// argObject reads a JSON-object argument as map[string]any. Used for the
+// memory_artifact metadata setter where callers want to pass structured
+// per-kind fields (session.status, dispatch_event.outcome, etc.) without
+// the wrapping ceremony of a stringified-JSON parameter. Returns nil
+// when absent or when the arg is the wrong type — callers should treat
+// nil as "no metadata supplied" and decide whether to default to {}.
+func argObject(req mcp.CallToolRequest, name string) map[string]any {
+	v := argRaw(req, name)
+	if v == nil {
+		return nil
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return m
+}
+
 // requireString fetches a required string and returns a tool-error
 // payload if it's missing or empty.
 func requireString(req mcp.CallToolRequest, name string) (string, *mcp.CallToolResult) {
@@ -1032,16 +1050,24 @@ func registerProjectTools(srv *server.MCPServer, c *cli.APIClient) {
 // is intentionally not exposed; archive is the soft-delete path.
 // ---------------------------------------------------------------------------
 
-var memoryKindEnum = []string{"wiki_page", "agent_note", "runbook", "decision"}
+// memoryKindEnum mirrors server/internal/handler/memory_artifact.go
+// `allowedMemoryKinds`. Adding a kind requires touching both lists; the
+// server-side map is the source of truth (it actually validates), this
+// just narrows the picker so agents don't propose values the API will
+// reject. session + dispatch_event were added 2026-05-27 to support
+// orchestrator session logging on top of memory_artifact (see ROA-427
+// for the design discussion that validated this shape).
+var memoryKindEnum = []string{"wiki_page", "agent_note", "runbook", "decision", "session", "dispatch_event"}
 var memoryAnchorTypeEnum = []string{"issue", "project", "agent", "channel"}
 
 func registerMemoryTools(srv *server.MCPServer, c *cli.APIClient) {
 	srv.AddTool(
 		mcp.NewTool(
 			"multica_memory_list",
-			mcp.WithDescription("List memory artifacts in the active workspace. Filter by kind and/or parent. Archived rows are hidden by default."),
+			mcp.WithDescription("List memory artifacts in the active workspace. Filter by kind, parent, and/or tags. Archived rows are hidden by default. Tags filter is OR-semantics across multiple values (pass 'session,decision' to match rows tagged either)."),
 			mcp.WithString("kind", mcp.Enum(memoryKindEnum...)),
 			mcp.WithString("parent_id"),
+			mcp.WithArray("tags", mcp.Description("Filter to rows tagged with at least one of these (OR semantics). String array.")),
 			mcp.WithBoolean("include_archived"),
 			mcp.WithNumber("limit", mcp.Description("Default 50; cap 200.")),
 			mcp.WithNumber("offset"),
@@ -1050,9 +1076,17 @@ func registerMemoryTools(srv *server.MCPServer, c *cli.APIClient) {
 			limit, hasLim := argInt(req, "limit")
 			offset, hasOff := argInt(req, "offset")
 			incArc, hasInc := argBool(req, "include_archived")
+			// Tags arrive as a string array per the mcp schema; the HTTP
+			// list endpoint expects CSV. Join here so the MCP surface
+			// can mirror the JSON-native ergonomics most agents prefer.
+			tagsCSV := ""
+			if t := argStringSlice(req, "tags"); len(t) > 0 {
+				tagsCSV = strings.Join(t, ",")
+			}
 			path := "/api/memory" + queryString(
 				[2]string{"kind", argString(req, "kind")},
 				[2]string{"parent_id", argString(req, "parent_id")},
+				[2]string{"tags", tagsCSV},
 				[2]string{"include_archived", boolStr(incArc, hasInc)},
 				[2]string{"limit", intStr(limit, hasLim)},
 				[2]string{"offset", intStr(offset, hasOff)},
@@ -1146,15 +1180,16 @@ func registerMemoryTools(srv *server.MCPServer, c *cli.APIClient) {
 	srv.AddTool(
 		mcp.NewTool(
 			"multica_memory_create",
-			mcp.WithDescription("Create a new memory artifact. Use kind='agent_note' for findings/decisions/dead-ends produced during a task; 'runbook' for operational procedures; 'decision' for architectural records; 'wiki_page' for general knowledge. Anchor the artifact to an issue / project / agent / channel when it's about a specific thing — anchored artifacts are auto-injected into agent runtime context for that anchor."),
+			mcp.WithDescription("Create a new memory artifact. Pick kind by intent: 'agent_note' for ad-hoc findings/dead-ends produced during a task; 'runbook' for operational procedures; 'decision' for architectural records; 'wiki_page' for general knowledge; 'session' for the root of an orchestrator session (with child 'dispatch_event' rows via parent_id). Anchor the artifact to an issue / project / agent / channel when it's about a specific thing — anchored artifacts auto-inject into agent runtime context for that anchor. anchor_id accepts either a UUID OR the human identifier form (e.g. 'ROA-427') when anchor_type='issue'. Pass metadata as a JSON object for kind-specific structured fields (e.g. session: {status, root_agent}; dispatch_event: {agent, outcome, duration_ms})."),
 			mcp.WithString("kind", mcp.Required(), mcp.Enum(memoryKindEnum...)),
 			mcp.WithString("title", mcp.Required()),
 			mcp.WithString("content", mcp.Required()),
 			mcp.WithString("slug", mcp.Description("Optional stable URL slug (lowercase, hyphenated).")),
 			mcp.WithString("parent_id"),
 			mcp.WithString("anchor_type", mcp.Enum(memoryAnchorTypeEnum...)),
-			mcp.WithString("anchor_id"),
+			mcp.WithString("anchor_id", mcp.Description("Anchor target id. Accepts UUID or 'ROA-NNN' identifier when anchor_type='issue'.")),
 			mcp.WithArray("tags", mcp.Description("Free-form tags as a string array.")),
+			mcp.WithObject("metadata", mcp.Description("Structured per-kind fields as a JSON object. Stored as-is; no schema enforcement (yet).")),
 			mcp.WithBoolean("always_inject_at_runtime", mcp.Description("Workspace-wide auto-inject. Use sparingly.")),
 		),
 		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
@@ -1167,6 +1202,14 @@ func registerMemoryTools(srv *server.MCPServer, c *cli.APIClient) {
 				return errResult, nil
 			}
 			content := argString(req, "content")
+			// metadata is exposed as a JSON object on the MCP surface and
+			// passed through to the HTTP body as-is. argObject returns
+			// map[string]any when present, nil otherwise — server handler
+			// already treats a missing metadata as `{}`.
+			metadata := argObject(req, "metadata")
+			if metadata == nil {
+				metadata = map[string]any{}
+			}
 			body := map[string]any{
 				"kind":        kind,
 				"title":       title,
@@ -1176,7 +1219,7 @@ func registerMemoryTools(srv *server.MCPServer, c *cli.APIClient) {
 				"anchor_type": nullableString(argString(req, "anchor_type")),
 				"anchor_id":   nullableString(argString(req, "anchor_id")),
 				"tags":        argStringSlice(req, "tags"),
-				"metadata":    map[string]any{},
+				"metadata":    metadata,
 			}
 			if v, ok := argBool(req, "always_inject_at_runtime"); ok {
 				body["always_inject_at_runtime"] = v
@@ -1192,15 +1235,16 @@ func registerMemoryTools(srv *server.MCPServer, c *cli.APIClient) {
 	srv.AddTool(
 		mcp.NewTool(
 			"multica_memory_update",
-			mcp.WithDescription("Partial update — only fields you pass are changed. Set anchor_type / anchor_id together to retarget; pass tags to replace the whole array. Cannot change kind (kind is set at creation time)."),
+			mcp.WithDescription("Partial update — only fields you pass are changed. Set anchor_type / anchor_id together to retarget; pass tags to replace the whole array; pass metadata to replace the whole object. Cannot change kind (kind is set at creation time). anchor_id accepts identifier form (e.g. 'ROA-427') when anchor_type='issue'."),
 			mcp.WithString("id", mcp.Required()),
 			mcp.WithString("title"),
 			mcp.WithString("content"),
 			mcp.WithString("slug"),
 			mcp.WithString("parent_id"),
 			mcp.WithString("anchor_type", mcp.Enum(memoryAnchorTypeEnum...)),
-			mcp.WithString("anchor_id"),
+			mcp.WithString("anchor_id", mcp.Description("Anchor target id. Accepts UUID or 'ROA-NNN' identifier when anchor_type='issue'.")),
 			mcp.WithArray("tags"),
+			mcp.WithObject("metadata", mcp.Description("Structured per-kind fields as a JSON object. Replaces the whole object on update.")),
 			mcp.WithBoolean("always_inject_at_runtime"),
 		),
 		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
@@ -1217,6 +1261,9 @@ func registerMemoryTools(srv *server.MCPServer, c *cli.APIClient) {
 			setIfPresent(body, "anchor_id", argRaw(req, "anchor_id"))
 			if tags := argStringSlice(req, "tags"); tags != nil {
 				body["tags"] = tags
+			}
+			if metadata := argObject(req, "metadata"); metadata != nil {
+				body["metadata"] = metadata
 			}
 			if v, ok := argBool(req, "always_inject_at_runtime"); ok {
 				body["always_inject_at_runtime"] = v

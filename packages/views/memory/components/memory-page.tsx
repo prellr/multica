@@ -1,24 +1,44 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { Plus, BookOpen, Search as SearchIcon } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
-  memoryListOptions,
-  memorySearchOptions,
+  Plus,
+  BookOpen,
+  Search as SearchIcon,
+  X,
+  Check,
+  Tag as TagIcon,
+  Archive,
+  Bot,
+} from "lucide-react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  memoryListInfiniteOptions,
+  memorySearchInfiniteOptions,
+  memoryTagsOptions,
   MEMORY_KINDS,
+  MEMORY_SYSTEM_KINDS,
   MEMORY_KIND_LABELS,
 } from "@multica/core/memory";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useModalStore } from "@multica/core/modals";
 import { useActorName } from "@multica/core/workspace/hooks";
-import type { MemoryArtifact, MemoryArtifactKind } from "@multica/core/types";
+import type {
+  MemoryArtifact,
+  MemoryArtifactKind,
+  ListMemoryArtifactsParams,
+} from "@multica/core/types";
 import { AppLink } from "../../navigation";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { PageHeader } from "../../layout/page-header";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@multica/ui/components/ui/popover";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 
@@ -127,35 +147,108 @@ export function MemoryPage() {
   const { t } = useT("memory");
   const wsId = useWorkspaceId();
   const [kindFilter, setKindFilter] = useState<MemoryArtifactKind | "all">("all");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
+  const [showSystem, setShowSystem] = useState(false);
   const [searchInput, setSearchInput] = useState("");
-  // Trim once for both the enable check and the request payload.
-  const trimmedSearch = searchInput.trim();
+
+  // Debounce the search box so we don't fire a request per keystroke. 250ms
+  // is the usual sweet spot between "feels live" and "not chatty".
+  const [trimmedSearch, setTrimmedSearch] = useState("");
+  useEffect(() => {
+    const id = setTimeout(() => setTrimmedSearch(searchInput.trim()), 250);
+    return () => clearTimeout(id);
+  }, [searchInput]);
   const isSearching = trimmedSearch.length > 0;
 
-  const listOptions = useMemo(
-    () =>
-      memoryListOptions(wsId, kindFilter === "all" ? undefined : { kind: kindFilter }),
-    [wsId, kindFilter],
+  // A system kind explicitly selected as the filter should still be visible
+  // even if the "logs" toggle is off — selecting it IS the request.
+  const kindParam = kindFilter === "all" ? undefined : kindFilter;
+
+  const listParams = useMemo<ListMemoryArtifactsParams>(
+    () => ({
+      kind: kindParam,
+      tags: selectedTags.length > 0 ? selectedTags : undefined,
+      include_archived: showArchived,
+      include_system: showSystem,
+    }),
+    [kindParam, selectedTags, showArchived, showSystem],
   );
-  const searchOptions = useMemo(
-    () =>
-      memorySearchOptions(wsId, {
-        q: trimmedSearch,
-        kind: kindFilter === "all" ? undefined : kindFilter,
-      }),
-    [wsId, trimmedSearch, kindFilter],
+  const searchParams = useMemo(
+    () => ({
+      q: trimmedSearch,
+      kind: kindParam,
+      tags: selectedTags.length > 0 ? selectedTags : undefined,
+      include_system: showSystem,
+    }),
+    [trimmedSearch, kindParam, selectedTags, showSystem],
   );
 
   // Search and list are separate cache spaces — switching modes doesn't
-  // invalidate the other. We just toggle which query is enabled.
-  const listQuery = useQuery({ ...listOptions, enabled: !isSearching });
-  const searchQuery = useQuery({ ...searchOptions, enabled: isSearching });
+  // invalidate the other. We just toggle which infinite query is enabled.
+  const listQuery = useInfiniteQuery({
+    ...memoryListInfiniteOptions(wsId, listParams),
+    enabled: !isSearching,
+  });
+  const searchQuery = useInfiniteQuery({
+    ...memorySearchInfiniteOptions(wsId, searchParams),
+    enabled: isSearching,
+  });
+  const active = isSearching ? searchQuery : listQuery;
 
-  const artifacts = isSearching ? searchQuery.data ?? [] : listQuery.data ?? [];
-  const isLoading = isSearching ? searchQuery.isLoading : listQuery.isLoading;
+  const artifacts = useMemo(
+    () => active.data?.pages.flatMap((p) => p.memory_artifacts) ?? [],
+    [active.data],
+  );
+  const total = active.data?.pages[0]?.total ?? 0;
+  const isLoading = active.isLoading;
+  const hasNextPage = active.hasNextPage ?? false;
+  const isFetchingNextPage = active.isFetchingNextPage;
+  const fetchNextPage = active.fetchNextPage;
+
+  // IntersectionObserver sentinel — pulls the next page when the user nears
+  // the bottom. rootMargin prefetches ~200px early so scrolling stays smooth.
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  const tagsQuery = useQuery(memoryTagsOptions(wsId));
+  const availableTags = tagsQuery.data ?? [];
+
+  const hasActiveFilters =
+    kindFilter !== "all" || selectedTags.length > 0 || showArchived;
 
   const openCreate = () =>
     useModalStore.getState().open("create-memory-artifact");
+
+  const toggleTag = (tag: string) =>
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((x) => x !== tag) : [...prev, tag],
+    );
+
+  const clearFilters = () => {
+    setKindFilter("all");
+    setSelectedTags([]);
+    setShowArchived(false);
+  };
+
+  // Kind pills: human kinds always; system kinds only when the logs toggle
+  // is on (so they don't clutter the strip for non-debugging use).
+  const kindPills: MemoryArtifactKind[] = showSystem
+    ? [...MEMORY_KINDS, ...MEMORY_SYSTEM_KINDS]
+    : [...MEMORY_KINDS];
 
   return (
     <div className="flex h-full flex-col">
@@ -163,9 +256,11 @@ export function MemoryPage() {
         <div className="flex items-center gap-2">
           <BookOpen className="h-4 w-4 text-muted-foreground" />
           <h1 className="text-sm font-medium">{t(($) => $.page.title)}</h1>
-          {!isLoading && artifacts.length > 0 && (
+          {!isLoading && total > 0 && (
             <span className="text-xs text-muted-foreground tabular-nums">
-              {artifacts.length}
+              {artifacts.length < total
+                ? `${artifacts.length} / ${total}`
+                : total}
             </span>
           )}
         </div>
@@ -175,18 +270,13 @@ export function MemoryPage() {
         </Button>
       </PageHeader>
 
-      {/* Filter strip: kind tabs + search. Tabs are pills; the active one
-          fills with accent. Search clears the kind filter context (still
-          applies kind to the search query, just visually independent). */}
+      {/* Filter strip 1: kind pills + search box. */}
       <div className="flex items-center gap-3 border-b px-5 py-2">
-        <div className="flex items-center gap-1">
-          <KindPill
-            active={kindFilter === "all"}
-            onClick={() => setKindFilter("all")}
-          >
+        <div className="flex flex-wrap items-center gap-1">
+          <KindPill active={kindFilter === "all"} onClick={() => setKindFilter("all")}>
             {t(($) => $.page.filter_all)}
           </KindPill>
-          {MEMORY_KINDS.map((k) => (
+          {kindPills.map((k) => (
             <KindPill
               key={k}
               active={kindFilter === k}
@@ -205,6 +295,90 @@ export function MemoryPage() {
             onChange={(e) => setSearchInput(e.target.value)}
             className="flex-1 min-w-0 bg-transparent text-sm placeholder:text-muted-foreground outline-none"
           />
+          {searchInput && (
+            <button
+              type="button"
+              onClick={() => setSearchInput("")}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Filter strip 2: tag chips + tag picker on the left; toggles right. */}
+      <div className="flex items-center gap-2 border-b px-5 py-2">
+        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+          {selectedTags.map((tag) => (
+            <span
+              key={tag}
+              className="inline-flex items-center gap-1 rounded-full border bg-accent/40 px-2 py-0.5 text-[11px]"
+            >
+              {tag}
+              <button
+                type="button"
+                onClick={() => toggleTag(tag)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+          <Popover>
+            <PopoverTrigger
+              render={
+                <Button variant="outline" size="sm" className="h-6 gap-1 text-xs">
+                  <TagIcon className="h-3 w-3" />
+                  {t(($) => $.page.filter_tags)}
+                </Button>
+              }
+            />
+            <PopoverContent align="start" className="w-56 p-0">
+              <div className="max-h-64 overflow-y-auto py-1">
+                {availableTags.length === 0 ? (
+                  <p className="px-3 py-2 text-xs text-muted-foreground">
+                    {t(($) => $.page.filter_no_tags)}
+                  </p>
+                ) : (
+                  availableTags.map(({ tag, count }) => {
+                    const checked = selectedTags.includes(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => toggleTag(tag)}
+                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent/40"
+                      >
+                        <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                          {checked && <Check className="h-3.5 w-3.5" />}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate">{tag}</span>
+                        <span className="text-[10px] text-muted-foreground tabular-nums">
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
+
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <ToggleChip
+            active={showArchived}
+            onClick={() => setShowArchived((v) => !v)}
+            icon={<Archive className="h-3 w-3" />}
+            label={t(($) => $.page.show_archived)}
+          />
+          <ToggleChip
+            active={showSystem}
+            onClick={() => setShowSystem((v) => !v)}
+            icon={<Bot className="h-3 w-3" />}
+            label={t(($) => $.page.show_logs)}
+          />
         </div>
       </div>
 
@@ -221,16 +395,41 @@ export function MemoryPage() {
             <p className="text-sm">
               {isSearching
                 ? t(($) => $.page.empty_search)
-                : t(($) => $.page.empty_default)}
+                : hasActiveFilters
+                  ? t(($) => $.page.empty_filtered)
+                  : t(($) => $.page.empty_default)}
             </p>
-            {!isSearching && (
+            {isSearching || hasActiveFilters ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="mt-3"
+                onClick={() => {
+                  setSearchInput("");
+                  clearFilters();
+                }}
+              >
+                {t(($) => $.page.clear_filters)}
+              </Button>
+            ) : (
               <Button size="sm" variant="outline" className="mt-3" onClick={openCreate}>
                 {t(($) => $.page.create_first)}
               </Button>
             )}
           </div>
         ) : (
-          artifacts.map((a) => <MemoryRow key={a.id} artifact={a} />)
+          <>
+            {artifacts.map((a) => (
+              <MemoryRow key={a.id} artifact={a} />
+            ))}
+            {/* Infinite-scroll sentinel + loading affordance. */}
+            <div ref={sentinelRef} className="h-px" />
+            {isFetchingNextPage && (
+              <p className="py-4 text-center text-xs text-muted-foreground">
+                {t(($) => $.page.loading_more)}
+              </p>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -258,6 +457,34 @@ function KindPill({
       )}
     >
       {children}
+    </button>
+  );
+}
+
+function ToggleChip({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors cursor-pointer",
+        active
+          ? "bg-accent text-accent-foreground border-transparent"
+          : "text-muted-foreground hover:bg-accent/40",
+      )}
+    >
+      {icon}
+      {label}
     </button>
   );
 }

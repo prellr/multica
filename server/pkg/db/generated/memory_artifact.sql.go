@@ -61,16 +61,26 @@ SELECT count(*) FROM memory_artifact
 WHERE workspace_id = $1
   AND ($2::text IS NULL OR kind = $2)
   AND ($3::uuid IS NULL OR parent_id = $3)
-  AND ($4::text[] IS NULL OR tags && $4::text[])
-  AND ($5::bool OR archived_at IS NULL)
+  AND ($4::text IS NULL OR anchor_type = $4)
+  AND ($5::uuid IS NULL OR anchor_id = $5)
+  AND ($6::text[] IS NULL OR tags && $6::text[])
+  AND ($7::bool OR archived_at IS NULL)
+  AND (
+    $8::bool
+    OR $2::text IS NOT NULL
+    OR kind NOT IN ('session', 'dispatch_event')
+  )
 `
 
 type CountMemoryArtifactsParams struct {
 	WorkspaceID     pgtype.UUID `json:"workspace_id"`
 	Kind            pgtype.Text `json:"kind"`
 	ParentID        pgtype.UUID `json:"parent_id"`
+	AnchorType      pgtype.Text `json:"anchor_type"`
+	AnchorID        pgtype.UUID `json:"anchor_id"`
 	Tags            []string    `json:"tags"`
 	IncludeArchived bool        `json:"include_archived"`
+	IncludeSystem   bool        `json:"include_system"`
 }
 
 // Companion to ListMemoryArtifacts so the UI can paginate without an
@@ -81,8 +91,49 @@ func (q *Queries) CountMemoryArtifacts(ctx context.Context, arg CountMemoryArtif
 		arg.WorkspaceID,
 		arg.Kind,
 		arg.ParentID,
+		arg.AnchorType,
+		arg.AnchorID,
 		arg.Tags,
 		arg.IncludeArchived,
+		arg.IncludeSystem,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSearchMemoryArtifacts = `-- name: CountSearchMemoryArtifacts :one
+SELECT count(*) FROM memory_artifact
+WHERE workspace_id = $1
+  AND archived_at IS NULL
+  AND content_tsv @@ websearch_to_tsquery('english', $2)
+  AND ($3::text IS NULL OR kind = $3)
+  AND ($4::text[] IS NULL OR tags && $4::text[])
+  AND (
+    $5::bool
+    OR $3::text IS NOT NULL
+    OR kind NOT IN ('session', 'dispatch_event')
+  )
+`
+
+type CountSearchMemoryArtifactsParams struct {
+	WorkspaceID        pgtype.UUID `json:"workspace_id"`
+	WebsearchToTsquery string      `json:"websearch_to_tsquery"`
+	Kind               pgtype.Text `json:"kind"`
+	Tags               []string    `json:"tags"`
+	IncludeSystem      bool        `json:"include_system"`
+}
+
+// Companion total for SearchMemoryArtifacts so the UI can show "N results"
+// and paginate. Filter clauses must mirror the search query exactly (minus
+// rank/order/limit) or the total desyncs from the page.
+func (q *Queries) CountSearchMemoryArtifacts(ctx context.Context, arg CountSearchMemoryArtifactsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSearchMemoryArtifacts,
+		arg.WorkspaceID,
+		arg.WebsearchToTsquery,
+		arg.Kind,
+		arg.Tags,
+		arg.IncludeSystem,
 	)
 	var count int64
 	err := row.Scan(&count)
@@ -329,19 +380,29 @@ SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anc
 WHERE workspace_id = $1
   AND ($2::text IS NULL OR kind = $2)
   AND ($3::uuid IS NULL OR parent_id = $3)
-  AND ($4::text[] IS NULL OR tags && $4::text[])
-  AND ($5::bool OR archived_at IS NULL)
+  AND ($4::text IS NULL OR anchor_type = $4)
+  AND ($5::uuid IS NULL OR anchor_id = $5)
+  AND ($6::text[] IS NULL OR tags && $6::text[])
+  AND ($7::bool OR archived_at IS NULL)
+  AND (
+    $8::bool
+    OR $2::text IS NOT NULL
+    OR kind NOT IN ('session', 'dispatch_event')
+  )
 ORDER BY created_at DESC
-LIMIT  $7::int
-OFFSET $6::int
+LIMIT  $10::int
+OFFSET $9::int
 `
 
 type ListMemoryArtifactsParams struct {
 	WorkspaceID     pgtype.UUID `json:"workspace_id"`
 	Kind            pgtype.Text `json:"kind"`
 	ParentID        pgtype.UUID `json:"parent_id"`
+	AnchorType      pgtype.Text `json:"anchor_type"`
+	AnchorID        pgtype.UUID `json:"anchor_id"`
 	Tags            []string    `json:"tags"`
 	IncludeArchived bool        `json:"include_archived"`
+	IncludeSystem   bool        `json:"include_system"`
 	Offset          int32       `json:"offset"`
 	Limit           int32       `json:"limit"`
 }
@@ -361,13 +422,23 @@ type ListMemoryArtifactsParams struct {
 // by current callers; revisit if a "must have all these tags" surface
 // shows up. The `tags` column has a GIN index from migration 068 so
 // this stays cheap at scale.
+// Anchor filter (anchor_type + anchor_id) lets the UI pivot to "everything
+// about issue X" and compose that with kind/tags — without the separate
+// by-anchor endpoint. include_system hides the high-volume orchestrator log
+// kinds (session, dispatch_event) from the default human view: they're
+// excluded UNLESS the caller passes include_system=true OR explicitly filters
+// by a kind (asking for kind=session means you want sessions). Without this,
+// a workspace running squads buries its wikis/runbooks under dispatch logs.
 func (q *Queries) ListMemoryArtifacts(ctx context.Context, arg ListMemoryArtifactsParams) ([]MemoryArtifact, error) {
 	rows, err := q.db.Query(ctx, listMemoryArtifacts,
 		arg.WorkspaceID,
 		arg.Kind,
 		arg.ParentID,
+		arg.AnchorType,
+		arg.AnchorID,
 		arg.Tags,
 		arg.IncludeArchived,
+		arg.IncludeSystem,
 		arg.Offset,
 		arg.Limit,
 	)
@@ -476,6 +547,51 @@ func (q *Queries) ListMemoryArtifactsByAnchor(ctx context.Context, arg ListMemor
 	return items, nil
 }
 
+const listMemoryTags = `-- name: ListMemoryTags :many
+SELECT t.tag::text AS tag, count(*) AS count
+FROM memory_artifact m, unnest(m.tags) AS t(tag)
+WHERE m.workspace_id = $1
+  AND m.archived_at IS NULL
+GROUP BY t.tag
+ORDER BY count DESC, t.tag ASC
+LIMIT $2::int
+`
+
+type ListMemoryTagsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Limit       int32       `json:"limit"`
+}
+
+type ListMemoryTagsRow struct {
+	Tag   string `json:"tag"`
+	Count int64  `json:"count"`
+}
+
+// Top tags by frequency for the active workspace, powering the filter
+// bar's tag autocomplete. Non-archived only — archived rows shouldn't
+// suggest stale tags. The cross join with unnest(tags) expands each row's
+// tag array into rows before grouping; cheap thanks to the GIN index on
+// tags (migration 068) keeping the scan tight.
+func (q *Queries) ListMemoryTags(ctx context.Context, arg ListMemoryTagsParams) ([]ListMemoryTagsRow, error) {
+	rows, err := q.db.Query(ctx, listMemoryTags, arg.WorkspaceID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMemoryTagsRow{}
+	for rows.Next() {
+		var i ListMemoryTagsRow
+		if err := rows.Scan(&i.Tag, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const restoreMemoryArtifact = `-- name: RestoreMemoryArtifact :one
 UPDATE memory_artifact
 SET archived_at = NULL,
@@ -526,15 +642,23 @@ WHERE workspace_id = $1
   AND archived_at IS NULL
   AND content_tsv @@ websearch_to_tsquery('english', $2)
   AND ($3::text IS NULL OR kind = $3)
+  AND ($4::text[] IS NULL OR tags && $4::text[])
+  AND (
+    $5::bool
+    OR $3::text IS NOT NULL
+    OR kind NOT IN ('session', 'dispatch_event')
+  )
 ORDER BY rank DESC, created_at DESC
-LIMIT  $5::int
-OFFSET $4::int
+LIMIT  $7::int
+OFFSET $6::int
 `
 
 type SearchMemoryArtifactsParams struct {
 	WorkspaceID        pgtype.UUID `json:"workspace_id"`
 	WebsearchToTsquery string      `json:"websearch_to_tsquery"`
 	Kind               pgtype.Text `json:"kind"`
+	Tags               []string    `json:"tags"`
+	IncludeSystem      bool        `json:"include_system"`
 	Offset             int32       `json:"offset"`
 	Limit              int32       `json:"limit"`
 }
@@ -573,6 +697,8 @@ func (q *Queries) SearchMemoryArtifacts(ctx context.Context, arg SearchMemoryArt
 		arg.WorkspaceID,
 		arg.WebsearchToTsquery,
 		arg.Kind,
+		arg.Tags,
+		arg.IncludeSystem,
 		arg.Offset,
 		arg.Limit,
 	)

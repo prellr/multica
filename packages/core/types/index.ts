@@ -153,6 +153,8 @@ export type {
   ListMemoryArtifactsParams,
   ListMemoryArtifactsResponse,
   SearchMemoryArtifactsParams,
+  MemoryTag,
+  ListMemoryTagsResponse,
 } from "./memory";
 export type {
   PullRequest,

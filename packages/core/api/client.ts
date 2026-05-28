@@ -119,6 +119,7 @@ import type {
   ListMemoryArtifactsParams,
   ListMemoryArtifactsResponse,
   SearchMemoryArtifactsParams,
+  ListMemoryTagsResponse,
   MemoryArtifactAnchorType,
   Deploy,
   DeployEnvironment,
@@ -2178,6 +2179,13 @@ export class ApiClient {
     const search = new URLSearchParams();
     if (params?.kind) search.set("kind", params.kind);
     if (params?.parent_id) search.set("parent_id", params.parent_id);
+    if (params?.anchor_type) search.set("anchor_type", params.anchor_type);
+    if (params?.anchor_id) search.set("anchor_id", params.anchor_id);
+    // Tags travel as CSV; the server splits and applies OR-semantics.
+    if (params?.tags && params.tags.length > 0) {
+      search.set("tags", params.tags.join(","));
+    }
+    if (params?.include_system) search.set("include_system", "true");
     if (params?.include_archived) search.set("include_archived", "true");
     if (params?.limit !== undefined) search.set("limit", String(params.limit));
     if (params?.offset !== undefined) search.set("offset", String(params.offset));
@@ -2187,6 +2195,15 @@ export class ApiClient {
 
   async getMemoryArtifact(id: string): Promise<MemoryArtifact> {
     return this.fetch(`/api/memory/${id}`);
+  }
+
+  // Top tags by frequency for the active workspace — powers the memory
+  // filter bar's tag autocomplete.
+  async listMemoryTags(limit?: number): Promise<ListMemoryTagsResponse> {
+    const search = new URLSearchParams();
+    if (limit !== undefined) search.set("limit", String(limit));
+    const qs = search.toString();
+    return this.fetch(`/api/memory/tags${qs ? `?${qs}` : ""}`);
   }
 
   // "Show me everything anchored to issue X" — used by the daemon's
@@ -2210,6 +2227,10 @@ export class ApiClient {
     const search = new URLSearchParams();
     search.set("q", params.q);
     if (params.kind) search.set("kind", params.kind);
+    if (params.tags && params.tags.length > 0) {
+      search.set("tags", params.tags.join(","));
+    }
+    if (params.include_system) search.set("include_system", "true");
     if (params.limit !== undefined) search.set("limit", String(params.limit));
     if (params.offset !== undefined) search.set("offset", String(params.offset));
     return this.fetch(`/api/memory/search?${search.toString()}`);

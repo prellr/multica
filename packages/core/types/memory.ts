@@ -9,7 +9,12 @@ export type MemoryArtifactKind =
   | "wiki_page"
   | "agent_note"
   | "runbook"
-  | "decision";
+  | "decision"
+  // System / orchestrator-log kinds. Written by the squad runtime, not
+  // hand-created. Hidden from the default memory list (see include_system on
+  // ListMemoryArtifactsParams) so they don't bury curated knowledge.
+  | "session"
+  | "dispatch_event";
 
 // Polymorphic anchor — what is this artifact about? Mirrors the
 // allowedAnchorTypes set in the server handler. New anchor types must
@@ -74,6 +79,15 @@ export interface UpdateMemoryArtifactRequest {
 export interface ListMemoryArtifactsParams {
   kind?: MemoryArtifactKind;
   parent_id?: string;
+  // Anchor pivot — "everything about issue X". anchor_id accepts the issue
+  // identifier form (e.g. "ROA-427") in addition to a UUID.
+  anchor_type?: MemoryArtifactAnchorType;
+  anchor_id?: string;
+  // OR-semantics tag filter (a row matches if it has at least one tag).
+  tags?: string[];
+  // Surface system/log kinds (session, dispatch_event). Default false — they
+  // stay hidden unless explicitly requested or filtered by kind.
+  include_system?: boolean;
   include_archived?: boolean;
   limit?: number;
   offset?: number;
@@ -87,6 +101,18 @@ export interface ListMemoryArtifactsResponse {
 export interface SearchMemoryArtifactsParams {
   q: string;
   kind?: MemoryArtifactKind;
+  tags?: string[];
+  include_system?: boolean;
   limit?: number;
   offset?: number;
+}
+
+// Tag-frequency entry for the filter bar's autocomplete.
+export interface MemoryTag {
+  tag: string;
+  count: number;
+}
+
+export interface ListMemoryTagsResponse {
+  tags: MemoryTag[];
 }

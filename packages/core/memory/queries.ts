@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, infiniteQueryOptions } from "@tanstack/react-query";
 import { api } from "../api";
 import type {
   ListMemoryArtifactsParams,
@@ -6,6 +6,11 @@ import type {
   MemoryArtifactKind,
   SearchMemoryArtifactsParams,
 } from "../types";
+
+// How many artifacts each infinite-scroll page fetches. 50 keeps the first
+// paint fast while the IntersectionObserver sentinel pulls more as the user
+// scrolls. Matches the server's default/cap semantics (default 50, cap 200).
+export const MEMORY_PAGE_SIZE = 50;
 
 // Cache key factory. The wsId prefix makes workspace switching automatic
 // — the cache key changes when wsId changes, so the right page renders
@@ -15,12 +20,17 @@ export const memoryKeys = {
   all: (wsId: string) => ["memory", wsId] as const,
   list: (wsId: string, params?: ListMemoryArtifactsParams) =>
     [...memoryKeys.all(wsId), "list", params ?? {}] as const,
+  listInfinite: (wsId: string, params?: ListMemoryArtifactsParams) =>
+    [...memoryKeys.all(wsId), "list-infinite", params ?? {}] as const,
   detail: (wsId: string, id: string) =>
     [...memoryKeys.all(wsId), "detail", id] as const,
   byAnchor: (wsId: string, anchorType: MemoryArtifactAnchorType, anchorId: string) =>
     [...memoryKeys.all(wsId), "by-anchor", anchorType, anchorId] as const,
   search: (wsId: string, params: SearchMemoryArtifactsParams) =>
     [...memoryKeys.all(wsId), "search", params] as const,
+  searchInfinite: (wsId: string, params: SearchMemoryArtifactsParams) =>
+    [...memoryKeys.all(wsId), "search-infinite", params] as const,
+  tags: (wsId: string) => [...memoryKeys.all(wsId), "tags"] as const,
 };
 
 export function memoryListOptions(
@@ -69,9 +79,73 @@ export function memorySearchOptions(
   });
 }
 
-// Convenience export — UI sometimes wants the canonical kind ordering
-// for tabs/filters without re-deriving it. Keep stable; new kinds are
-// appended.
+// Infinite-scroll variant of the list. Each page fetches MEMORY_PAGE_SIZE
+// rows at an increasing offset; getNextPageParam stops once the rows loaded
+// so far reach the server's reported total. The page's `limit`/`offset` are
+// managed here, so callers pass only the filter params (kind/tags/anchor/...).
+export function memoryListInfiniteOptions(
+  wsId: string,
+  params?: ListMemoryArtifactsParams,
+) {
+  return infiniteQueryOptions({
+    queryKey: memoryKeys.listInfinite(wsId, params),
+    queryFn: ({ pageParam }) =>
+      api.listMemoryArtifacts({
+        ...params,
+        limit: MEMORY_PAGE_SIZE,
+        offset: pageParam,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce(
+        (n, p) => n + p.memory_artifacts.length,
+        0,
+      );
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+  });
+}
+
+// Infinite-scroll variant of search. Same pagination contract as the list;
+// gate enablement on a non-empty `q` (the server rejects empty queries).
+export function memorySearchInfiniteOptions(
+  wsId: string,
+  params: SearchMemoryArtifactsParams,
+) {
+  return infiniteQueryOptions({
+    queryKey: memoryKeys.searchInfinite(wsId, params),
+    queryFn: ({ pageParam }) =>
+      api.searchMemoryArtifacts({
+        ...params,
+        limit: MEMORY_PAGE_SIZE,
+        offset: pageParam,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce(
+        (n, p) => n + p.memory_artifacts.length,
+        0,
+      );
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+  });
+}
+
+// Top workspace tags for the filter bar's autocomplete. Cheap aggregate;
+// refetched lazily — a stale-by-a-few-minutes tag list is harmless.
+export function memoryTagsOptions(wsId: string, limit = 50) {
+  return queryOptions({
+    queryKey: memoryKeys.tags(wsId),
+    queryFn: () => api.listMemoryTags(limit),
+    select: (data) => data.tags,
+  });
+}
+
+// Canonical ordering of the human-creatable / human-filterable kinds. Used
+// by the create modal's kind picker and the list filter pills. System kinds
+// (session, dispatch_event) are intentionally NOT here — they're written by
+// the squad runtime, not hand-created, and surface only behind the memory
+// page's "show orchestrator logs" toggle. Keep stable; new kinds appended.
 export const MEMORY_KINDS: readonly MemoryArtifactKind[] = [
   "wiki_page",
   "agent_note",
@@ -79,11 +153,21 @@ export const MEMORY_KINDS: readonly MemoryArtifactKind[] = [
   "decision",
 ] as const;
 
+// System / orchestrator-log kinds — surfaced separately from MEMORY_KINDS so
+// the create picker never offers them and the default list hides them.
+export const MEMORY_SYSTEM_KINDS: readonly MemoryArtifactKind[] = [
+  "session",
+  "dispatch_event",
+] as const;
+
 // Display labels — short, human-friendly. Used by list filters and
-// detail-page headers. Keep in sync with MEMORY_KINDS.
+// detail-page headers. Must cover every MemoryArtifactKind (including system
+// kinds, which still render a label wherever they appear).
 export const MEMORY_KIND_LABELS: Record<MemoryArtifactKind, string> = {
   wiki_page: "Wiki",
   agent_note: "Agent note",
   runbook: "Runbook",
   decision: "Decision",
+  session: "Session",
+  dispatch_event: "Dispatch event",
 };

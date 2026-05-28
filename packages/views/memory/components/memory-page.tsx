@@ -42,6 +42,8 @@ const KIND_BADGE: Record<MemoryArtifactKind, string> = {
   agent_note: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
   runbook: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
   decision: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  session: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
+  dispatch_event: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
 };
 
 const STALE_THRESHOLD_DAYS = 30;

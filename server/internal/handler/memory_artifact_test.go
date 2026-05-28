@@ -668,6 +668,257 @@ func TestMemoryArtifactRevisionHistory(t *testing.T) {
 	}
 }
 
+// TestMemoryArtifactListAnchorFilter — the list endpoint accepts an
+// anchor_type/anchor_id filter (identifier form resolved for issues) so the
+// UI can pivot to "everything about issue X" and compose it with kind/tags,
+// without the separate by-anchor endpoint.
+func TestMemoryArtifactListAnchorFilter(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	// Create two issues so we can prove the filter discriminates.
+	mkIssue := func(title string) IssueResponse {
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{"title": title})
+		testHandler.CreateIssue(w, req)
+		var issue IssueResponse
+		json.NewDecoder(w.Body).Decode(&issue)
+		t.Cleanup(func() {
+			req := newRequest("DELETE", "/api/issues/"+issue.ID, nil)
+			req = withURLParam(req, "id", issue.ID)
+			testHandler.DeleteIssue(httptest.NewRecorder(), req)
+		})
+		return issue
+	}
+	target := mkIssue("Anchor filter target")
+	other := mkIssue("Anchor filter other")
+
+	mkAnchored := func(title, issueID string) MemoryArtifactResponse {
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/memory?workspace_id="+testWorkspaceID, map[string]any{
+			"kind": "agent_note", "title": title, "content": "x",
+			"anchor_type": "issue", "anchor_id": issueID,
+		})
+		testHandler.CreateMemoryArtifact(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create %q: %d %s", title, w.Code, w.Body.String())
+		}
+		var a MemoryArtifactResponse
+		json.NewDecoder(w.Body).Decode(&a)
+		t.Cleanup(func() {
+			req := newRequest("DELETE", "/api/memory/"+a.ID, nil)
+			req = withURLParam(req, "id", a.ID)
+			testHandler.DeleteMemoryArtifact(httptest.NewRecorder(), req)
+		})
+		return a
+	}
+	onTarget := mkAnchored("on-target", target.ID)
+	onOther := mkAnchored("on-other", other.ID)
+
+	listIDs := func(query string) map[string]bool {
+		w := httptest.NewRecorder()
+		req := newRequest("GET", "/api/memory?workspace_id="+testWorkspaceID+"&limit=200&"+query, nil)
+		testHandler.ListMemoryArtifacts(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("list %s: %d %s", query, w.Code, w.Body.String())
+		}
+		var resp struct {
+			Artifacts []MemoryArtifactResponse `json:"memory_artifacts"`
+		}
+		json.NewDecoder(w.Body).Decode(&resp)
+		got := map[string]bool{}
+		for _, a := range resp.Artifacts {
+			got[a.ID] = true
+		}
+		return got
+	}
+
+	// Filter by the target's UUID: only the on-target row.
+	got := listIDs("anchor_type=issue&anchor_id=" + target.ID)
+	if !got[onTarget.ID] || got[onOther.ID] {
+		t.Fatalf("anchor by UUID: expected only onTarget, got %v", got)
+	}
+	// Filter by the target's identifier (ROA-NNN): resolves to the same UUID.
+	if target.Identifier != "" {
+		got = listIDs("anchor_type=issue&anchor_id=" + target.Identifier)
+		if !got[onTarget.ID] || got[onOther.ID] {
+			t.Fatalf("anchor by identifier: expected only onTarget, got %v", got)
+		}
+	}
+}
+
+// TestMemoryArtifactSystemKindHiding — session/dispatch_event are hidden from
+// the default list to keep the human view readable once squads flood the
+// workspace with logs. They reappear with include_system=true OR when the
+// caller explicitly filters by that kind.
+func TestMemoryArtifactSystemKindHiding(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	mk := func(kind, title string) MemoryArtifactResponse {
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/memory?workspace_id="+testWorkspaceID, map[string]any{
+			"kind": kind, "title": title, "content": "x",
+		})
+		testHandler.CreateMemoryArtifact(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create %s: %d %s", kind, w.Code, w.Body.String())
+		}
+		var a MemoryArtifactResponse
+		json.NewDecoder(w.Body).Decode(&a)
+		t.Cleanup(func() {
+			req := newRequest("DELETE", "/api/memory/"+a.ID, nil)
+			req = withURLParam(req, "id", a.ID)
+			testHandler.DeleteMemoryArtifact(httptest.NewRecorder(), req)
+		})
+		return a
+	}
+	wiki := mk("wiki_page", "visible wiki")
+	sess := mk("session", "hidden session")
+
+	listIDs := func(query string) map[string]bool {
+		w := httptest.NewRecorder()
+		req := newRequest("GET", "/api/memory?workspace_id="+testWorkspaceID+"&limit=200&"+query, nil)
+		testHandler.ListMemoryArtifacts(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("list %s: %d %s", query, w.Code, w.Body.String())
+		}
+		var resp struct {
+			Artifacts []MemoryArtifactResponse `json:"memory_artifacts"`
+		}
+		json.NewDecoder(w.Body).Decode(&resp)
+		got := map[string]bool{}
+		for _, a := range resp.Artifacts {
+			got[a.ID] = true
+		}
+		return got
+	}
+
+	// Default: wiki visible, session hidden.
+	got := listIDs("")
+	if !got[wiki.ID] {
+		t.Fatalf("default list should include wiki_page; got %v", got)
+	}
+	if got[sess.ID] {
+		t.Fatalf("default list should hide session kind; got %v", got)
+	}
+	// include_system=true: both visible.
+	got = listIDs("include_system=true")
+	if !got[wiki.ID] || !got[sess.ID] {
+		t.Fatalf("include_system=true should show both; got %v", got)
+	}
+	// Explicit kind=session: session visible even without include_system.
+	got = listIDs("kind=session")
+	if !got[sess.ID] {
+		t.Fatalf("kind=session should surface the session row; got %v", got)
+	}
+}
+
+// TestMemoryArtifactSearchTagsFilter — search composes with the tags filter
+// and returns an accurate total.
+func TestMemoryArtifactSearchTagsFilter(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	mk := func(title, content string, tags []string) MemoryArtifactResponse {
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/memory?workspace_id="+testWorkspaceID, map[string]any{
+			"kind": "wiki_page", "title": title, "content": content, "tags": tags,
+		})
+		testHandler.CreateMemoryArtifact(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create %q: %d %s", title, w.Code, w.Body.String())
+		}
+		var a MemoryArtifactResponse
+		json.NewDecoder(w.Body).Decode(&a)
+		t.Cleanup(func() {
+			req := newRequest("DELETE", "/api/memory/"+a.ID, nil)
+			req = withURLParam(req, "id", a.ID)
+			testHandler.DeleteMemoryArtifact(httptest.NewRecorder(), req)
+		})
+		return a
+	}
+	// Both contain the search term; only one carries the tag.
+	tagged := mk("Kafka tagged", "We migrated to kafka streams.", []string{"infra"})
+	untagged := mk("Kafka untagged", "Another kafka note.", nil)
+
+	w := httptest.NewRecorder()
+	req := newRequest("GET", "/api/memory/search?workspace_id="+testWorkspaceID+"&q=kafka&tags=infra", nil)
+	testHandler.SearchMemoryArtifacts(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("search: %d %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Artifacts []MemoryArtifactResponse `json:"memory_artifacts"`
+		Total     int64                    `json:"total"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	got := map[string]bool{}
+	for _, a := range resp.Artifacts {
+		got[a.ID] = true
+	}
+	if !got[tagged.ID] || got[untagged.ID] {
+		t.Fatalf("search+tags=infra: expected only tagged kafka note, got %v", got)
+	}
+	if resp.Total != 1 {
+		t.Fatalf("search total: want 1, got %d", resp.Total)
+	}
+}
+
+// TestMemoryArtifactListTags — the tags endpoint returns workspace tags with
+// frequency counts, most-used first.
+func TestMemoryArtifactListTags(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	uniq := "zzfreq" // unlikely to collide with other workspace tags
+	mk := func(tags []string) {
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/memory?workspace_id="+testWorkspaceID, map[string]any{
+			"kind": "agent_note", "title": "tag-freq", "content": "x", "tags": tags,
+		})
+		testHandler.CreateMemoryArtifact(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create: %d %s", w.Code, w.Body.String())
+		}
+		var a MemoryArtifactResponse
+		json.NewDecoder(w.Body).Decode(&a)
+		t.Cleanup(func() {
+			req := newRequest("DELETE", "/api/memory/"+a.ID, nil)
+			req = withURLParam(req, "id", a.ID)
+			testHandler.DeleteMemoryArtifact(httptest.NewRecorder(), req)
+		})
+	}
+	// "common-<uniq>" appears 3×, "rare-<uniq>" once.
+	mk([]string{uniq + "-common", uniq + "-rare"})
+	mk([]string{uniq + "-common"})
+	mk([]string{uniq + "-common"})
+
+	w := httptest.NewRecorder()
+	req := newRequest("GET", "/api/memory/tags?workspace_id="+testWorkspaceID+"&limit=200", nil)
+	testHandler.ListMemoryTags(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListMemoryTags: %d %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Tags []struct {
+			Tag   string `json:"tag"`
+			Count int64  `json:"count"`
+		} `json:"tags"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	counts := map[string]int64{}
+	for _, tg := range resp.Tags {
+		counts[tg.Tag] = tg.Count
+	}
+	if counts[uniq+"-common"] != 3 {
+		t.Fatalf("expected common tag count 3, got %d (tags=%v)", counts[uniq+"-common"], counts)
+	}
+	if counts[uniq+"-rare"] != 1 {
+		t.Fatalf("expected rare tag count 1, got %d", counts[uniq+"-rare"])
+	}
+}
+
 // silence unused-import warnings if `chi` is otherwise unreferenced when
 // the new tests are skipped on a no-DB run. (`chi` is used for URL param
 // helpers in the existing tests; this is purely belt-and-suspenders.)

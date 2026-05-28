@@ -14,12 +14,26 @@
 -- by current callers; revisit if a "must have all these tags" surface
 -- shows up. The `tags` column has a GIN index from migration 068 so
 -- this stays cheap at scale.
+-- Anchor filter (anchor_type + anchor_id) lets the UI pivot to "everything
+-- about issue X" and compose that with kind/tags — without the separate
+-- by-anchor endpoint. include_system hides the high-volume orchestrator log
+-- kinds (session, dispatch_event) from the default human view: they're
+-- excluded UNLESS the caller passes include_system=true OR explicitly filters
+-- by a kind (asking for kind=session means you want sessions). Without this,
+-- a workspace running squads buries its wikis/runbooks under dispatch logs.
 SELECT * FROM memory_artifact
 WHERE workspace_id = $1
   AND (sqlc.narg('kind')::text IS NULL OR kind = sqlc.narg('kind'))
   AND (sqlc.narg('parent_id')::uuid IS NULL OR parent_id = sqlc.narg('parent_id'))
+  AND (sqlc.narg('anchor_type')::text IS NULL OR anchor_type = sqlc.narg('anchor_type'))
+  AND (sqlc.narg('anchor_id')::uuid IS NULL OR anchor_id = sqlc.narg('anchor_id'))
   AND (sqlc.narg('tags')::text[] IS NULL OR tags && sqlc.narg('tags')::text[])
   AND (sqlc.arg('include_archived')::bool OR archived_at IS NULL)
+  AND (
+    sqlc.arg('include_system')::bool
+    OR sqlc.narg('kind')::text IS NOT NULL
+    OR kind NOT IN ('session', 'dispatch_event')
+  )
 ORDER BY created_at DESC
 LIMIT  sqlc.arg('limit')::int
 OFFSET sqlc.arg('offset')::int;
@@ -32,8 +46,15 @@ SELECT count(*) FROM memory_artifact
 WHERE workspace_id = $1
   AND (sqlc.narg('kind')::text IS NULL OR kind = sqlc.narg('kind'))
   AND (sqlc.narg('parent_id')::uuid IS NULL OR parent_id = sqlc.narg('parent_id'))
+  AND (sqlc.narg('anchor_type')::text IS NULL OR anchor_type = sqlc.narg('anchor_type'))
+  AND (sqlc.narg('anchor_id')::uuid IS NULL OR anchor_id = sqlc.narg('anchor_id'))
   AND (sqlc.narg('tags')::text[] IS NULL OR tags && sqlc.narg('tags')::text[])
-  AND (sqlc.arg('include_archived')::bool OR archived_at IS NULL);
+  AND (sqlc.arg('include_archived')::bool OR archived_at IS NULL)
+  AND (
+    sqlc.arg('include_system')::bool
+    OR sqlc.narg('kind')::text IS NOT NULL
+    OR kind NOT IN ('session', 'dispatch_event')
+  );
 
 -- name: GetMemoryArtifact :one
 SELECT * FROM memory_artifact
@@ -70,9 +91,45 @@ WHERE workspace_id = $1
   AND archived_at IS NULL
   AND content_tsv @@ websearch_to_tsquery('english', $2)
   AND (sqlc.narg('kind')::text IS NULL OR kind = sqlc.narg('kind'))
+  AND (sqlc.narg('tags')::text[] IS NULL OR tags && sqlc.narg('tags')::text[])
+  AND (
+    sqlc.arg('include_system')::bool
+    OR sqlc.narg('kind')::text IS NOT NULL
+    OR kind NOT IN ('session', 'dispatch_event')
+  )
 ORDER BY rank DESC, created_at DESC
 LIMIT  sqlc.arg('limit')::int
 OFFSET sqlc.arg('offset')::int;
+
+-- name: CountSearchMemoryArtifacts :one
+-- Companion total for SearchMemoryArtifacts so the UI can show "N results"
+-- and paginate. Filter clauses must mirror the search query exactly (minus
+-- rank/order/limit) or the total desyncs from the page.
+SELECT count(*) FROM memory_artifact
+WHERE workspace_id = $1
+  AND archived_at IS NULL
+  AND content_tsv @@ websearch_to_tsquery('english', $2)
+  AND (sqlc.narg('kind')::text IS NULL OR kind = sqlc.narg('kind'))
+  AND (sqlc.narg('tags')::text[] IS NULL OR tags && sqlc.narg('tags')::text[])
+  AND (
+    sqlc.arg('include_system')::bool
+    OR sqlc.narg('kind')::text IS NOT NULL
+    OR kind NOT IN ('session', 'dispatch_event')
+  );
+
+-- name: ListMemoryTags :many
+-- Top tags by frequency for the active workspace, powering the filter
+-- bar's tag autocomplete. Non-archived only — archived rows shouldn't
+-- suggest stale tags. The cross join with unnest(tags) expands each row's
+-- tag array into rows before grouping; cheap thanks to the GIN index on
+-- tags (migration 068) keeping the scan tight.
+SELECT t.tag::text AS tag, count(*) AS count
+FROM memory_artifact m, unnest(m.tags) AS t(tag)
+WHERE m.workspace_id = $1
+  AND m.archived_at IS NULL
+GROUP BY t.tag
+ORDER BY count DESC, t.tag ASC
+LIMIT sqlc.arg('limit')::int;
 
 -- name: CreateMemoryArtifact :one
 -- Author validation (member vs agent existence) happens in the service

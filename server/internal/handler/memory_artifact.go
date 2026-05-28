@@ -420,6 +420,38 @@ func (h *Handler) ListMemoryArtifacts(w http.ResponseWriter, r *http.Request) {
 		}
 		parentFilter = id
 	}
+	// Anchor filter: lets the UI pivot to "everything about issue X" and
+	// compose it with kind/tags. anchor_id accepts identifier form (ROA-427)
+	// for issue anchors, mirroring validateAnchor / ListByAnchor. Both parts
+	// are optional, but anchor_id without anchor_type is meaningless (we
+	// can't resolve an identifier without knowing it's an issue), so we only
+	// resolve the id when the type is present.
+	var anchorTypeFilter pgtype.Text
+	var anchorIDFilter pgtype.UUID
+	if at := strings.TrimSpace(r.URL.Query().Get("anchor_type")); at != "" {
+		if !allowedAnchorTypes[at] {
+			writeError(w, http.StatusBadRequest, "anchor_type must be one of: issue, project, agent, channel")
+			return
+		}
+		anchorTypeFilter = pgtype.Text{String: at, Valid: true}
+		if rawID := strings.TrimSpace(r.URL.Query().Get("anchor_id")); rawID != "" {
+			resolved := false
+			if at == "issue" {
+				if issue, ok := h.resolveIssueByIdentifier(r.Context(), rawID, workspaceID); ok {
+					anchorIDFilter = issue.ID
+					resolved = true
+				}
+			}
+			if !resolved {
+				id, ok := parseUUIDOrBadRequest(w, rawID, "anchor_id")
+				if !ok {
+					return
+				}
+				anchorIDFilter = id
+			}
+		}
+	}
+	includeSystem := r.URL.Query().Get("include_system") == "true"
 	// Tags filter: CSV in the query string, OR-semantics in the SQL
 	// (`tags && $arg`). Pass a single tag to match rows that have it; pass
 	// multiple to match rows that have at least one. Empty entries from
@@ -441,8 +473,11 @@ func (h *Handler) ListMemoryArtifacts(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID:     wsUUID,
 		Kind:            kindFilter,
 		ParentID:        parentFilter,
+		AnchorType:      anchorTypeFilter,
+		AnchorID:        anchorIDFilter,
 		Tags:            tagsFilter,
 		IncludeArchived: includeArchived,
+		IncludeSystem:   includeSystem,
 		Limit:           limit,
 		Offset:          offset,
 	})
@@ -455,8 +490,11 @@ func (h *Handler) ListMemoryArtifacts(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID:     wsUUID,
 		Kind:            kindFilter,
 		ParentID:        parentFilter,
+		AnchorType:      anchorTypeFilter,
+		AnchorID:        anchorIDFilter,
 		Tags:            tagsFilter,
 		IncludeArchived: includeArchived,
+		IncludeSystem:   includeSystem,
 	})
 	if err != nil {
 		// Best-effort — still return the page even if the count query
@@ -577,11 +615,24 @@ func (h *Handler) SearchMemoryArtifacts(w http.ResponseWriter, r *http.Request) 
 	if k := r.URL.Query().Get("kind"); k != "" {
 		kindFilter = pgtype.Text{String: k, Valid: true}
 	}
+	// Tags + include_system compose with the full-text query, mirroring the
+	// list endpoint so a filtered list and a filtered search behave the same.
+	var tagsFilter []string
+	if t := r.URL.Query().Get("tags"); t != "" {
+		for _, raw := range strings.Split(t, ",") {
+			if s := strings.TrimSpace(raw); s != "" {
+				tagsFilter = append(tagsFilter, s)
+			}
+		}
+	}
+	includeSystem := r.URL.Query().Get("include_system") == "true"
 	limit, offset := parseListPagination(r)
 	rows, err := h.Queries.SearchMemoryArtifacts(r.Context(), db.SearchMemoryArtifactsParams{
 		WorkspaceID:        wsUUID,
 		WebsearchToTsquery: q,
 		Kind:               kindFilter,
+		Tags:               tagsFilter,
+		IncludeSystem:      includeSystem,
 		Limit:              limit,
 		Offset:             offset,
 	})
@@ -589,6 +640,17 @@ func (h *Handler) SearchMemoryArtifacts(w http.ResponseWriter, r *http.Request) 
 		slog.Warn("SearchMemoryArtifacts failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "search failed")
 		return
+	}
+	total, err := h.Queries.CountSearchMemoryArtifacts(r.Context(), db.CountSearchMemoryArtifactsParams{
+		WorkspaceID:        wsUUID,
+		WebsearchToTsquery: q,
+		Kind:               kindFilter,
+		Tags:               tagsFilter,
+		IncludeSystem:      includeSystem,
+	})
+	if err != nil {
+		// Best-effort — the page is the truth; total is convenience.
+		total = int64(len(rows))
 	}
 	// SearchMemoryArtifactsRow includes a `Rank` field; the API surface
 	// keeps the basic artifact response and tucks rank into a parallel
@@ -621,8 +683,41 @@ func (h *Handler) SearchMemoryArtifacts(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"memory_artifacts": out,
-		"total":            len(out),
+		"total":            total,
 	})
+}
+
+// ListMemoryTags returns the workspace's most-used tags with counts, for the
+// memory filter bar's tag autocomplete. Default 50, cap 200.
+func (h *Handler) ListMemoryTags(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	limit := int32(defaultMemoryLimit)
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			if n > maxMemoryListLimit {
+				n = maxMemoryListLimit
+			}
+			limit = int32(n)
+		}
+	}
+	rows, err := h.Queries.ListMemoryTags(r.Context(), db.ListMemoryTagsParams{
+		WorkspaceID: wsUUID,
+		Limit:       limit,
+	})
+	if err != nil {
+		slog.Warn("ListMemoryTags failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to list memory tags")
+		return
+	}
+	out := make([]map[string]any, len(rows))
+	for i, row := range rows {
+		out[i] = map[string]any{"tag": row.Tag, "count": row.Count}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tags": out})
 }
 
 func (h *Handler) CreateMemoryArtifact(w http.ResponseWriter, r *http.Request) {

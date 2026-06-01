@@ -89,6 +89,9 @@ export interface ListMemoryArtifactsParams {
   // stay hidden unless explicitly requested or filtered by kind.
   include_system?: boolean;
   include_archived?: boolean;
+  // Narrows to verified_at IS NULL — powers the "Needs review" filter
+  // for triage. Composes with every other filter.
+  unverified_only?: boolean;
   limit?: number;
   offset?: number;
 }

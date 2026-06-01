@@ -2187,6 +2187,7 @@ export class ApiClient {
     }
     if (params?.include_system) search.set("include_system", "true");
     if (params?.include_archived) search.set("include_archived", "true");
+    if (params?.unverified_only) search.set("unverified_only", "true");
     if (params?.limit !== undefined) search.set("limit", String(params.limit));
     if (params?.offset !== undefined) search.set("offset", String(params.offset));
     const qs = search.toString();

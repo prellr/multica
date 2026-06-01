@@ -8,13 +8,15 @@
     "filter_no_tags": "还没有标签",
     "show_archived": "已归档",
     "show_logs": "日志",
+    "needs_review": "待审核",
     "clear_filters": "清除筛选",
     "loading_more": "加载更多…",
     "empty_search": "没有匹配的条目",
     "empty_filtered": "没有符合筛选条件的条目",
     "empty_default": "还没有记忆条目",
     "create_first": "创建第一个条目",
-    "stale_badge": "已过期"
+    "stale_badge": "已过期",
+    "verified_badge": "已验证"
   },
   "detail": {
     "back": "记忆",

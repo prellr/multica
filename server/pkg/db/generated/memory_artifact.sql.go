@@ -70,6 +70,7 @@ WHERE workspace_id = $1
     OR $2::text IS NOT NULL
     OR kind NOT IN ('session', 'dispatch_event')
   )
+  AND (NOT $9::bool OR verified_at IS NULL)
 `
 
 type CountMemoryArtifactsParams struct {
@@ -81,6 +82,7 @@ type CountMemoryArtifactsParams struct {
 	Tags            []string    `json:"tags"`
 	IncludeArchived bool        `json:"include_archived"`
 	IncludeSystem   bool        `json:"include_system"`
+	UnverifiedOnly  bool        `json:"unverified_only"`
 }
 
 // Companion to ListMemoryArtifacts so the UI can paginate without an
@@ -96,6 +98,7 @@ func (q *Queries) CountMemoryArtifacts(ctx context.Context, arg CountMemoryArtif
 		arg.Tags,
 		arg.IncludeArchived,
 		arg.IncludeSystem,
+		arg.UnverifiedOnly,
 	)
 	var count int64
 	err := row.Scan(&count)
@@ -389,9 +392,10 @@ WHERE workspace_id = $1
     OR $2::text IS NOT NULL
     OR kind NOT IN ('session', 'dispatch_event')
   )
+  AND (NOT $9::bool OR verified_at IS NULL)
 ORDER BY created_at DESC
-LIMIT  $10::int
-OFFSET $9::int
+LIMIT  $11::int
+OFFSET $10::int
 `
 
 type ListMemoryArtifactsParams struct {
@@ -403,6 +407,7 @@ type ListMemoryArtifactsParams struct {
 	Tags            []string    `json:"tags"`
 	IncludeArchived bool        `json:"include_archived"`
 	IncludeSystem   bool        `json:"include_system"`
+	UnverifiedOnly  bool        `json:"unverified_only"`
 	Offset          int32       `json:"offset"`
 	Limit           int32       `json:"limit"`
 }
@@ -439,6 +444,7 @@ func (q *Queries) ListMemoryArtifacts(ctx context.Context, arg ListMemoryArtifac
 		arg.Tags,
 		arg.IncludeArchived,
 		arg.IncludeSystem,
+		arg.UnverifiedOnly,
 		arg.Offset,
 		arg.Limit,
 	)

@@ -12,6 +12,7 @@ import {
   Archive,
   Bot,
   CircleDashed,
+  Sparkles,
 } from "lucide-react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
@@ -43,6 +44,7 @@ import {
 } from "@multica/ui/components/ui/popover";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
+import { useMemoryFilters } from "./use-memory-filters";
 
 // Same relative-time helper as projects/issues — kept inline rather than
 // shared because the bar for promoting it to a util is "third caller."
@@ -155,12 +157,26 @@ function MemoryRow({ artifact }: { artifact: MemoryArtifact }) {
 export function MemoryPage() {
   const { t } = useT("memory");
   const wsId = useWorkspaceId();
-  const [kindFilter, setKindFilter] = useState<MemoryArtifactKind | "all">("all");
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [showArchived, setShowArchived] = useState(false);
-  const [showSystem, setShowSystem] = useState(false);
-  const [unverifiedOnly, setUnverifiedOnly] = useState(false);
+  // Filter state lives in a hook so it persists across navigation
+  // (open an artifact → back → triage filters still applied) and
+  // scopes per-workspace (switching wsId loads that workspace's
+  // saved state). See use-memory-filters.ts for the contract.
+  const {
+    state: filters,
+    setKindFilter,
+    toggleTag,
+    setShowArchived,
+    setShowSystem,
+    setUnverifiedOnly,
+    clearAll,
+    applyTriagePreset,
+    activeFilterCount,
+  } = useMemoryFilters(wsId);
+  const { kindFilter, selectedTags, showArchived, showSystem, unverifiedOnly } =
+    filters;
   const [searchInput, setSearchInput] = useState("");
+  // Local-only state for the tag-picker typeahead — not persisted.
+  const [tagQuery, setTagQuery] = useState("");
 
   // Debounce the search box so we don't fire a request per keystroke. 250ms
   // is the usual sweet spot between "feels live" and "not chatty".
@@ -238,26 +254,17 @@ export function MemoryPage() {
   const tagsQuery = useQuery(memoryTagsOptions(wsId));
   const availableTags = tagsQuery.data ?? [];
 
-  const hasActiveFilters =
-    kindFilter !== "all" ||
-    selectedTags.length > 0 ||
-    showArchived ||
-    unverifiedOnly;
+  const hasActiveFilters = activeFilterCount > 0;
 
   const openCreate = () =>
     useModalStore.getState().open("create-memory-artifact");
 
-  const toggleTag = (tag: string) =>
-    setSelectedTags((prev) =>
-      prev.includes(tag) ? prev.filter((x) => x !== tag) : [...prev, tag],
-    );
-
-  const clearFilters = () => {
-    setKindFilter("all");
-    setSelectedTags([]);
-    setShowArchived(false);
-    setUnverifiedOnly(false);
-  };
+  // Filter tags by the typeahead query (case-insensitive substring).
+  // Cheap — top-50 list at most until the tags endpoint grows.
+  const tagQueryLower = tagQuery.trim().toLowerCase();
+  const filteredAvailableTags = tagQueryLower
+    ? availableTags.filter((t) => t.tag.toLowerCase().includes(tagQueryLower))
+    : availableTags;
 
   // Kind pills: human kinds always; system kinds only when the logs toggle
   // is on (so they don't clutter the strip for non-debugging use).
@@ -277,6 +284,30 @@ export function MemoryPage() {
                 ? `${artifacts.length} / ${total}`
                 : total}
             </span>
+          )}
+          {/* Dual-purpose chip — when filters are active, it shows the
+              count and offers Clear; when nothing's active, it surfaces
+              the most common workflow (Triage queue: mined +
+              needs-review) as a one-click preset. Same slot, opposite
+              actions — keeps the header quiet but discoverable. */}
+          {hasActiveFilters ? (
+            <button
+              type="button"
+              onClick={clearAll}
+              className="inline-flex items-center gap-1 rounded-full border bg-accent/40 px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {t(($) => $.page.active_filters, { count: activeFilterCount })}
+              <X className="h-3 w-3" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={applyTriagePreset}
+              className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors"
+            >
+              <Sparkles className="h-3 w-3" />
+              {t(($) => $.page.triage_preset)}
+            </button>
           )}
         </div>
         <Button size="sm" variant="outline" onClick={openCreate}>
@@ -350,13 +381,43 @@ export function MemoryPage() {
               }
             />
             <PopoverContent align="start" className="w-56 p-0">
+              {/* Typeahead — substring-filter the list as the user
+                  types. Ages well as the tags endpoint grows past 50
+                  results; today it's a quick way to jump to a known
+                  tag without scrolling. */}
+              {availableTags.length > 0 && (
+                <div className="flex items-center gap-1.5 border-b px-2 py-1.5">
+                  <SearchIcon className="h-3 w-3 text-muted-foreground shrink-0" />
+                  <input
+                    type="text"
+                    autoFocus
+                    placeholder={t(($) => $.page.filter_tags_search)}
+                    value={tagQuery}
+                    onChange={(e) => setTagQuery(e.target.value)}
+                    className="flex-1 min-w-0 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+                  />
+                  {tagQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setTagQuery("")}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="max-h-64 overflow-y-auto py-1">
                 {availableTags.length === 0 ? (
                   <p className="px-3 py-2 text-xs text-muted-foreground">
                     {t(($) => $.page.filter_no_tags)}
                   </p>
+                ) : filteredAvailableTags.length === 0 ? (
+                  <p className="px-3 py-2 text-xs text-muted-foreground">
+                    {t(($) => $.page.filter_tags_no_match)}
+                  </p>
                 ) : (
-                  availableTags.map(({ tag, count }) => {
+                  filteredAvailableTags.map(({ tag, count }) => {
                     const checked = selectedTags.includes(tag);
                     return (
                       <button
@@ -384,19 +445,19 @@ export function MemoryPage() {
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <ToggleChip
             active={unverifiedOnly}
-            onClick={() => setUnverifiedOnly((v) => !v)}
+            onClick={() => setUnverifiedOnly(!unverifiedOnly)}
             icon={<CircleDashed className="h-3 w-3" />}
             label={t(($) => $.page.needs_review)}
           />
           <ToggleChip
             active={showArchived}
-            onClick={() => setShowArchived((v) => !v)}
+            onClick={() => setShowArchived(!showArchived)}
             icon={<Archive className="h-3 w-3" />}
             label={t(($) => $.page.show_archived)}
           />
           <ToggleChip
             active={showSystem}
-            onClick={() => setShowSystem((v) => !v)}
+            onClick={() => setShowSystem(!showSystem)}
             icon={<Bot className="h-3 w-3" />}
             label={t(($) => $.page.show_logs)}
           />
@@ -427,7 +488,7 @@ export function MemoryPage() {
                 className="mt-3"
                 onClick={() => {
                   setSearchInput("");
-                  clearFilters();
+                  clearAll();
                 }}
               >
                 {t(($) => $.page.clear_filters)}

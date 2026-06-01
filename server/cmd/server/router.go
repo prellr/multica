@@ -677,6 +677,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/", h.CreateMemoryArtifact)
 				r.Get("/search", h.SearchMemoryArtifacts)
 				r.Get("/tags", h.ListMemoryTags)
+				r.Post("/mine", h.MineMemoryDecisions)
 				r.Get("/by-anchor/{anchorType}/{anchorId}", h.ListMemoryArtifactsByAnchor)
 				r.Route("/{id}", func(r chi.Router) {
 					r.Get("/", h.GetMemoryArtifact)

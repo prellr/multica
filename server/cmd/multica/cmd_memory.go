@@ -118,6 +118,25 @@ var memoryRestoreRevisionCmd = &cobra.Command{
 	RunE:  runMemoryRestoreRevision,
 }
 
+// Decision miner — scans existing issues + comments in the workspace
+// (or a single project) and proposes kind=decision memory artifacts
+// for human verification. Default mode is dry-run; --apply writes.
+var memoryMineCmd = &cobra.Command{
+	Use:   "mine",
+	Short: "Mine decisions from existing issues + comments into proposed memory artifacts",
+	Long: `Scans issues (optionally scoped to a project) for comments that look
+like decisions ("Decision: …", "going with …", "decided to …", "ruled
+out …") and proposes them as kind=decision artifacts anchored to the
+source issue. Proposed artifacts are tagged 'mined' and 'decision-
+candidate' and start unverified (verified_at NULL) so a human can
+triage them in the memory page via the tag filter.
+
+Default mode is DRY-RUN. Pass --apply to actually write artifacts.
+Re-running the miner is idempotent — a comment already mined is
+skipped (dedup keys on metadata.source_comment_id).`,
+	RunE: runMemoryMine,
+}
+
 func init() {
 	memoryCmd.AddCommand(memoryListCmd)
 	memoryCmd.AddCommand(memoryGetCmd)
@@ -131,6 +150,14 @@ func init() {
 	memoryCmd.AddCommand(memoryHistoryCmd)
 	memoryCmd.AddCommand(memoryShowRevisionCmd)
 	memoryCmd.AddCommand(memoryRestoreRevisionCmd)
+	memoryCmd.AddCommand(memoryMineCmd)
+
+	// mine
+	memoryMineCmd.Flags().String("project", "", "Project ID (UUID) to scope the scan; omit for workspace-wide")
+	memoryMineCmd.Flags().String("since", "", "Only scan comments created at-or-after this RFC3339 timestamp")
+	memoryMineCmd.Flags().Bool("apply", false, "Write artifacts (default is dry-run — report only)")
+	memoryMineCmd.Flags().Int("limit", 500, "Max issues to scan in one pass")
+	memoryMineCmd.Flags().String("output", "table", "Output format: table or json")
 
 	// list
 	memoryListCmd.Flags().String("kind", "", "Filter by kind: wiki_page | agent_note | runbook | decision")
@@ -795,4 +822,96 @@ func runMemoryRestoreRevision(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	return cli.PrintJSON(os.Stdout, result)
+}
+
+func runMemoryMine(cmd *cobra.Command, _ []string) error {
+	project, _ := cmd.Flags().GetString("project")
+	since, _ := cmd.Flags().GetString("since")
+	apply, _ := cmd.Flags().GetBool("apply")
+	limit, _ := cmd.Flags().GetInt("limit")
+	output, _ := cmd.Flags().GetString("output")
+
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	body := map[string]any{
+		"apply": apply,
+		"limit": limit,
+	}
+	if project != "" {
+		body["project_id"] = project
+	}
+	if since != "" {
+		body["since"] = since
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// mineResponse mirrors the handler's JSON shape. Kept inline (not
+	// in api/types) because the miner is the only caller and the shape
+	// evolves freely with the heuristic.
+	var result struct {
+		DryRun          bool             `json:"dry_run"`
+		IssuesScanned   int              `json:"issues_scanned"`
+		CommentsScanned int              `json:"comments_scanned"`
+		MatchCount      int              `json:"match_count"`
+		CreatedCount    int              `json:"created_count"`
+		Created         []string         `json:"created"`
+		MatchesSample   []map[string]any `json:"matches_sample"`
+		Errors          []string         `json:"errors"`
+	}
+	if err := client.PostJSON(ctx, "/api/memory/mine", body, &result); err != nil {
+		return fmt.Errorf("mine: %w", err)
+	}
+
+	if output == "json" {
+		return cli.PrintJSON(os.Stdout, result)
+	}
+
+	// Table output — the operator-facing view. Counts up top, then a
+	// readable per-match list so a dry-run is a useful read on its own.
+	mode := "APPLIED"
+	if result.DryRun {
+		mode = "DRY-RUN"
+	}
+	fmt.Fprintf(os.Stdout, "Decision miner — %s\n", mode)
+	fmt.Fprintf(os.Stdout, "  Issues scanned:   %d\n", result.IssuesScanned)
+	fmt.Fprintf(os.Stdout, "  Comments scanned: %d\n", result.CommentsScanned)
+	fmt.Fprintf(os.Stdout, "  Candidates found: %d\n", result.MatchCount)
+	if !result.DryRun {
+		fmt.Fprintf(os.Stdout, "  Artifacts created: %d\n", result.CreatedCount)
+	}
+	if len(result.Errors) > 0 {
+		fmt.Fprintf(os.Stdout, "  Errors: %d\n", len(result.Errors))
+		for _, e := range result.Errors {
+			fmt.Fprintf(os.Stdout, "    - %s\n", e)
+		}
+	}
+	fmt.Fprintln(os.Stdout)
+	if len(result.MatchesSample) == 0 {
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "Sample (first %d):\n\n", len(result.MatchesSample))
+	for _, m := range result.MatchesSample {
+		issue, _ := m["issue_identifier"].(string)
+		title, _ := m["issue_title"].(string)
+		author, _ := m["comment_author"].(string)
+		reason, _ := m["reason"].(string)
+		snippet, _ := m["snippet"].(string)
+		fmt.Fprintf(os.Stdout, "  [%s] %s\n", issue, title)
+		fmt.Fprintf(os.Stdout, "    by %s · matched %s\n", author, reason)
+		// Indent snippet lines so they read as a block quote.
+		for _, line := range strings.Split(strings.TrimSpace(snippet), "\n") {
+			fmt.Fprintf(os.Stdout, "    > %s\n", strings.TrimSpace(line))
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+	if result.DryRun {
+		fmt.Fprintln(os.Stdout, "Dry-run only. Re-run with --apply to create the artifacts.")
+	} else {
+		fmt.Fprintln(os.Stdout, "Created artifacts are tagged 'mined'+'decision-candidate'. View them with the tag filter on the memory page.")
+	}
+	return nil
 }

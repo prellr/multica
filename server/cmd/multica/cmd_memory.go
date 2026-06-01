@@ -157,6 +157,7 @@ func init() {
 	memoryMineCmd.Flags().String("since", "", "Only scan comments created at-or-after this RFC3339 timestamp")
 	memoryMineCmd.Flags().Bool("apply", false, "Write artifacts (default is dry-run — report only)")
 	memoryMineCmd.Flags().Int("limit", 500, "Max issues to scan in one pass")
+	memoryMineCmd.Flags().String("agent", "", "Author created artifacts as this agent (UUID). Without it, artifacts are authored as you — fine for dry-runs, less correct for --apply.")
 	memoryMineCmd.Flags().String("output", "table", "Output format: table or json")
 
 	// list
@@ -829,7 +830,17 @@ func runMemoryMine(cmd *cobra.Command, _ []string) error {
 	since, _ := cmd.Flags().GetString("since")
 	apply, _ := cmd.Flags().GetBool("apply")
 	limit, _ := cmd.Flags().GetInt("limit")
+	agent, _ := cmd.Flags().GetString("agent")
 	output, _ := cmd.Flags().GetString("output")
+
+	// --apply without an agent works but is mis-attributed — the miner is
+	// an agent action, not a user action. Warn loudly so the operator can
+	// abort if that wasn't intentional, but don't block (ad-hoc backfills
+	// authored by a member are a valid use case).
+	if apply && agent == "" {
+		fmt.Fprintln(os.Stderr, "WARNING: --apply without --agent — artifacts will be authored as you, not as an agent.")
+		fmt.Fprintln(os.Stderr, "         Consider passing --agent <uuid> (e.g. the workspace's 'Hermes' or a dedicated 'memory-miner' agent).")
+	}
 
 	client, err := newAPIClient(cmd)
 	if err != nil {
@@ -844,6 +855,9 @@ func runMemoryMine(cmd *cobra.Command, _ []string) error {
 	}
 	if since != "" {
 		body["since"] = since
+	}
+	if agent != "" {
+		body["agent_id"] = agent
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

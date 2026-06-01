@@ -9,12 +9,14 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/service/memory/miner"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -718,6 +720,112 @@ func (h *Handler) ListMemoryTags(w http.ResponseWriter, r *http.Request) {
 		out[i] = map[string]any{"tag": row.Tag, "count": row.Count}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tags": out})
+}
+
+// mineMemoryRequest is the body for POST /api/memory/mine. Every field
+// is optional; the default behavior (workspace-wide, dry-run, no since,
+// default limit) is safe to run unattended. ProjectID accepts either
+// a UUID or — for the issue-anchor-by-identifier convention — empty
+// (workspace-wide).
+type mineMemoryRequest struct {
+	ProjectID string `json:"project_id"`
+	Since     string `json:"since"` // RFC3339
+	Apply     bool   `json:"apply"` // default false — caller must opt in to writes
+	Limit     int    `json:"limit"`
+}
+
+// MineMemoryDecisions triggers the decision-miner pass. POST so the
+// (potentially write-heavy) action is intentional; default is a
+// dry-run report so a misclick can't write artifacts to a workspace.
+// Author of any written artifact is the authenticated user — they
+// vouch for the run.
+func (h *Handler) MineMemoryDecisions(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	userIDStr, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	userUUID, ok := parseUUIDOrBadRequest(w, userIDStr, "user_id")
+	if !ok {
+		return
+	}
+
+	var req mineMemoryRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+			return
+		}
+	}
+
+	opts := miner.Options{
+		WorkspaceID: wsUUID,
+		AuthorType:  "member",
+		AuthorID:    userUUID,
+		DryRun:      !req.Apply,
+		Limit:       req.Limit,
+	}
+	if req.ProjectID != "" {
+		projUUID, ok := parseUUIDOrBadRequest(w, req.ProjectID, "project_id")
+		if !ok {
+			return
+		}
+		opts.ProjectID = projUUID
+	}
+	if req.Since != "" {
+		ts, err := time.Parse(time.RFC3339, req.Since)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "since must be RFC3339: "+err.Error())
+			return
+		}
+		opts.Since = ts
+	}
+
+	res, err := miner.MineDecisions(r.Context(), h.Queries, opts)
+	if err != nil {
+		slog.Warn("MineMemoryDecisions failed",
+			append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "miner failed: "+err.Error())
+		return
+	}
+
+	// Cap the matches surface in the response. A 156-issue project
+	// can produce dozens of matches; the full list lives in the DB
+	// once applied, so the response just needs a representative sample.
+	const sampleCap = 50
+	sample := res.Matches
+	if len(sample) > sampleCap {
+		sample = sample[:sampleCap]
+	}
+	matchOut := make([]map[string]any, len(sample))
+	for i, m := range sample {
+		matchOut[i] = map[string]any{
+			"issue_identifier": m.IssueIdentifier,
+			"issue_title":      m.IssueTitle,
+			"comment_author":   m.CommentAuthor,
+			"comment_date":     m.CommentDate.Format(time.RFC3339),
+			"snippet":          m.Snippet,
+			"reason":           m.Reason,
+		}
+	}
+	errOut := make([]string, len(res.Errors))
+	for i, e := range res.Errors {
+		errOut[i] = e.Error()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"dry_run":          opts.DryRun,
+		"issues_scanned":   res.IssuesScanned,
+		"comments_scanned": res.CommentsScanned,
+		"match_count":      len(res.Matches),
+		"created_count":    len(res.Created),
+		"created":          res.Created,
+		"matches_sample":   matchOut,
+		"errors":           errOut,
+	})
 }
 
 func (h *Handler) CreateMemoryArtifact(w http.ResponseWriter, r *http.Request) {

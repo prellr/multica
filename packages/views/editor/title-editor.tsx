@@ -132,6 +132,25 @@ const TitleEditor = forwardRef<TitleEditorRef, TitleEditorProps>(
       return undefined;
     }, [autoFocus, editor]);
 
+    // Hydrate a defaultValue that arrives AFTER mount. The editor is
+    // uncontrolled — `content` in `useEditor` is read once at init — so a
+    // parent that loads its data asynchronously (e.g. via React Query) and
+    // sets `defaultValue` in a useEffect will mount the editor with the
+    // initial empty string and never reflect the loaded value. Sync the
+    // arrived value into the editor exactly once: when the editor's
+    // current content is empty AND the new defaultValue is not. After
+    // that, the editor is the source of truth — we don't clobber user
+    // edits if a parent prop re-renders later.
+    useEffect(() => {
+      if (!editor || !defaultValue) return;
+      if (editor.getText().length === 0) {
+        editor.commands.setContent({
+          type: "doc",
+          content: [{ type: "paragraph", content: [{ type: "text", text: defaultValue }] }],
+        });
+      }
+    }, [editor, defaultValue]);
+
     useImperativeHandle(ref, () => ({
       getText: () => editor?.getText() ?? "",
       focus: () => {

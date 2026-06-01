@@ -853,14 +853,15 @@ func runMemoryMine(cmd *cobra.Command, _ []string) error {
 	// in api/types) because the miner is the only caller and the shape
 	// evolves freely with the heuristic.
 	var result struct {
-		DryRun          bool             `json:"dry_run"`
-		IssuesScanned   int              `json:"issues_scanned"`
-		CommentsScanned int              `json:"comments_scanned"`
-		MatchCount      int              `json:"match_count"`
-		CreatedCount    int              `json:"created_count"`
-		Created         []string         `json:"created"`
-		MatchesSample   []map[string]any `json:"matches_sample"`
-		Errors          []string         `json:"errors"`
+		DryRun              bool             `json:"dry_run"`
+		IssuesScanned       int              `json:"issues_scanned"`
+		DescriptionsScanned int              `json:"descriptions_scanned"`
+		CommentsScanned     int              `json:"comments_scanned"`
+		MatchCount          int              `json:"match_count"`
+		CreatedCount        int              `json:"created_count"`
+		Created             []string         `json:"created"`
+		MatchesSample       []map[string]any `json:"matches_sample"`
+		Errors              []string         `json:"errors"`
 	}
 	if err := client.PostJSON(ctx, "/api/memory/mine", body, &result); err != nil {
 		return fmt.Errorf("mine: %w", err)
@@ -877,9 +878,10 @@ func runMemoryMine(cmd *cobra.Command, _ []string) error {
 		mode = "DRY-RUN"
 	}
 	fmt.Fprintf(os.Stdout, "Decision miner — %s\n", mode)
-	fmt.Fprintf(os.Stdout, "  Issues scanned:   %d\n", result.IssuesScanned)
-	fmt.Fprintf(os.Stdout, "  Comments scanned: %d\n", result.CommentsScanned)
-	fmt.Fprintf(os.Stdout, "  Candidates found: %d\n", result.MatchCount)
+	fmt.Fprintf(os.Stdout, "  Issues scanned:        %d\n", result.IssuesScanned)
+	fmt.Fprintf(os.Stdout, "  Descriptions scanned:  %d\n", result.DescriptionsScanned)
+	fmt.Fprintf(os.Stdout, "  Comments scanned:      %d\n", result.CommentsScanned)
+	fmt.Fprintf(os.Stdout, "  Candidates found:      %d\n", result.MatchCount)
 	if !result.DryRun {
 		fmt.Fprintf(os.Stdout, "  Artifacts created: %d\n", result.CreatedCount)
 	}
@@ -897,11 +899,12 @@ func runMemoryMine(cmd *cobra.Command, _ []string) error {
 	for _, m := range result.MatchesSample {
 		issue, _ := m["issue_identifier"].(string)
 		title, _ := m["issue_title"].(string)
+		source, _ := m["source"].(string)
 		author, _ := m["comment_author"].(string)
 		reason, _ := m["reason"].(string)
 		snippet, _ := m["snippet"].(string)
 		fmt.Fprintf(os.Stdout, "  [%s] %s\n", issue, title)
-		fmt.Fprintf(os.Stdout, "    by %s · matched %s\n", author, reason)
+		fmt.Fprintf(os.Stdout, "    src=%s by %s · matched %s\n", source, author, reason)
 		// Indent snippet lines so they read as a block quote.
 		for _, line := range strings.Split(strings.TrimSpace(snippet), "\n") {
 			fmt.Fprintf(os.Stdout, "    > %s\n", strings.TrimSpace(line))

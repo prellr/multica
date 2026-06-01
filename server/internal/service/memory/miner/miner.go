@@ -66,8 +66,39 @@ func MineDecisions(ctx context.Context, q *db.Queries, opts Options) (*Result, e
 	}
 	res.IssuesScanned = len(issues)
 
-	// 3. For each issue, fetch comments and run the detector.
+	// 3. For each issue, scan the description (which often contains the
+	//    canonical "**Decision:** ..." section in design-doc-style
+	//    workspaces) AND the comments.
 	for _, iss := range issues {
+		// 3a. Description scan. We synthesize a deterministic
+		//     "comment-like" ID from the issue ID for dedup keying —
+		//     prefixed "issue-desc:" so it can never collide with a
+		//     real comment UUID.
+		if iss.Description.Valid && iss.Description.String != "" {
+			res.DescriptionsScanned++
+			descKey := "issue-desc:" + uuidToString(iss.ID)
+			if !seen[descKey] {
+				if det := detectDecision(iss.Description.String); det != nil {
+					res.Matches = append(res.Matches, Match{
+						Source:          SourceDescription,
+						IssueID:         iss.ID,
+						IssueTitle:      iss.Title,
+						IssueIdentifier: issueIdentifier(iss),
+						// CommentID stays zero — descriptions have no
+						// owning comment. Dedup uses descKey via the
+						// writer's metadata.source_comment_id field.
+						SourceKey:     descKey,
+						CommentAuthor: "issue:creator",
+						CommentDate:   iss.CreatedAt.Time,
+						Snippet:       det.Snippet,
+						Phrase:        det.Phrase,
+						Reason:        det.Reason,
+					})
+				}
+			}
+		}
+
+		// 3b. Comments scan.
 		comments, err := q.ListCommentsForIssue(ctx, db.ListCommentsForIssueParams{
 			IssueID:     iss.ID,
 			WorkspaceID: opts.WorkspaceID,
@@ -95,18 +126,19 @@ func MineDecisions(ctx context.Context, q *db.Queries, opts Options) (*Result, e
 			if det == nil {
 				continue
 			}
-			match := Match{
+			res.Matches = append(res.Matches, Match{
+				Source:          SourceComment,
 				IssueID:         iss.ID,
 				IssueTitle:      iss.Title,
 				IssueIdentifier: issueIdentifier(iss),
 				CommentID:       c.ID,
+				SourceKey:       commentIDStr,
 				CommentAuthor:   formatAuthor(c.AuthorType, c.AuthorID),
 				CommentDate:     c.CreatedAt.Time,
 				Snippet:         det.Snippet,
 				Phrase:          det.Phrase,
 				Reason:          det.Reason,
-			}
-			res.Matches = append(res.Matches, match)
+			})
 		}
 	}
 
@@ -132,10 +164,14 @@ func MineDecisions(ctx context.Context, q *db.Queries, opts Options) (*Result, e
 func writeArtifact(ctx context.Context, q *db.Queries, opts Options, m Match) (string, error) {
 	title := truncate("Decision (proposed): "+m.IssueTitle, 200)
 	content := buildContent(m)
+	// source_comment_id carries the dedup key — for descriptions it's
+	// the synthetic "issue-desc:<uuid>", for comments it's the comment
+	// UUID. loadSeenComments matches on this field for both.
 	metaJSON, err := json.Marshal(map[string]any{
 		"source_issue_id":   uuidToString(m.IssueID),
 		"source_issue":      m.IssueIdentifier,
-		"source_comment_id": uuidToString(m.CommentID),
+		"source":            string(m.Source),
+		"source_comment_id": m.SourceKey,
 		"source_author":     m.CommentAuthor,
 		"matched_phrase":    m.Phrase,
 		"reason":            m.Reason,

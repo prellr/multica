@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testLogger() *slog.Logger {
@@ -3004,6 +3005,13 @@ func TestInjectRuntimeConfigEmbedsMemoryArtifacts(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
+	// Fixture dates must stay fresh — the renderer appends a "⚠ Not
+	// verified in N days" stale warning once UpdatedAt is older than
+	// memoryStaleThresholdDays (30). Hardcoded dates rot as wall-clock
+	// time passes; -1 day keeps the fixture stable forever without
+	// pinning the renderer's clock.
+	recent := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+
 	ctx := TaskContextForEnv{
 		IssueID:      "11111111-2222-3333-4444-555555555555",
 		ProjectID:    "22222222-3333-4444-5555-666666666666",
@@ -3017,7 +3025,7 @@ func TestInjectRuntimeConfigEmbedsMemoryArtifacts(t *testing.T) {
 				Tags:       []string{"deploy", "auth"},
 				AnchorType: "issue",
 				AnchorID:   "11111111-2222-3333-4444-555555555555",
-				UpdatedAt:  "2026-05-01T12:00:00Z",
+				UpdatedAt:  recent,
 			},
 			{
 				ID:         "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
@@ -3026,7 +3034,7 @@ func TestInjectRuntimeConfigEmbedsMemoryArtifacts(t *testing.T) {
 				Content:    "We picked JWT because the mobile clients can't carry a session cookie cleanly.",
 				AnchorType: "project",
 				AnchorID:   "22222222-3333-4444-5555-666666666666",
-				UpdatedAt:  "2026-04-15T09:30:00Z",
+				UpdatedAt:  recent,
 			},
 			{
 				ID:         "cccccccc-cccc-cccc-cccc-cccccccccccc",
@@ -3034,7 +3042,7 @@ func TestInjectRuntimeConfigEmbedsMemoryArtifacts(t *testing.T) {
 				Title:      "Onboarding overview",
 				Content:    "General workspace orientation, no anchor.",
 				AnchorType: "", // free-floating — should land in the catch-all section
-				UpdatedAt:  "2026-03-20T14:00:00Z",
+				UpdatedAt:  recent,
 			},
 		},
 	}
@@ -3063,7 +3071,7 @@ func TestInjectRuntimeConfigEmbedsMemoryArtifacts(t *testing.T) {
 		"#### Runbook — Login deploy procedure",
 		"_Tags: deploy, auth_",
 		"1. Drain green pool",
-		"<sub>Memory artifact `aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa` · updated 2026-05-01T12:00:00Z</sub>",
+		"<sub>Memory artifact `aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa` · updated " + recent + "</sub>",
 		// Project-anchored artifact.
 		"#### Decision — Why JWT over sessions",
 		"We picked JWT because the mobile clients can't carry a session cookie cleanly.",

@@ -253,6 +253,64 @@ func TestMineDecisions_Idempotent(t *testing.T) {
 	}
 }
 
+// TestMineDecisions_DescriptionSource — the 2026-05-28 prod preview
+// against RoastConsole Cloud showed ~36% of high-quality candidates
+// live in issue descriptions (the canonical "**Decision:**" label in
+// design-doc-style issues), not comments. This pins that path.
+func TestMineDecisions_DescriptionSource(t *testing.T) {
+	t.Cleanup(func() { cleanupMinedArtifacts(t) })
+	ctx := context.Background()
+	// Issue with a decision in the DESCRIPTION and no comments at all
+	// — the case the comments-only v1 miner missed.
+	var issueID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, description, status, priority, creator_type, creator_id, kind)
+		VALUES ($1, $2, $3, 'todo', 'medium', 'member', $4, 'issue')
+		RETURNING id
+	`, testWorkspaceID,
+		"Auth migration architecture",
+		"## Architecture decision: rename internal identifiers too\n\nNormally don't recommend renaming, but in this case the rebrand is shallow enough that we should.",
+		testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+
+	res, err := MineDecisions(ctx, testQueries, Options{
+		WorkspaceID: testWorkspaceID,
+		AuthorType:  "member",
+		AuthorID:    testUserID,
+	})
+	if err != nil {
+		t.Fatalf("MineDecisions: %v", err)
+	}
+	if len(res.Created) != 1 {
+		t.Fatalf("created: want 1 (from description), got %d (matches=%d errors=%v)",
+			len(res.Created), len(res.Matches), res.Errors)
+	}
+	if res.DescriptionsScanned != 1 {
+		t.Errorf("descriptions_scanned: want 1, got %d", res.DescriptionsScanned)
+	}
+	if res.Matches[0].Source != SourceDescription {
+		t.Errorf("source: want description, got %q", res.Matches[0].Source)
+	}
+
+	// Idempotency: re-run, expect no new artifacts (description dedup
+	// uses the synthetic "issue-desc:<uuid>" key).
+	res2, err := MineDecisions(ctx, testQueries, Options{
+		WorkspaceID: testWorkspaceID,
+		AuthorType:  "member",
+		AuthorID:    testUserID,
+	})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(res2.Created) != 0 {
+		t.Fatalf("re-run created: want 0 (description dedup), got %d", len(res2.Created))
+	}
+}
+
 func TestMineDecisions_SkipsSystemComments(t *testing.T) {
 	t.Cleanup(func() { cleanupMinedArtifacts(t) })
 	// System-typed comments (auto-emitted state changes) should be

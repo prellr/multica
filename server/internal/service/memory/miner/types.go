@@ -72,29 +72,46 @@ func (o *Options) applyDefaults() {
 	}
 }
 
+// Source enumerates where a Match came from. The 2026-05-28 prod
+// preview against RoastConsole Cloud showed ~36% of high-quality
+// candidates live in descriptions (the canonical "**Decision:**"
+// label in design-doc-style issues), not comments — so the source
+// is part of the artifact's provenance.
+type Source string
+
+const (
+	SourceDescription Source = "description"
+	SourceComment     Source = "comment"
+)
+
 // Match is one detected decision-candidate, used both for dry-run
 // reports and as input to the artifact writer.
 type Match struct {
+	Source          Source
 	IssueID         pgtype.UUID
 	IssueTitle      string
-	IssueIdentifier string // e.g. "ROA-427" if we can derive it; empty otherwise
-	CommentID       pgtype.UUID
-	CommentAuthor   string // "member:<short>" / "agent:<short>"
-	CommentDate     time.Time
-	Snippet         string
-	Phrase          string
-	Reason          string
+	IssueIdentifier string      // e.g. "ROA-427" if we can derive it; empty otherwise
+	CommentID       pgtype.UUID // zero for description-source matches
+	// SourceKey is the dedup key: comment UUID for comment sources,
+	// "issue-desc:<uuid>" for description sources. Always populated.
+	SourceKey     string
+	CommentAuthor string // "member:<short>" / "agent:<short>" / "issue:creator"
+	CommentDate   time.Time
+	Snippet       string
+	Phrase        string
+	Reason        string
 }
 
 // Result is the return type for MineDecisions. The fields are shaped
 // for both the CLI output and the JSON HTTP response.
 type Result struct {
-	Project         string   `json:"project,omitempty"`
-	IssuesScanned   int      `json:"issues_scanned"`
-	CommentsScanned int      `json:"comments_scanned"`
-	Matches         []Match  `json:"matches"`
-	Created         []string `json:"created"` // memory artifact IDs
-	Errors          []error  `json:"-"`       // surfaced separately by caller
+	Project             string   `json:"project,omitempty"`
+	IssuesScanned       int      `json:"issues_scanned"`
+	DescriptionsScanned int      `json:"descriptions_scanned"`
+	CommentsScanned     int      `json:"comments_scanned"`
+	Matches             []Match  `json:"matches"`
+	Created             []string `json:"created"` // memory artifact IDs
+	Errors              []error  `json:"-"`       // surfaced separately by caller
 }
 
 // loadSeenComments pulls existing mined artifacts and returns a set

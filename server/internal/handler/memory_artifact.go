@@ -806,6 +806,7 @@ func (h *Handler) MineMemoryDecisions(w http.ResponseWriter, r *http.Request) {
 		matchOut[i] = map[string]any{
 			"issue_identifier": m.IssueIdentifier,
 			"issue_title":      m.IssueTitle,
+			"source":           string(m.Source),
 			"comment_author":   m.CommentAuthor,
 			"comment_date":     m.CommentDate.Format(time.RFC3339),
 			"snippet":          m.Snippet,
@@ -817,14 +818,15 @@ func (h *Handler) MineMemoryDecisions(w http.ResponseWriter, r *http.Request) {
 		errOut[i] = e.Error()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"dry_run":          opts.DryRun,
-		"issues_scanned":   res.IssuesScanned,
-		"comments_scanned": res.CommentsScanned,
-		"match_count":      len(res.Matches),
-		"created_count":    len(res.Created),
-		"created":          res.Created,
-		"matches_sample":   matchOut,
-		"errors":           errOut,
+		"dry_run":              opts.DryRun,
+		"issues_scanned":       res.IssuesScanned,
+		"descriptions_scanned": res.DescriptionsScanned,
+		"comments_scanned":     res.CommentsScanned,
+		"match_count":          len(res.Matches),
+		"created_count":        len(res.Created),
+		"created":              res.Created,
+		"matches_sample":       matchOut,
+		"errors":               errOut,
 	})
 }
 

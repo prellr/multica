@@ -668,6 +668,73 @@ func TestMemoryArtifactRevisionHistory(t *testing.T) {
 	}
 }
 
+// TestMemoryArtifactListUnverifiedOnly — the new ?unverified_only=true
+// filter narrows the list to verified_at IS NULL rows, powering the
+// memory page's "Needs review" toggle for triage.
+func TestMemoryArtifactListUnverifiedOnly(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	mk := func(title string) MemoryArtifactResponse {
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/memory?workspace_id="+testWorkspaceID, map[string]any{
+			"kind": "agent_note", "title": title, "content": "x",
+		})
+		testHandler.CreateMemoryArtifact(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create %q: %d %s", title, w.Code, w.Body.String())
+		}
+		var a MemoryArtifactResponse
+		json.NewDecoder(w.Body).Decode(&a)
+		t.Cleanup(func() {
+			req := newRequest("DELETE", "/api/memory/"+a.ID, nil)
+			req = withURLParam(req, "id", a.ID)
+			testHandler.DeleteMemoryArtifact(httptest.NewRecorder(), req)
+		})
+		return a
+	}
+	pending := mk("pending review")
+	verified := mk("already verified")
+
+	// Verify the second one — this is what the toggle should filter out.
+	vw := httptest.NewRecorder()
+	vreq := newRequest("POST", "/api/memory/"+verified.ID+"/verify?workspace_id="+testWorkspaceID, nil)
+	vreq = withURLParam(vreq, "id", verified.ID)
+	testHandler.VerifyMemoryArtifact(vw, vreq)
+	if vw.Code != http.StatusOK {
+		t.Fatalf("verify: %d %s", vw.Code, vw.Body.String())
+	}
+
+	listIDs := func(query string) map[string]bool {
+		w := httptest.NewRecorder()
+		req := newRequest("GET", "/api/memory?workspace_id="+testWorkspaceID+"&limit=200&"+query, nil)
+		testHandler.ListMemoryArtifacts(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("list %s: %d %s", query, w.Code, w.Body.String())
+		}
+		var resp struct {
+			Artifacts []MemoryArtifactResponse `json:"memory_artifacts"`
+		}
+		json.NewDecoder(w.Body).Decode(&resp)
+		got := map[string]bool{}
+		for _, a := range resp.Artifacts {
+			got[a.ID] = true
+		}
+		return got
+	}
+
+	// Default: both visible.
+	got := listIDs("")
+	if !got[pending.ID] || !got[verified.ID] {
+		t.Fatalf("default list: expected both, got %v", got)
+	}
+	// unverified_only=true: only the pending one.
+	got = listIDs("unverified_only=true")
+	if !got[pending.ID] || got[verified.ID] {
+		t.Fatalf("unverified_only: expected only pending, got %v", got)
+	}
+}
+
 // TestMemoryArtifactListAnchorFilter — the list endpoint accepts an
 // anchor_type/anchor_id filter (identifier form resolved for issues) so the
 // UI can pivot to "everything about issue X" and compose it with kind/tags,

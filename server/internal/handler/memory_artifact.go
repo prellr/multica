@@ -469,6 +469,10 @@ func (h *Handler) ListMemoryArtifacts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	includeArchived := r.URL.Query().Get("include_archived") == "true"
+	// unverified_only narrows to verified_at IS NULL — powers the
+	// "Needs review" toggle on the memory page. Composes with every
+	// other filter (kind/tag/anchor/etc.).
+	unverifiedOnly := r.URL.Query().Get("unverified_only") == "true"
 	limit, offset := parseListPagination(r)
 
 	rows, err := h.Queries.ListMemoryArtifacts(r.Context(), db.ListMemoryArtifactsParams{
@@ -480,6 +484,7 @@ func (h *Handler) ListMemoryArtifacts(w http.ResponseWriter, r *http.Request) {
 		Tags:            tagsFilter,
 		IncludeArchived: includeArchived,
 		IncludeSystem:   includeSystem,
+		UnverifiedOnly:  unverifiedOnly,
 		Limit:           limit,
 		Offset:          offset,
 	})
@@ -497,6 +502,7 @@ func (h *Handler) ListMemoryArtifacts(w http.ResponseWriter, r *http.Request) {
 		Tags:            tagsFilter,
 		IncludeArchived: includeArchived,
 		IncludeSystem:   includeSystem,
+		UnverifiedOnly:  unverifiedOnly,
 	})
 	if err != nil {
 		// Best-effort — still return the page even if the count query

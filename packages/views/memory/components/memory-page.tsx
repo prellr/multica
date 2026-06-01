@@ -7,9 +7,11 @@ import {
   Search as SearchIcon,
   X,
   Check,
+  CheckCircle2,
   Tag as TagIcon,
   Archive,
   Bot,
+  CircleDashed,
 } from "lucide-react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
@@ -121,6 +123,13 @@ function MemoryRow({ artifact }: { artifact: MemoryArtifact }) {
         </div>
       )}
 
+      {artifact.verified_at && (
+        <span className="hidden md:inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">
+          <CheckCircle2 className="h-3 w-3" />
+          {t(($) => $.page.verified_badge)}
+        </span>
+      )}
+
       {isStale(artifact) && (
         <span className="hidden md:inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
           {t(($) => $.page.stale_badge)}
@@ -150,6 +159,7 @@ export function MemoryPage() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [showArchived, setShowArchived] = useState(false);
   const [showSystem, setShowSystem] = useState(false);
+  const [unverifiedOnly, setUnverifiedOnly] = useState(false);
   const [searchInput, setSearchInput] = useState("");
 
   // Debounce the search box so we don't fire a request per keystroke. 250ms
@@ -171,8 +181,9 @@ export function MemoryPage() {
       tags: selectedTags.length > 0 ? selectedTags : undefined,
       include_archived: showArchived,
       include_system: showSystem,
+      unverified_only: unverifiedOnly,
     }),
-    [kindParam, selectedTags, showArchived, showSystem],
+    [kindParam, selectedTags, showArchived, showSystem, unverifiedOnly],
   );
   const searchParams = useMemo(
     () => ({
@@ -228,7 +239,10 @@ export function MemoryPage() {
   const availableTags = tagsQuery.data ?? [];
 
   const hasActiveFilters =
-    kindFilter !== "all" || selectedTags.length > 0 || showArchived;
+    kindFilter !== "all" ||
+    selectedTags.length > 0 ||
+    showArchived ||
+    unverifiedOnly;
 
   const openCreate = () =>
     useModalStore.getState().open("create-memory-artifact");
@@ -242,6 +256,7 @@ export function MemoryPage() {
     setKindFilter("all");
     setSelectedTags([]);
     setShowArchived(false);
+    setUnverifiedOnly(false);
   };
 
   // Kind pills: human kinds always; system kinds only when the logs toggle
@@ -367,6 +382,12 @@ export function MemoryPage() {
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <ToggleChip
+            active={unverifiedOnly}
+            onClick={() => setUnverifiedOnly((v) => !v)}
+            icon={<CircleDashed className="h-3 w-3" />}
+            label={t(($) => $.page.needs_review)}
+          />
           <ToggleChip
             active={showArchived}
             onClick={() => setShowArchived((v) => !v)}

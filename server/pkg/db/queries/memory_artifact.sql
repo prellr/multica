@@ -34,6 +34,7 @@ WHERE workspace_id = $1
     OR sqlc.narg('kind')::text IS NOT NULL
     OR kind NOT IN ('session', 'dispatch_event')
   )
+  AND (NOT sqlc.arg('unverified_only')::bool OR verified_at IS NULL)
 ORDER BY created_at DESC
 LIMIT  sqlc.arg('limit')::int
 OFFSET sqlc.arg('offset')::int;
@@ -54,7 +55,8 @@ WHERE workspace_id = $1
     sqlc.arg('include_system')::bool
     OR sqlc.narg('kind')::text IS NOT NULL
     OR kind NOT IN ('session', 'dispatch_event')
-  );
+  )
+  AND (NOT sqlc.arg('unverified_only')::bool OR verified_at IS NULL);
 
 -- name: GetMemoryArtifact :one
 SELECT * FROM memory_artifact

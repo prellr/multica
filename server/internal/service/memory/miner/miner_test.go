@@ -349,3 +349,71 @@ func TestMineDecisions_SkipsSystemComments(t *testing.T) {
 		t.Errorf("system comments must be skipped; got %d matches", len(res.Matches))
 	}
 }
+
+// TestMineDecisions_AuthorAsAgent — the production pattern is for the
+// miner to author proposed artifacts AS AN AGENT (e.g. workspace's
+// "Hermes" or a dedicated memory-miner agent), not as the member who
+// triggered the run. Verify the engine honors that author identity.
+func TestMineDecisions_AuthorAsAgent(t *testing.T) {
+	t.Cleanup(func() { cleanupMinedArtifacts(t) })
+	ctx := context.Background()
+
+	// Seed a runtime + agent in the test workspace. Mirrors the
+	// fixture pattern used by the channel-service tests.
+	var runtimeID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at)
+		VALUES ($1, 'Miner Test Runtime', 'cloud', 'miner_tests', 'online', $2, '{}'::jsonb, now())
+		RETURNING id
+	`, testWorkspaceID, "miner test runtime").Scan(&runtimeID); err != nil {
+		t.Fatalf("create runtime: %v", err)
+	}
+	var agentID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, runtime_id, name, description, runtime_mode, runtime_config)
+		VALUES ($1, $2, 'miner-test-agent', 'miner author identity', 'cloud', '{}'::jsonb)
+		RETURNING id
+	`, testWorkspaceID, runtimeID).Scan(&agentID); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+	})
+
+	issueID := createIssueWithComment(t, "Auth migration",
+		"Decision: we're going with Postgres for schema discipline.")
+
+	res, err := MineDecisions(ctx, testQueries, Options{
+		WorkspaceID: testWorkspaceID,
+		AuthorType:  "agent",
+		AuthorID:    agentID,
+	})
+	if err != nil {
+		t.Fatalf("MineDecisions: %v", err)
+	}
+	if len(res.Created) != 1 {
+		t.Fatalf("created: want 1, got %d", len(res.Created))
+	}
+
+	// Read it back, verify the author fields landed correctly.
+	rows, err := testQueries.ListMemoryArtifactsByAnchor(ctx, db.ListMemoryArtifactsByAnchorParams{
+		WorkspaceID: testWorkspaceID,
+		AnchorType:  pgtype.Text{String: "issue", Valid: true},
+		AnchorID:    issueID,
+		Limit:       5,
+	})
+	if err != nil {
+		t.Fatalf("list by anchor: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("anchored artifacts: want 1, got %d", len(rows))
+	}
+	if rows[0].AuthorType != "agent" {
+		t.Errorf("author_type: want agent, got %q", rows[0].AuthorType)
+	}
+	gotAuthor := rows[0].AuthorID
+	if !gotAuthor.Valid || gotAuthor != agentID {
+		t.Errorf("author_id: want %v, got %v", agentID, gotAuthor)
+	}
+}

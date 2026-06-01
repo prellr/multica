@@ -724,14 +724,22 @@ func (h *Handler) ListMemoryTags(w http.ResponseWriter, r *http.Request) {
 
 // mineMemoryRequest is the body for POST /api/memory/mine. Every field
 // is optional; the default behavior (workspace-wide, dry-run, no since,
-// default limit) is safe to run unattended. ProjectID accepts either
-// a UUID or — for the issue-anchor-by-identifier convention — empty
-// (workspace-wide).
+// default limit, member-authored) is safe to run unattended. ProjectID
+// accepts either a UUID or — for the issue-anchor-by-identifier
+// convention — empty (workspace-wide).
+//
+// AgentID flips the author of created artifacts from the calling member
+// to the named agent. This is the production pattern: a memory miner is
+// an agent action, not a user action, so artifacts ought to read
+// "Hermes proposed this" not "Ryan proposed this." Without an agent the
+// caller authors as themselves — useful for ad-hoc dry-runs, but the
+// CLI/handler warns on --apply without --agent so the operator notices.
 type mineMemoryRequest struct {
 	ProjectID string `json:"project_id"`
 	Since     string `json:"since"` // RFC3339
 	Apply     bool   `json:"apply"` // default false — caller must opt in to writes
 	Limit     int    `json:"limit"`
+	AgentID   string `json:"agent_id"` // optional agent UUID for artifact authorship
 }
 
 // MineMemoryDecisions triggers the decision-miner pass. POST so the
@@ -768,6 +776,24 @@ func (h *Handler) MineMemoryDecisions(w http.ResponseWriter, r *http.Request) {
 		AuthorID:    userUUID,
 		DryRun:      !req.Apply,
 		Limit:       req.Limit,
+	}
+	// Agent identity, if supplied: validate it lives in this workspace
+	// (security boundary — a member can't author artifacts as an agent
+	// from another workspace) and swap into opts as the author.
+	if req.AgentID != "" {
+		agentUUID, ok := parseUUIDOrBadRequest(w, req.AgentID, "agent_id")
+		if !ok {
+			return
+		}
+		if _, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
+			ID:          agentUUID,
+			WorkspaceID: wsUUID,
+		}); err != nil {
+			writeError(w, http.StatusBadRequest, "agent_id not found in workspace")
+			return
+		}
+		opts.AuthorType = "agent"
+		opts.AuthorID = agentUUID
 	}
 	if req.ProjectID != "" {
 		projUUID, ok := parseUUIDOrBadRequest(w, req.ProjectID, "project_id")

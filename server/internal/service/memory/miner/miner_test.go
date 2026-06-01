@@ -1,0 +1,293 @@
+package miner
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
+)
+
+// Integration tests for MineDecisions. Same TestMain shape as the
+// channel-service tests: skip cleanly when no DB is reachable,
+// otherwise spin up a workspace + member + issue, run the miner,
+// assert on the created artifacts. Detector-level coverage lives in
+// detect_test.go; this file is about the end-to-end wiring.
+
+var (
+	testPool        *pgxpool.Pool
+	testQueries     *db.Queries
+	testWorkspaceID pgtype.UUID
+	testUserID      pgtype.UUID
+)
+
+const testWorkspaceSlug = "miner-svc-tests"
+
+func TestMain(m *testing.M) {
+	ctx := context.Background()
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
+	}
+	pool, err := pgxpool.New(ctx, dbURL)
+	if err != nil {
+		fmt.Printf("Skipping miner tests: could not connect to database: %v\n", err)
+		os.Exit(0)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		fmt.Printf("Skipping miner tests: database not reachable: %v\n", err)
+		pool.Close()
+		os.Exit(0)
+	}
+	testPool = pool
+	testQueries = db.New(pool)
+
+	if err := setupFixture(ctx); err != nil {
+		fmt.Printf("miner fixture setup failed: %v\n", err)
+		pool.Close()
+		os.Exit(1)
+	}
+
+	code := m.Run()
+
+	_ = teardownFixture(context.Background())
+	pool.Close()
+	os.Exit(code)
+}
+
+func setupFixture(ctx context.Context) error {
+	_ = teardownFixture(ctx)
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id
+	`, "Miner Tests", "miner-tests@multica.local").Scan(&testUserID); err != nil {
+		return err
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO workspace (name, slug, description, issue_prefix)
+		VALUES ($1, $2, $3, $4) RETURNING id
+	`, "Miner Tests", testWorkspaceSlug, "miner fixture", "MIN").Scan(&testWorkspaceID); err != nil {
+		return err
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')
+	`, testWorkspaceID, testUserID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func teardownFixture(ctx context.Context) error {
+	_, _ = testPool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, testWorkspaceSlug)
+	_, _ = testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, "miner-tests@multica.local")
+	return nil
+}
+
+// createIssueWithComment seeds the fixture for one test case: one
+// issue with one comment containing the given text. Returns the
+// issue ID so the test can clean up. Uses raw SQL because the
+// service layer for issue/comment creation pulls in handlers we
+// don't need here; the data shape is what the miner sees.
+func createIssueWithComment(t *testing.T, title, commentText string) pgtype.UUID {
+	t.Helper()
+	ctx := context.Background()
+	var issueID pgtype.UUID
+	err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, kind)
+		VALUES ($1, $2, 'todo', 'medium', 'member', $3, 'issue')
+		RETURNING id
+	`, testWorkspaceID, title, testUserID).Scan(&issueID)
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO comment (workspace_id, issue_id, author_type, author_id, content, type)
+		VALUES ($1, $2, 'member', $3, $4, 'comment')
+	`, testWorkspaceID, issueID, testUserID, commentText); err != nil {
+		t.Fatalf("create comment: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+	return issueID
+}
+
+// cleanupMinedArtifacts removes anything the miner wrote in the
+// workspace, so tests don't bleed dedup state into each other.
+func cleanupMinedArtifacts(t *testing.T) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(),
+		`DELETE FROM memory_artifact WHERE workspace_id = $1 AND 'mined' = ANY(tags)`,
+		testWorkspaceID); err != nil {
+		t.Fatalf("cleanup mined: %v", err)
+	}
+}
+
+func TestMineDecisions_DryRunDoesNotWrite(t *testing.T) {
+	t.Cleanup(func() { cleanupMinedArtifacts(t) })
+	createIssueWithComment(t, "Auth migration",
+		"Talked through Postgres vs Mongo for this. Going with Postgres — schema discipline matters here.")
+
+	res, err := MineDecisions(context.Background(), testQueries, Options{
+		WorkspaceID: testWorkspaceID,
+		AuthorType:  "member",
+		AuthorID:    testUserID,
+		DryRun:      true,
+	})
+	if err != nil {
+		t.Fatalf("MineDecisions: %v", err)
+	}
+	if len(res.Matches) != 1 {
+		t.Fatalf("matches: want 1, got %d", len(res.Matches))
+	}
+	if res.Matches[0].Reason != "going-with" {
+		t.Fatalf("reason: want going-with, got %q", res.Matches[0].Reason)
+	}
+	if len(res.Created) != 0 {
+		t.Fatalf("dry-run wrote artifacts: %v", res.Created)
+	}
+}
+
+func TestMineDecisions_AppliedRunCreatesArtifact(t *testing.T) {
+	t.Cleanup(func() { cleanupMinedArtifacts(t) })
+	issueID := createIssueWithComment(t, "Caching layer",
+		"After scoping it out we decided against a full rebuild — too risky this cycle.")
+
+	res, err := MineDecisions(context.Background(), testQueries, Options{
+		WorkspaceID: testWorkspaceID,
+		AuthorType:  "member",
+		AuthorID:    testUserID,
+		DryRun:      false,
+	})
+	if err != nil {
+		t.Fatalf("MineDecisions: %v", err)
+	}
+	if len(res.Created) != 1 {
+		t.Fatalf("created: want 1, got %d (errors: %v)", len(res.Created), res.Errors)
+	}
+
+	// Validate the created artifact's shape: kind, tags, anchor, metadata.
+	rows, err := testQueries.ListMemoryArtifactsByAnchor(context.Background(),
+		db.ListMemoryArtifactsByAnchorParams{
+			WorkspaceID: testWorkspaceID,
+			AnchorType:  pgtype.Text{String: "issue", Valid: true},
+			AnchorID:    issueID,
+			Limit:       10,
+		})
+	if err != nil {
+		t.Fatalf("list by anchor: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("anchored artifacts: want 1, got %d", len(rows))
+	}
+	got := rows[0]
+	if got.Kind != "decision" {
+		t.Errorf("kind: want decision, got %q", got.Kind)
+	}
+	hasMined, hasCandidate := false, false
+	for _, tg := range got.Tags {
+		if tg == "mined" {
+			hasMined = true
+		}
+		if tg == "decision-candidate" {
+			hasCandidate = true
+		}
+	}
+	if !hasMined || !hasCandidate {
+		t.Errorf("tags: want both 'mined' and 'decision-candidate', got %v", got.Tags)
+	}
+	if !strings.Contains(got.Title, "Caching layer") {
+		t.Errorf("title should include source issue title; got %q", got.Title)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(got.Metadata, &meta); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if meta["reason"] != "decided-to" {
+		t.Errorf("metadata.reason: want decided-to, got %v", meta["reason"])
+	}
+	if meta["detector_version"] != detectorVersion {
+		t.Errorf("metadata.detector_version: want %q, got %v", detectorVersion, meta["detector_version"])
+	}
+	if got.VerifiedAt.Valid {
+		t.Errorf("verified_at should be NULL for a freshly-mined proposal")
+	}
+}
+
+func TestMineDecisions_Idempotent(t *testing.T) {
+	t.Cleanup(func() { cleanupMinedArtifacts(t) })
+	createIssueWithComment(t, "Deploy pipeline",
+		"Decision: bundle the release into 0.3 instead of cutting 0.2.x. Easier rollback story.")
+
+	ctx := context.Background()
+	opts := Options{
+		WorkspaceID: testWorkspaceID,
+		AuthorType:  "member",
+		AuthorID:    testUserID,
+	}
+	first, err := MineDecisions(ctx, testQueries, opts)
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if len(first.Created) != 1 {
+		t.Fatalf("first run created: want 1, got %d", len(first.Created))
+	}
+
+	// Second run — same workspace, same fixture. Dedup via the
+	// metadata.source_comment_id pre-load should produce ZERO new
+	// artifacts even though the detector still matches.
+	second, err := MineDecisions(ctx, testQueries, opts)
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if len(second.Created) != 0 {
+		t.Fatalf("second run created: want 0 (dedup), got %d (matches=%d)",
+			len(second.Created), len(second.Matches))
+	}
+	if len(second.Matches) != 0 {
+		t.Errorf("second run matches: want 0 after dedup, got %d", len(second.Matches))
+	}
+}
+
+func TestMineDecisions_SkipsSystemComments(t *testing.T) {
+	t.Cleanup(func() { cleanupMinedArtifacts(t) })
+	// System-typed comments (auto-emitted state changes) should be
+	// skipped regardless of content — they're not human decisions
+	// even when the templated text matches.
+	ctx := context.Background()
+	var issueID pgtype.UUID
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, kind)
+		VALUES ($1, $2, 'todo', 'medium', 'member', $3, 'issue')
+		RETURNING id
+	`, testWorkspaceID, "System comment test", testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO comment (workspace_id, issue_id, author_type, author_id, content, type)
+		VALUES ($1, $2, 'member', $3, $4, 'system')
+	`, testWorkspaceID, issueID, testUserID,
+		"Decision: bot-emitted text that should NOT be mined."); err != nil {
+		t.Fatalf("create system comment: %v", err)
+	}
+
+	res, err := MineDecisions(ctx, testQueries, Options{
+		WorkspaceID: testWorkspaceID,
+		AuthorType:  "member",
+		AuthorID:    testUserID,
+		DryRun:      true,
+	})
+	if err != nil {
+		t.Fatalf("MineDecisions: %v", err)
+	}
+	if len(res.Matches) != 0 {
+		t.Errorf("system comments must be skipped; got %d matches", len(res.Matches))
+	}
+}

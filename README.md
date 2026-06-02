@@ -26,6 +26,8 @@ Turn coding agents into real teammates — assign tasks, track progress, compoun
 
 </div>
 
+> **This is `prellr/multica`** — a fork of [`multica-ai/multica`](https://github.com/multica-ai/multica) running ahead with substantial additions. See [**What this fork adds**](#what-this-fork-adds) for the differences vs upstream.
+
 ## What is Multica?
 
 Multica turns coding agents into real teammates. Assign issues to an agent like you'd assign to a colleague — they'll pick up the work, write code, report blockers, and update statuses autonomously.
@@ -57,6 +59,49 @@ Multica manages the full agent lifecycle: from task assignment to execution moni
 - **Reusable Skills** — every solution becomes a reusable skill for the whole team. Deployments, migrations, code reviews — skills compound your team's capabilities over time.
 - **Unified Runtimes** — one dashboard for all your compute. Local daemons and cloud runtimes, auto-detection of available CLIs, real-time monitoring.
 - **Multi-Workspace** — organize work across teams with workspace-level isolation. Each workspace has its own agents, issues, and settings.
+
+---
+
+## What this fork adds
+
+`prellr/multica` is ~430 commits ahead of `multica-ai/multica:main` with five major feature areas plus a number of platform-level improvements. Each section below lists the relevant code paths for spelunking.
+
+### Ship Hub — release coordination
+End-to-end release lifecycle: PR tracking, merge trains with rate-limit-paced execution, deploy linking, an ancestry-aware fallback when commit metadata is missing, evidence-bound deploy events backed by a single-writer `env.current_sha`, and a Ship Concierge that surfaces "what to ship next" decisions.
+- Code: `apps/web/app/[workspaceSlug]/(dashboard)/ship/`, `packages/core/ship/`, `packages/views/ship/`, `server/internal/service/ship/`
+- Docs: [`docs/ship-hub-rebuild-audit.md`](docs/ship-hub-rebuild-audit.md)
+
+### Channels — workspace messaging
+Threaded channels with members, mentions (humans + agents), thread-to-issue conversion, channel composer, real-time WS updates. Mentions render as `[@Name](mention://agent/<uuid>)` link form so they trigger notifications instead of resolving as plain text.
+- Code: `packages/core/channels/`, `packages/views/channels/`, `apps/web/app/[workspaceSlug]/(dashboard)/channels/`
+- Docs: [`apps/docs/content/docs/channels.mdx`](apps/docs/content/docs/channels.mdx)
+
+### Tasks — lightweight human-centric work items
+A lighter `kind='task'` discriminator on the shared `issue` table. Quick-add input, status-toggle row, drag-to-reorder + drag-to-attach as child, master-detail sidebar with inline subtasks, "Mine / All" scope toggle, kind-aware inbox routing, promote-to-issue endpoint + atomic WS transition.
+- Code: `packages/views/tasks/`, `server/internal/handler/task.go`, `server/pkg/db/queries/task.sql`
+
+### Memory substrate — mining, polishing, verification
+A polymorphic `memory_artifact` system extended into a substrate that agents read from and write to:
+- **Schema:** anchor by issue-identifier (`ROA-427` not just UUID), system kinds (`session`, `dispatch_event`), free-form metadata, tags filter with `&&` overlap, top-tags-by-frequency endpoint
+- **UI:** infinite scroll, multi-tag picker with typeahead, Logs / Archived / Needs-review toggles, Verified badge on each row, filter persistence per workspace, one-click `✨ Triage queue` preset, dual-purpose summary chip
+- **Mining:** `multica memory mine` — heuristic decision-miner Go service that scans issue descriptions + comments for decision-flavored language and proposes them as `kind='decision'` artifacts authored by a dedicated **Memory Miner** agent
+- **Polishing:** local Node script (`/tmp/polish-mined.mjs`) that calls Claude via the OAuth-authenticated `claude` CLI to rewrite heuristic candidates as canonical decisions with rationale + alternatives
+- Code: `server/internal/service/memory/miner/`, `server/internal/handler/memory_artifact.go`, `packages/views/memory/`, `packages/core/memory/`
+- Migrations: `server/migrations/068_memory_artifact.up.sql`
+
+### MCP — agent-facing tool surface
+The Multica MCP server exposes both tasks and memory operations so agents can query and write substrate directly: `multica_memory_create` / `_update` / `_list` / `_by_anchor` / `_search` (with `metadata`, `tags` filter, and the extended kind enum), plus `multica_task_*` for the task surface.
+- Code: `server/cmd/multica/cmd_mcp_tools.go`
+
+### Platform improvements
+- **GitHub observability** — per-resource rate-limit budget logging in `Client.do()`, per-owner App-miss negative cache (cuts GitHub App lookups for orgs without an installed App)
+- **TitleEditor async-default fix** — uncontrolled TipTap editor now honors `defaultValue` arriving after mount (fixes the "Untitled" race on async-loaded detail pages)
+- **Squads coordination** enhancements (autopilot routing to squads, leader-as-coordinator improvements)
+- **Daemon / deploy / realtime** stability fixes across the merge-train + auto-promote pipeline
+
+### Fork distribution caveat
+The fork-specific CLI subcommands (`ship`, `channel`, `memory`, `mention`, `squad`) are **not** in upstream's released binaries — upstream's `release.yml` is gated to `multica-ai` ownership, and `multica update` polls upstream's releases. Install from source via `make build` in a local checkout until the fork ships its own distribution path.
+- Design: [`docs/fork-cli-distribution.md`](docs/fork-cli-distribution.md)
 
 ---
 

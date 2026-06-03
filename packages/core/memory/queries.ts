@@ -4,6 +4,8 @@ import type {
   ListMemoryArtifactsParams,
   MemoryArtifactAnchorType,
   MemoryArtifactKind,
+  MemoryArtifactLinkRelationType,
+  MemoryArtifactLinkTargetType,
   SearchMemoryArtifactsParams,
 } from "../types";
 
@@ -31,6 +33,12 @@ export const memoryKeys = {
   searchInfinite: (wsId: string, params: SearchMemoryArtifactsParams) =>
     [...memoryKeys.all(wsId), "search-infinite", params] as const,
   tags: (wsId: string) => [...memoryKeys.all(wsId), "tags"] as const,
+  // Relation graph — outgoing links from a specific artifact, and
+  // incoming backlinks to an arbitrary entity.
+  links: (wsId: string, artifactId: string) =>
+    [...memoryKeys.all(wsId), "links", artifactId] as const,
+  backlinks: (wsId: string, targetType: string, targetId: string) =>
+    [...memoryKeys.all(wsId), "backlinks", targetType, targetId] as const,
 };
 
 export function memoryListOptions(
@@ -170,4 +178,65 @@ export const MEMORY_KIND_LABELS: Record<MemoryArtifactKind, string> = {
   decision: "Decision",
   session: "Session",
   dispatch_event: "Dispatch event",
+};
+
+// ---------------------------------------------------------------------------
+// Relation graph — memory_artifact_link
+// ---------------------------------------------------------------------------
+
+// Outgoing links from a specific artifact. Powers the detail page's
+// "Links" section.
+export function memoryLinksOptions(wsId: string, artifactId: string) {
+  return queryOptions({
+    queryKey: memoryKeys.links(wsId, artifactId),
+    queryFn: () => api.listMemoryArtifactLinks(artifactId),
+    select: (data) => data.links,
+  });
+}
+
+// Display labels for the relation type dropdown + the link badge.
+// Keep stable; new relation types append. Must cover every
+// MemoryArtifactLinkRelationType.
+export const MEMORY_LINK_RELATION_LABELS: Record<
+  MemoryArtifactLinkRelationType,
+  string
+> = {
+  cites: "Cites",
+  supersedes: "Supersedes",
+  contradicts: "Contradicts",
+  implements: "Implements",
+  scope: "Scope",
+  "discussed-in": "Discussed in",
+  informs: "Informs",
+};
+
+// Canonical ordering for the create-link dropdown — most-useful first
+// (cites is the broadest; supersedes/contradicts/implements are the
+// architectural-decision relations).
+export const MEMORY_LINK_RELATIONS: readonly MemoryArtifactLinkRelationType[] =
+  [
+    "cites",
+    "supersedes",
+    "contradicts",
+    "implements",
+    "scope",
+    "discussed-in",
+    "informs",
+  ] as const;
+
+// Target types the create-link dialog offers. memory_artifact comes
+// first because the artifact-to-artifact case is the killer new use
+// case (supersedes / contradicts).
+export const MEMORY_LINK_TARGET_TYPES: readonly MemoryArtifactLinkTargetType[] =
+  ["memory_artifact", "issue", "project", "agent", "channel"] as const;
+
+export const MEMORY_LINK_TARGET_LABELS: Record<
+  MemoryArtifactLinkTargetType,
+  string
+> = {
+  memory_artifact: "Memory artifact",
+  issue: "Issue",
+  project: "Project",
+  agent: "Agent",
+  channel: "Channel",
 };

@@ -7,10 +7,15 @@ export {
   memorySearchOptions,
   memorySearchInfiniteOptions,
   memoryTagsOptions,
+  memoryLinksOptions,
   MEMORY_PAGE_SIZE,
   MEMORY_KINDS,
   MEMORY_SYSTEM_KINDS,
   MEMORY_KIND_LABELS,
+  MEMORY_LINK_RELATIONS,
+  MEMORY_LINK_RELATION_LABELS,
+  MEMORY_LINK_TARGET_TYPES,
+  MEMORY_LINK_TARGET_LABELS,
 } from "./queries";
 export {
   useCreateMemoryArtifact,
@@ -19,4 +24,6 @@ export {
   useRestoreMemoryArtifact,
   useVerifyMemoryArtifact,
   useDeleteMemoryArtifact,
+  useCreateMemoryArtifactLink,
+  useDeleteMemoryArtifactLink,
 } from "./mutations";

@@ -157,6 +157,13 @@ export type {
   ListMemoryTagsResponse,
 } from "./memory";
 export type {
+  MemoryArtifactLink,
+  MemoryArtifactLinkTargetType,
+  MemoryArtifactLinkRelationType,
+  CreateMemoryArtifactLinkRequest,
+  ListMemoryArtifactLinksResponse,
+} from "./memory-link";
+export type {
   PullRequest,
   PullRequestLabel,
   PullRequestState,

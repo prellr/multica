@@ -1021,6 +1021,18 @@ type MemoryArtifact struct {
 	VerifiedAt            pgtype.Timestamptz `json:"verified_at"`
 }
 
+type MemoryArtifactLink struct {
+	ID            pgtype.UUID        `json:"id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	ArtifactID    pgtype.UUID        `json:"artifact_id"`
+	TargetType    string             `json:"target_type"`
+	TargetID      pgtype.UUID        `json:"target_id"`
+	RelationType  string             `json:"relation_type"`
+	CreatedByType string             `json:"created_by_type"`
+	CreatedByID   pgtype.UUID        `json:"created_by_id"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type MemoryArtifactRevision struct {
 	ID                    pgtype.UUID        `json:"id"`
 	MemoryArtifactID      pgtype.UUID        `json:"memory_artifact_id"`

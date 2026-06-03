@@ -167,3 +167,37 @@ export function useDeleteMemoryArtifact() {
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Relation graph mutations
+// ---------------------------------------------------------------------------
+
+// Both mutations invalidate the per-artifact links query AND the
+// broad memory all-prefix — the latter so a delete/create that
+// affects an artifact's relations is reflected in any panel that
+// renders related context. Backlinks invalidate via the same prefix.
+
+export function useCreateMemoryArtifactLink(artifactId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (body: import("../types").CreateMemoryArtifactLinkRequest) =>
+      api.createMemoryArtifactLink(artifactId, body),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: memoryKeys.links(wsId, artifactId) });
+      qc.invalidateQueries({ queryKey: memoryKeys.all(wsId) });
+    },
+  });
+}
+
+export function useDeleteMemoryArtifactLink(artifactId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (linkId: string) => api.deleteMemoryArtifactLink(linkId),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: memoryKeys.links(wsId, artifactId) });
+      qc.invalidateQueries({ queryKey: memoryKeys.all(wsId) });
+    },
+  });
+}

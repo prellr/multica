@@ -23,8 +23,17 @@ sql:
             # override fails to parse the hyphen — the structured form
             # is required. The trailing sed in the Makefile drops the
             # spurious duplicate import sqlc emits as a side-effect.
+            #
+            # nullable=true at the override level makes sqlc emit
+            # *pgvector.Vector for the column. This matters: pgvector-go's
+            # binary codec panics with "slice bounds out of range" when
+            # the column value is NULL (it's a real upstream bug — it
+            # blindly slices buf[0:2] without nil-checking). pgx skips the
+            # codec entirely when scanning a NULL into a pointer field,
+            # so the pointer-typed column dodges the bug.
             go_type:
               import: "github.com/pgvector/pgvector-go"
               package: "pgvector"
               type: "Vector"
               pointer: true
+            nullable: true

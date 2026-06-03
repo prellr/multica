@@ -790,7 +790,7 @@ func (h *Handler) searchHybrid(
 		db.SearchMemoryArtifactsHybridParams{
 			WorkspaceID:        wsUUID,
 			WebsearchToTsquery: q,
-			Embedding:          queryVec,
+			Embedding:          &queryVec,
 			Kind:               kindFilter,
 			Tags:               tagsFilter,
 			IncludeSystem:      includeSystem,

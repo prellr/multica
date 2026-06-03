@@ -15,7 +15,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	pgxvec "github.com/pgvector/pgvector-go/pgx"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/realtime"
@@ -43,7 +45,22 @@ func TestMain(m *testing.M) {
 		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
 	}
 
-	pool, err := pgxpool.New(ctx, dbURL)
+	// Register pgvector types so SELECT * on memory_artifact (which
+	// now scans the embedding column) doesn't fail with "unsupported
+	// data type." Tolerant of the extension being absent — when
+	// vector isn't installed locally, RegisterTypes logs and we
+	// proceed; the column-touching tests skip themselves via
+	// hasPgvector().
+	poolCfg, err := pgxpool.ParseConfig(dbURL)
+	if err != nil {
+		fmt.Printf("Skipping tests: could not parse database url: %v\n", err)
+		os.Exit(0)
+	}
+	poolCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_ = pgxvec.RegisterTypes(ctx, conn)
+		return nil
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		fmt.Printf("Skipping tests: could not connect to database: %v\n", err)
 		os.Exit(0)

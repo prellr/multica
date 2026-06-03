@@ -679,6 +679,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/tags", h.ListMemoryTags)
 				r.Post("/mine", h.MineMemoryDecisions)
 				r.Get("/by-anchor/{anchorType}/{anchorId}", h.ListMemoryArtifactsByAnchor)
+				// Backlinks: incoming edges to an arbitrary entity —
+				// "who links to issue X?" Lives at a separate path
+				// because it's a target-keyed query, not artifact-keyed.
+				r.Get("/backlinks/{targetType}/{targetId}", h.ListMemoryArtifactBacklinks)
+				// Link delete is target-agnostic — keyed only on the
+				// link's own UUID — so it lives outside /{id}/links.
+				r.Delete("/links/{linkId}", h.DeleteMemoryArtifactLink)
 				r.Route("/{id}", func(r chi.Router) {
 					r.Get("/", h.GetMemoryArtifact)
 					r.Put("/", h.UpdateMemoryArtifact)
@@ -686,6 +693,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/archive", h.ArchiveMemoryArtifact)
 					r.Post("/restore", h.RestoreMemoryArtifact)
 					r.Post("/verify", h.VerifyMemoryArtifact)
+					// Relation graph — outgoing links from this artifact.
+					r.Get("/links", h.ListMemoryArtifactLinks)
+					r.Post("/links", h.CreateMemoryArtifactLink)
 					// History endpoints — list revisions, get a specific
 					// revision in full, restore (which is itself a new
 					// edit, snapshotting the current state first).

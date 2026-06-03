@@ -38,6 +38,7 @@ import {
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useT } from "../../i18n";
+import { MemoryLinksSection } from "./memory-links-section";
 
 const KIND_BADGE: Record<MemoryArtifactKind, string> = {
   wiki_page: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
@@ -309,6 +310,10 @@ export function MemoryDetailPage({ id }: MemoryDetailPageProps) {
               debounceMs={1000}
             />
           </div>
+
+          {/* Relation graph — see migrations/118 and
+              packages/views/memory/components/memory-links-section.tsx. */}
+          <MemoryLinksSection artifactId={artifact.id} />
         </div>
       </div>
     </div>

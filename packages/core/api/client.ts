@@ -121,6 +121,10 @@ import type {
   SearchMemoryArtifactsParams,
   ListMemoryTagsResponse,
   MemoryArtifactAnchorType,
+  MemoryArtifactLink,
+  MemoryArtifactLinkTargetType,
+  CreateMemoryArtifactLinkRequest,
+  ListMemoryArtifactLinksResponse,
   Deploy,
   DeployEnvironment,
   CreateDeployEnvironmentRequest,
@@ -2205,6 +2209,44 @@ export class ApiClient {
     if (limit !== undefined) search.set("limit", String(limit));
     const qs = search.toString();
     return this.fetch(`/api/memory/tags${qs ? `?${qs}` : ""}`);
+  }
+
+  // Relation graph — many-to-many links from an artifact to other
+  // entities (or other artifacts). See migrations/118 for schema and
+  // packages/core/types/memory-link.ts for the wire shape.
+  async listMemoryArtifactLinks(
+    artifactId: string,
+  ): Promise<ListMemoryArtifactLinksResponse> {
+    return this.fetch(`/api/memory/${artifactId}/links`);
+  }
+
+  async createMemoryArtifactLink(
+    artifactId: string,
+    body: CreateMemoryArtifactLinkRequest,
+  ): Promise<MemoryArtifactLink> {
+    return this.fetch(`/api/memory/${artifactId}/links`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async deleteMemoryArtifactLink(linkId: string): Promise<void> {
+    await this.fetch(`/api/memory/links/${linkId}`, { method: "DELETE" });
+  }
+
+  // Backlinks: "every memory artifact that references this target."
+  // For runtime injection and the future "Memory tab on issue X" UI.
+  async listMemoryArtifactBacklinks(
+    targetType: MemoryArtifactLinkTargetType,
+    targetId: string,
+    params?: { limit?: number },
+  ): Promise<ListMemoryArtifactLinksResponse> {
+    const search = new URLSearchParams();
+    if (params?.limit !== undefined) search.set("limit", String(params.limit));
+    const qs = search.toString();
+    return this.fetch(
+      `/api/memory/backlinks/${targetType}/${targetId}${qs ? `?${qs}` : ""}`,
+    );
   }
 
   // "Show me everything anchored to issue X" — used by the daemon's

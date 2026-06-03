@@ -907,8 +907,13 @@ vec AS (
     LIMIT 200
 )
 SELECT m.id, m.workspace_id, m.kind, m.parent_id, m.title, m.content, m.slug, m.anchor_type, m.anchor_id, m.author_type, m.author_id, m.tags, m.metadata, m.content_tsv, m.archived_at, m.archived_by, m.created_at, m.updated_at, m.always_inject_at_runtime, m.verified_at, m.embedding, m.embedded_at,
-       COALESCE(1.0 / (60 + fts.rrf_rank), 0.0) +
-       COALESCE(1.0 / (60 + vec.rrf_rank), 0.0) AS rank
+       -- Cast the RRF score to double precision so sqlc infers float64
+       -- for the Rank field instead of guessing integer (which would
+       -- then panic at Scan time when Postgres returns a NUMERIC).
+       (
+           COALESCE(1.0 / (60 + fts.rrf_rank), 0.0) +
+           COALESCE(1.0 / (60 + vec.rrf_rank), 0.0)
+       )::double precision AS rank
 FROM memory_artifact m
 LEFT JOIN fts ON fts.id = m.id
 LEFT JOIN vec ON vec.id = m.id
@@ -952,7 +957,7 @@ type SearchMemoryArtifactsHybridRow struct {
 	VerifiedAt            pgtype.Timestamptz `json:"verified_at"`
 	Embedding             *pgvector.Vector   `json:"embedding"`
 	EmbeddedAt            pgtype.Timestamptz `json:"embedded_at"`
-	Rank                  int32              `json:"rank"`
+	Rank                  float64            `json:"rank"`
 }
 
 // Hybrid retrieval: Reciprocal Rank Fusion of FTS rank and vector

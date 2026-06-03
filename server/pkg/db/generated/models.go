@@ -1020,7 +1020,7 @@ type MemoryArtifact struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	AlwaysInjectAtRuntime bool               `json:"always_inject_at_runtime"`
 	VerifiedAt            pgtype.Timestamptz `json:"verified_at"`
-	Embedding             pgvector.Vector    `json:"embedding"`
+	Embedding             *pgvector.Vector   `json:"embedding"`
 	EmbeddedAt            pgtype.Timestamptz `json:"embedded_at"`
 }
 

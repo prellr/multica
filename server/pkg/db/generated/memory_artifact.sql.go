@@ -805,7 +805,7 @@ type SearchMemoryArtifactsRow struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	AlwaysInjectAtRuntime bool               `json:"always_inject_at_runtime"`
 	VerifiedAt            pgtype.Timestamptz `json:"verified_at"`
-	Embedding             pgvector.Vector    `json:"embedding"`
+	Embedding             *pgvector.Vector   `json:"embedding"`
 	EmbeddedAt            pgtype.Timestamptz `json:"embedded_at"`
 	Rank                  float32            `json:"rank"`
 }
@@ -919,14 +919,14 @@ OFFSET $4::int
 `
 
 type SearchMemoryArtifactsHybridParams struct {
-	WorkspaceID        pgtype.UUID     `json:"workspace_id"`
-	WebsearchToTsquery string          `json:"websearch_to_tsquery"`
-	Embedding          pgvector.Vector `json:"embedding"`
-	Offset             int32           `json:"offset"`
-	Limit              int32           `json:"limit"`
-	Kind               pgtype.Text     `json:"kind"`
-	Tags               []string        `json:"tags"`
-	IncludeSystem      bool            `json:"include_system"`
+	WorkspaceID        pgtype.UUID      `json:"workspace_id"`
+	WebsearchToTsquery string           `json:"websearch_to_tsquery"`
+	Embedding          *pgvector.Vector `json:"embedding"`
+	Offset             int32            `json:"offset"`
+	Limit              int32            `json:"limit"`
+	Kind               pgtype.Text      `json:"kind"`
+	Tags               []string         `json:"tags"`
+	IncludeSystem      bool             `json:"include_system"`
 }
 
 type SearchMemoryArtifactsHybridRow struct {
@@ -950,7 +950,7 @@ type SearchMemoryArtifactsHybridRow struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	AlwaysInjectAtRuntime bool               `json:"always_inject_at_runtime"`
 	VerifiedAt            pgtype.Timestamptz `json:"verified_at"`
-	Embedding             pgvector.Vector    `json:"embedding"`
+	Embedding             *pgvector.Vector   `json:"embedding"`
 	EmbeddedAt            pgtype.Timestamptz `json:"embedded_at"`
 	Rank                  int32              `json:"rank"`
 }
@@ -1105,8 +1105,8 @@ WHERE id = $1
 `
 
 type UpdateMemoryArtifactEmbeddingParams struct {
-	ID        pgtype.UUID     `json:"id"`
-	Embedding pgvector.Vector `json:"embedding"`
+	ID        pgtype.UUID      `json:"id"`
+	Embedding *pgvector.Vector `json:"embedding"`
 }
 
 // Worker write — stamp the embedding + when we did it. Does NOT touch

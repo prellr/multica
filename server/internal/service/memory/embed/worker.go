@@ -120,10 +120,11 @@ func (w *Worker) tick(ctx context.Context) (int, error) {
 	// path is fine at our throughput and keeps the failure mode local
 	// (one bad row doesn't roll back the batch).
 	for i, r := range rows {
+		v := pgvector.NewVector(vecs[i])
 		if err := w.Queries.UpdateMemoryArtifactEmbedding(ctx,
 			db.UpdateMemoryArtifactEmbeddingParams{
 				ID:        r.ID,
-				Embedding: pgvector.NewVector(vecs[i]),
+				Embedding: &v,
 			}); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				// Row was deleted between SELECT and UPDATE — fine,

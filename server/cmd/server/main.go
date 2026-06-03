@@ -20,6 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/service/channel"
+	"github.com/multica-ai/multica/server/internal/service/memory/embed"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/redis/go-redis/v9"
 )
@@ -291,6 +292,16 @@ func main() {
 	// goroutine the moment the response writes.
 	sweepCtx, sweepCancel := context.WithCancel(context.Background())
 
+	// Construct the memory-embed client once and share it: the worker
+	// uses it to fill the embedding column for new/updated rows, and
+	// the search handler uses it to embed the query when ?mode=hybrid
+	// is requested. Nil when OPENAI_API_KEY is unset — both sites
+	// handle that as "feature disabled."
+	var memoryEmbedClient *embed.Client
+	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
+		memoryEmbedClient = embed.NewClient(key, os.Getenv("MEMORY_EMBED_MODEL"))
+	}
+
 	r := NewRouterWithOptions(pool, hub, bus, analyticsClient, storeRedis, RouterOptions{
 		HTTPMetrics:                httpMetrics,
 		DaemonHub:                  daemonHub,
@@ -298,6 +309,7 @@ func main() {
 		HeartbeatScheduler:         heartbeatScheduler,
 		ServiceCtx:                 sweepCtx,
 		StartMCPDirectoryRefresher: true,
+		MemoryEmbedClient:          memoryEmbedClient,
 	})
 
 	srv := &http.Server{
@@ -381,6 +393,24 @@ func main() {
 	// keeping it honest is what lets MarkReleaseDone / PromoteRelease /
 	// etc. work for releases whose PRs merged outside the merge train.
 	go runShipHubStageReconciler(sweepCtx, queries)
+
+	// Memory-embedding background worker — fills the
+	// memory_artifact.embedding column for rows the polisher / miner
+	// / human have just written. Idles cleanly if memoryEmbedClient
+	// is nil (OPENAI_API_KEY unset); that's the right default for
+	// self-hosted setups that don't want a third-party cost line item.
+	// The sweepCtx (shared with other periodic workers) carries the
+	// SIGTERM-driven cancellation so this stops at shutdown alongside
+	// its siblings.
+	if memoryEmbedClient != nil {
+		worker := &embed.Worker{
+			Queries: queries,
+			Client:  memoryEmbedClient,
+		}
+		go worker.Run(sweepCtx)
+	} else {
+		slog.Info("memory-embed worker: OPENAI_API_KEY not set, semantic search disabled")
+	}
 
 	if metricsServer != nil {
 		go func() {

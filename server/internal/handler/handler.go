@@ -21,6 +21,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/service/channel"
+	"github.com/multica-ai/multica/server/internal/service/memory/embed"
 	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -102,7 +103,14 @@ type Handler struct {
 	// flows). Nil = falls back to context.Background which is fine
 	// in tests but would never be cancelled in production.
 	ServiceCtx context.Context
-	cfg        Config
+	// MemoryEmbedClient — when non-nil, SearchMemoryArtifacts honors
+	// ?mode=hybrid by embedding the query and joining FTS rank with
+	// vector cosine distance via RRF. Nil = hybrid is unavailable and
+	// the endpoint falls back to FTS-only with a 400 if mode=hybrid
+	// was explicitly requested. Wired by the server startup when
+	// OPENAI_API_KEY is set.
+	MemoryEmbedClient *embed.Client
+	cfg               Config
 }
 
 func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, emailService *service.EmailService, store storage.Storage, cfSigner *auth.CloudFrontSigner, analyticsClient analytics.Client, cfg Config, daemonHubs ...*daemonws.Hub) *Handler {

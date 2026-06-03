@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	pgvector "github.com/pgvector/pgvector-go"
 )
 
 const archiveMemoryArtifact = `-- name: ArchiveMemoryArtifact :one
@@ -17,7 +18,7 @@ SET archived_at = now(),
     archived_by = $3,
     updated_at  = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at
+RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at
 `
 
 type ArchiveMemoryArtifactParams struct {
@@ -52,6 +53,8 @@ func (q *Queries) ArchiveMemoryArtifact(ctx context.Context, arg ArchiveMemoryAr
 		&i.UpdatedAt,
 		&i.AlwaysInjectAtRuntime,
 		&i.VerifiedAt,
+		&i.Embedding,
+		&i.EmbeddedAt,
 	)
 	return i, err
 }
@@ -143,6 +146,60 @@ func (q *Queries) CountSearchMemoryArtifacts(ctx context.Context, arg CountSearc
 	return count, err
 }
 
+const countSearchMemoryArtifactsHybrid = `-- name: CountSearchMemoryArtifactsHybrid :one
+SELECT count(*) FROM (
+    SELECT m.id AS id
+    FROM memory_artifact m
+    WHERE m.workspace_id = $1
+      AND m.archived_at IS NULL
+      AND m.content_tsv @@ websearch_to_tsquery('english', $2)
+      AND ($3::text IS NULL OR m.kind = $3)
+      AND ($4::text[] IS NULL OR m.tags && $4::text[])
+      AND (
+          $5::bool
+          OR $3::text IS NOT NULL
+          OR m.kind NOT IN ('session', 'dispatch_event', 'preference')
+      )
+    UNION
+    SELECT m.id AS id
+    FROM memory_artifact m
+    WHERE m.workspace_id = $1
+      AND m.archived_at IS NULL
+      AND m.embedding IS NOT NULL
+      AND ($3::text IS NULL OR m.kind = $3)
+      AND ($4::text[] IS NULL OR m.tags && $4::text[])
+      AND (
+          $5::bool
+          OR $3::text IS NOT NULL
+          OR m.kind NOT IN ('session', 'dispatch_event', 'preference')
+      )
+) AS candidates
+`
+
+type CountSearchMemoryArtifactsHybridParams struct {
+	WorkspaceID        pgtype.UUID `json:"workspace_id"`
+	WebsearchToTsquery string      `json:"websearch_to_tsquery"`
+	Kind               pgtype.Text `json:"kind"`
+	Tags               []string    `json:"tags"`
+	IncludeSystem      bool        `json:"include_system"`
+}
+
+// Total candidate count for hybrid search — union of FTS hits and
+// vector hits. Same WHERE shape as the search query (sans rank +
+// limit) so totals match the page.
+func (q *Queries) CountSearchMemoryArtifactsHybrid(ctx context.Context, arg CountSearchMemoryArtifactsHybridParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSearchMemoryArtifactsHybrid,
+		arg.WorkspaceID,
+		arg.WebsearchToTsquery,
+		arg.Kind,
+		arg.Tags,
+		arg.IncludeSystem,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createMemoryArtifact = `-- name: CreateMemoryArtifact :one
 INSERT INTO memory_artifact (
     workspace_id, kind, parent_id,
@@ -158,7 +215,7 @@ INSERT INTO memory_artifact (
     $5, $6,
     $7, $8,
     COALESCE($13::bool, false)
-) RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at
+) RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at
 `
 
 type CreateMemoryArtifactParams struct {
@@ -218,6 +275,8 @@ func (q *Queries) CreateMemoryArtifact(ctx context.Context, arg CreateMemoryArti
 		&i.UpdatedAt,
 		&i.AlwaysInjectAtRuntime,
 		&i.VerifiedAt,
+		&i.Embedding,
+		&i.EmbeddedAt,
 	)
 	return i, err
 }
@@ -240,7 +299,7 @@ func (q *Queries) DeleteMemoryArtifact(ctx context.Context, arg DeleteMemoryArti
 }
 
 const getMemoryArtifact = `-- name: GetMemoryArtifact :one
-SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at FROM memory_artifact
+SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at FROM memory_artifact
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -273,12 +332,14 @@ func (q *Queries) GetMemoryArtifact(ctx context.Context, arg GetMemoryArtifactPa
 		&i.UpdatedAt,
 		&i.AlwaysInjectAtRuntime,
 		&i.VerifiedAt,
+		&i.Embedding,
+		&i.EmbeddedAt,
 	)
 	return i, err
 }
 
 const getMemoryArtifactBySlug = `-- name: GetMemoryArtifactBySlug :one
-SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at FROM memory_artifact
+SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at FROM memory_artifact
 WHERE workspace_id = $1 AND kind = $2 AND slug = $3
 `
 
@@ -314,12 +375,14 @@ func (q *Queries) GetMemoryArtifactBySlug(ctx context.Context, arg GetMemoryArti
 		&i.UpdatedAt,
 		&i.AlwaysInjectAtRuntime,
 		&i.VerifiedAt,
+		&i.Embedding,
+		&i.EmbeddedAt,
 	)
 	return i, err
 }
 
 const listAlwaysInjectArtifacts = `-- name: ListAlwaysInjectArtifacts :many
-SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at FROM memory_artifact
+SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at FROM memory_artifact
 WHERE workspace_id              = $1
   AND always_inject_at_runtime  = true
   AND archived_at              IS NULL
@@ -367,6 +430,8 @@ func (q *Queries) ListAlwaysInjectArtifacts(ctx context.Context, arg ListAlwaysI
 			&i.UpdatedAt,
 			&i.AlwaysInjectAtRuntime,
 			&i.VerifiedAt,
+			&i.Embedding,
+			&i.EmbeddedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -379,7 +444,7 @@ func (q *Queries) ListAlwaysInjectArtifacts(ctx context.Context, arg ListAlwaysI
 }
 
 const listMemoryArtifacts = `-- name: ListMemoryArtifacts :many
-SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at FROM memory_artifact
+SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at FROM memory_artifact
 WHERE workspace_id = $1
   AND ($2::text IS NULL OR kind = $2)
   AND ($3::uuid IS NULL OR parent_id = $3)
@@ -476,6 +541,8 @@ func (q *Queries) ListMemoryArtifacts(ctx context.Context, arg ListMemoryArtifac
 			&i.UpdatedAt,
 			&i.AlwaysInjectAtRuntime,
 			&i.VerifiedAt,
+			&i.Embedding,
+			&i.EmbeddedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -488,7 +555,7 @@ func (q *Queries) ListMemoryArtifacts(ctx context.Context, arg ListMemoryArtifac
 }
 
 const listMemoryArtifactsByAnchor = `-- name: ListMemoryArtifactsByAnchor :many
-SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at FROM memory_artifact
+SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at FROM memory_artifact
 WHERE workspace_id  = $1
   AND anchor_type   = $2
   AND anchor_id     = $3
@@ -542,7 +609,53 @@ func (q *Queries) ListMemoryArtifactsByAnchor(ctx context.Context, arg ListMemor
 			&i.UpdatedAt,
 			&i.AlwaysInjectAtRuntime,
 			&i.VerifiedAt,
+			&i.Embedding,
+			&i.EmbeddedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMemoryArtifactsNeedingEmbedding = `-- name: ListMemoryArtifactsNeedingEmbedding :many
+SELECT id, content
+FROM memory_artifact
+WHERE archived_at IS NULL
+  AND content IS NOT NULL AND content <> ''
+  AND (embedding IS NULL OR embedded_at IS NULL OR embedded_at < updated_at)
+ORDER BY embedded_at ASC NULLS FIRST, updated_at ASC
+LIMIT $1
+`
+
+type ListMemoryArtifactsNeedingEmbeddingRow struct {
+	ID      pgtype.UUID `json:"id"`
+	Content string      `json:"content"`
+}
+
+// The background embedding worker's selector. A row needs embedding if
+// it has no embedding yet OR if the content has been edited since the
+// last embed (updated_at > embedded_at). We exclude archived rows —
+// they're not in active search results and re-embedding them is waste.
+//
+// Workspace-agnostic: the worker runs server-wide, not per-workspace,
+// and the embedding column doesn't care about scoping. The selector
+// sorts oldest-stale first so a steady stream of writes doesn't
+// starve the original NULLs.
+func (q *Queries) ListMemoryArtifactsNeedingEmbedding(ctx context.Context, limit int32) ([]ListMemoryArtifactsNeedingEmbeddingRow, error) {
+	rows, err := q.db.Query(ctx, listMemoryArtifactsNeedingEmbedding, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListMemoryArtifactsNeedingEmbeddingRow{}
+	for rows.Next() {
+		var i ListMemoryArtifactsNeedingEmbeddingRow
+		if err := rows.Scan(&i.ID, &i.Content); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -604,7 +717,7 @@ SET archived_at = NULL,
     archived_by = NULL,
     updated_at  = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at
+RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at
 `
 
 type RestoreMemoryArtifactParams struct {
@@ -636,12 +749,14 @@ func (q *Queries) RestoreMemoryArtifact(ctx context.Context, arg RestoreMemoryAr
 		&i.UpdatedAt,
 		&i.AlwaysInjectAtRuntime,
 		&i.VerifiedAt,
+		&i.Embedding,
+		&i.EmbeddedAt,
 	)
 	return i, err
 }
 
 const searchMemoryArtifacts = `-- name: SearchMemoryArtifacts :many
-SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at,
+SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at,
        ts_rank_cd(content_tsv, websearch_to_tsquery('english', $2)) AS rank
 FROM memory_artifact
 WHERE workspace_id = $1
@@ -690,6 +805,8 @@ type SearchMemoryArtifactsRow struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	AlwaysInjectAtRuntime bool               `json:"always_inject_at_runtime"`
 	VerifiedAt            pgtype.Timestamptz `json:"verified_at"`
+	Embedding             pgvector.Vector    `json:"embedding"`
+	EmbeddedAt            pgtype.Timestamptz `json:"embedded_at"`
 	Rank                  float32            `json:"rank"`
 }
 
@@ -736,6 +853,163 @@ func (q *Queries) SearchMemoryArtifacts(ctx context.Context, arg SearchMemoryArt
 			&i.UpdatedAt,
 			&i.AlwaysInjectAtRuntime,
 			&i.VerifiedAt,
+			&i.Embedding,
+			&i.EmbeddedAt,
+			&i.Rank,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchMemoryArtifactsHybrid = `-- name: SearchMemoryArtifactsHybrid :many
+WITH fts AS (
+    SELECT m.id AS id,
+           ts_rank_cd(m.content_tsv, websearch_to_tsquery('english', $2)) AS rank,
+           row_number() OVER (
+               ORDER BY ts_rank_cd(m.content_tsv, websearch_to_tsquery('english', $2)) DESC
+           ) AS rrf_rank
+    FROM memory_artifact m
+    WHERE m.workspace_id = $1
+      AND m.archived_at IS NULL
+      AND m.content_tsv @@ websearch_to_tsquery('english', $2)
+      AND ($6::text IS NULL OR m.kind = $6)
+      AND ($7::text[] IS NULL OR m.tags && $7::text[])
+      AND (
+          $8::bool
+          OR $6::text IS NOT NULL
+          OR m.kind NOT IN ('session', 'dispatch_event', 'preference')
+      )
+),
+vec AS (
+    SELECT m.id AS id,
+           1 - (m.embedding <=> $3) AS similarity,
+           row_number() OVER (
+               ORDER BY m.embedding <=> $3 ASC
+           ) AS rrf_rank
+    FROM memory_artifact m
+    WHERE m.workspace_id = $1
+      AND m.archived_at IS NULL
+      AND m.embedding IS NOT NULL
+      AND ($6::text IS NULL OR m.kind = $6)
+      AND ($7::text[] IS NULL OR m.tags && $7::text[])
+      AND (
+          $8::bool
+          OR $6::text IS NOT NULL
+          OR m.kind NOT IN ('session', 'dispatch_event', 'preference')
+      )
+    ORDER BY m.embedding <=> $3
+    LIMIT 200
+)
+SELECT m.id, m.workspace_id, m.kind, m.parent_id, m.title, m.content, m.slug, m.anchor_type, m.anchor_id, m.author_type, m.author_id, m.tags, m.metadata, m.content_tsv, m.archived_at, m.archived_by, m.created_at, m.updated_at, m.always_inject_at_runtime, m.verified_at, m.embedding, m.embedded_at,
+       COALESCE(1.0 / (60 + fts.rrf_rank), 0.0) +
+       COALESCE(1.0 / (60 + vec.rrf_rank), 0.0) AS rank
+FROM memory_artifact m
+LEFT JOIN fts ON fts.id = m.id
+LEFT JOIN vec ON vec.id = m.id
+WHERE fts.id IS NOT NULL OR vec.id IS NOT NULL
+ORDER BY rank DESC
+LIMIT  $5::int
+OFFSET $4::int
+`
+
+type SearchMemoryArtifactsHybridParams struct {
+	WorkspaceID        pgtype.UUID     `json:"workspace_id"`
+	WebsearchToTsquery string          `json:"websearch_to_tsquery"`
+	Embedding          pgvector.Vector `json:"embedding"`
+	Offset             int32           `json:"offset"`
+	Limit              int32           `json:"limit"`
+	Kind               pgtype.Text     `json:"kind"`
+	Tags               []string        `json:"tags"`
+	IncludeSystem      bool            `json:"include_system"`
+}
+
+type SearchMemoryArtifactsHybridRow struct {
+	ID                    pgtype.UUID        `json:"id"`
+	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
+	Kind                  string             `json:"kind"`
+	ParentID              pgtype.UUID        `json:"parent_id"`
+	Title                 string             `json:"title"`
+	Content               string             `json:"content"`
+	Slug                  pgtype.Text        `json:"slug"`
+	AnchorType            pgtype.Text        `json:"anchor_type"`
+	AnchorID              pgtype.UUID        `json:"anchor_id"`
+	AuthorType            string             `json:"author_type"`
+	AuthorID              pgtype.UUID        `json:"author_id"`
+	Tags                  []string           `json:"tags"`
+	Metadata              []byte             `json:"metadata"`
+	ContentTsv            interface{}        `json:"content_tsv"`
+	ArchivedAt            pgtype.Timestamptz `json:"archived_at"`
+	ArchivedBy            pgtype.UUID        `json:"archived_by"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	AlwaysInjectAtRuntime bool               `json:"always_inject_at_runtime"`
+	VerifiedAt            pgtype.Timestamptz `json:"verified_at"`
+	Embedding             pgvector.Vector    `json:"embedding"`
+	EmbeddedAt            pgtype.Timestamptz `json:"embedded_at"`
+	Rank                  int32              `json:"rank"`
+}
+
+// Hybrid retrieval: Reciprocal Rank Fusion of FTS rank and vector
+// cosine distance. RRF formula (k=60 is the literature standard):
+//
+//	score = 1/(60 + fts_rank) + 1/(60 + vec_rank)
+//
+// Each side independently ranks the candidate set; rows missing from
+// one side (no embedding yet → not in vec set; no FTS hit → not in
+// fts set) still contribute via whichever side they're in.
+//
+// The query text ($2) feeds FTS via websearch_to_tsquery; the query
+// embedding ($3) is supplied by the caller (handler embeds the query
+// once per request). The two CTEs deliberately use the SAME WHERE
+// shape as SearchMemoryArtifacts so the same scoping (workspace,
+// non-archived, kind narrowing, system-hide) applies on both legs.
+func (q *Queries) SearchMemoryArtifactsHybrid(ctx context.Context, arg SearchMemoryArtifactsHybridParams) ([]SearchMemoryArtifactsHybridRow, error) {
+	rows, err := q.db.Query(ctx, searchMemoryArtifactsHybrid,
+		arg.WorkspaceID,
+		arg.WebsearchToTsquery,
+		arg.Embedding,
+		arg.Offset,
+		arg.Limit,
+		arg.Kind,
+		arg.Tags,
+		arg.IncludeSystem,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchMemoryArtifactsHybridRow{}
+	for rows.Next() {
+		var i SearchMemoryArtifactsHybridRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Kind,
+			&i.ParentID,
+			&i.Title,
+			&i.Content,
+			&i.Slug,
+			&i.AnchorType,
+			&i.AnchorID,
+			&i.AuthorType,
+			&i.AuthorID,
+			&i.Tags,
+			&i.Metadata,
+			&i.ContentTsv,
+			&i.ArchivedAt,
+			&i.ArchivedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AlwaysInjectAtRuntime,
+			&i.VerifiedAt,
+			&i.Embedding,
+			&i.EmbeddedAt,
 			&i.Rank,
 		); err != nil {
 			return nil, err
@@ -761,7 +1035,7 @@ UPDATE memory_artifact SET
     always_inject_at_runtime = COALESCE($11::bool, always_inject_at_runtime),
     updated_at               = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at
+RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at
 `
 
 type UpdateMemoryArtifactParams struct {
@@ -817,15 +1091,36 @@ func (q *Queries) UpdateMemoryArtifact(ctx context.Context, arg UpdateMemoryArti
 		&i.UpdatedAt,
 		&i.AlwaysInjectAtRuntime,
 		&i.VerifiedAt,
+		&i.Embedding,
+		&i.EmbeddedAt,
 	)
 	return i, err
+}
+
+const updateMemoryArtifactEmbedding = `-- name: UpdateMemoryArtifactEmbedding :exec
+UPDATE memory_artifact
+SET embedding   = $2,
+    embedded_at = now()
+WHERE id = $1
+`
+
+type UpdateMemoryArtifactEmbeddingParams struct {
+	ID        pgtype.UUID     `json:"id"`
+	Embedding pgvector.Vector `json:"embedding"`
+}
+
+// Worker write — stamp the embedding + when we did it. Does NOT touch
+// updated_at; the content didn't change. Idempotent by row.
+func (q *Queries) UpdateMemoryArtifactEmbedding(ctx context.Context, arg UpdateMemoryArtifactEmbeddingParams) error {
+	_, err := q.db.Exec(ctx, updateMemoryArtifactEmbedding, arg.ID, arg.Embedding)
+	return err
 }
 
 const verifyMemoryArtifact = `-- name: VerifyMemoryArtifact :one
 UPDATE memory_artifact
 SET verified_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at
+RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at
 `
 
 type VerifyMemoryArtifactParams struct {
@@ -859,6 +1154,8 @@ func (q *Queries) VerifyMemoryArtifact(ctx context.Context, arg VerifyMemoryArti
 		&i.UpdatedAt,
 		&i.AlwaysInjectAtRuntime,
 		&i.VerifiedAt,
+		&i.Embedding,
+		&i.EmbeddedAt,
 	)
 	return i, err
 }

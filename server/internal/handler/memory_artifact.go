@@ -18,6 +18,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/service/memory/miner"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/pgvector/pgvector-go"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -666,6 +667,23 @@ func (h *Handler) SearchMemoryArtifacts(w http.ResponseWriter, r *http.Request) 
 	}
 	includeSystem := r.URL.Query().Get("include_system") == "true"
 	limit, offset := parseListPagination(r)
+
+	// Mode: "fts" (default) or "hybrid". Hybrid blends FTS rank with
+	// vector cosine similarity via RRF — see migration 119 + the
+	// SearchMemoryArtifactsHybrid query. Requires the embed client to
+	// be wired (OPENAI_API_KEY set); otherwise the caller gets a 400
+	// when they explicitly ask for hybrid, rather than silently
+	// degrading to FTS-only which would mask the misconfiguration.
+	if r.URL.Query().Get("mode") == "hybrid" {
+		if h.MemoryEmbedClient == nil {
+			writeError(w, http.StatusBadRequest,
+				"hybrid search unavailable: server has no embedding client configured")
+			return
+		}
+		h.searchHybrid(w, r, wsUUID, q, kindFilter, tagsFilter, includeSystem, limit, offset)
+		return
+	}
+
 	rows, err := h.Queries.SearchMemoryArtifacts(r.Context(), db.SearchMemoryArtifactsParams{
 		WorkspaceID:        wsUUID,
 		WebsearchToTsquery: q,
@@ -698,6 +716,151 @@ func (h *Handler) SearchMemoryArtifacts(w http.ResponseWriter, r *http.Request) 
 	for i, p := range rows {
 		// Convert SearchMemoryArtifactsRow → MemoryArtifact by copying
 		// the embedded fields. sqlc generates a row struct flattened.
+		out[i] = memoryArtifactToResponse(db.MemoryArtifact{
+			ID:          p.ID,
+			WorkspaceID: p.WorkspaceID,
+			Kind:        p.Kind,
+			ParentID:    p.ParentID,
+			Title:       p.Title,
+			Content:     p.Content,
+			Slug:        p.Slug,
+			AnchorType:  p.AnchorType,
+			AnchorID:    p.AnchorID,
+			AuthorType:  p.AuthorType,
+			AuthorID:    p.AuthorID,
+			Tags:        p.Tags,
+			Metadata:    p.Metadata,
+			ContentTsv:  p.ContentTsv,
+			ArchivedAt:  p.ArchivedAt,
+			ArchivedBy:  p.ArchivedBy,
+			CreatedAt:   p.CreatedAt,
+			UpdatedAt:   p.UpdatedAt,
+			VerifiedAt:  p.VerifiedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"memory_artifacts": out,
+		"total":            total,
+	})
+}
+
+// searchHybrid handles SearchMemoryArtifacts when ?mode=hybrid is set.
+// Embeds the query text once via the memory embed client, then runs
+// the RRF-blended SQL that fuses FTS rank with vector cosine
+// similarity. Falls back to plain FTS if the query embedding errors —
+// a transient OpenAI failure shouldn't sink a search that the FTS
+// half can still answer.
+func (h *Handler) searchHybrid(
+	w http.ResponseWriter,
+	r *http.Request,
+	wsUUID pgtype.UUID,
+	q string,
+	kindFilter pgtype.Text,
+	tagsFilter []string,
+	includeSystem bool,
+	limit, offset int32,
+) {
+	vecs, err := h.MemoryEmbedClient.Embed(r.Context(), []string{q})
+	if err != nil || len(vecs) == 0 {
+		// Soft fail — log + degrade to FTS-only with a header hint so
+		// the caller can tell. Don't 500: search-still-works is better
+		// than nothing for the user.
+		slog.Warn("hybrid embed failed, degrading to FTS",
+			append(logger.RequestAttrs(r), "error", err)...)
+		w.Header().Set("X-Memory-Search-Degraded", "fts-only")
+		rows, ferr := h.Queries.SearchMemoryArtifacts(r.Context(), db.SearchMemoryArtifactsParams{
+			WorkspaceID:        wsUUID,
+			WebsearchToTsquery: q,
+			Kind:               kindFilter,
+			Tags:               tagsFilter,
+			IncludeSystem:      includeSystem,
+			Limit:              limit,
+			Offset:             offset,
+		})
+		if ferr != nil {
+			writeError(w, http.StatusInternalServerError, "search failed")
+			return
+		}
+		writeFtsSearchResponse(w, rows, int64(len(rows)))
+		return
+	}
+
+	queryVec := pgvector.NewVector(vecs[0])
+	rows, err := h.Queries.SearchMemoryArtifactsHybrid(r.Context(),
+		db.SearchMemoryArtifactsHybridParams{
+			WorkspaceID:        wsUUID,
+			WebsearchToTsquery: q,
+			Embedding:          queryVec,
+			Kind:               kindFilter,
+			Tags:               tagsFilter,
+			IncludeSystem:      includeSystem,
+			Limit:              limit,
+			Offset:             offset,
+		})
+	if err != nil {
+		slog.Warn("SearchMemoryArtifactsHybrid failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "hybrid search failed")
+		return
+	}
+
+	// CountSearchMemoryArtifactsHybrid's UNION doesn't reference the
+	// query embedding — it counts the union of "FTS-matchable" and
+	// "has any embedding" rows. Good enough for "this is roughly the
+	// candidate set"; the page-level total comes from the same union.
+	total, err := h.Queries.CountSearchMemoryArtifactsHybrid(r.Context(),
+		db.CountSearchMemoryArtifactsHybridParams{
+			WorkspaceID:        wsUUID,
+			WebsearchToTsquery: q,
+			Kind:               kindFilter,
+			Tags:               tagsFilter,
+			IncludeSystem:      includeSystem,
+		})
+	if err != nil {
+		total = int64(len(rows))
+	}
+
+	out := make([]MemoryArtifactResponse, len(rows))
+	for i, p := range rows {
+		out[i] = memoryArtifactToResponse(db.MemoryArtifact{
+			ID:          p.ID,
+			WorkspaceID: p.WorkspaceID,
+			Kind:        p.Kind,
+			ParentID:    p.ParentID,
+			Title:       p.Title,
+			Content:     p.Content,
+			Slug:        p.Slug,
+			AnchorType:  p.AnchorType,
+			AnchorID:    p.AnchorID,
+			AuthorType:  p.AuthorType,
+			AuthorID:    p.AuthorID,
+			Tags:        p.Tags,
+			Metadata:    p.Metadata,
+			ContentTsv:  p.ContentTsv,
+			ArchivedAt:  p.ArchivedAt,
+			ArchivedBy:  p.ArchivedBy,
+			CreatedAt:   p.CreatedAt,
+			UpdatedAt:   p.UpdatedAt,
+			VerifiedAt:  p.VerifiedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"memory_artifacts": out,
+		"total":            total,
+		"mode":             "hybrid",
+	})
+}
+
+// writeFtsSearchResponse — shared shape for the degraded-to-FTS path
+// inside searchHybrid. Same JSON shape as the default search path; the
+// X-Memory-Search-Degraded header (set by the caller) is the signal
+// that the vector half was dropped.
+func writeFtsSearchResponse(
+	w http.ResponseWriter,
+	rows []db.SearchMemoryArtifactsRow,
+	total int64,
+) {
+	out := make([]MemoryArtifactResponse, len(rows))
+	for i, p := range rows {
 		out[i] = memoryArtifactToResponse(db.MemoryArtifact{
 			ID:          p.ID,
 			WorkspaceID: p.WorkspaceID,

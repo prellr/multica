@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	pgvector "github.com/pgvector/pgvector-go"
 )
 
 type DeployEnvironmentKind string
@@ -1019,6 +1020,8 @@ type MemoryArtifact struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	AlwaysInjectAtRuntime bool               `json:"always_inject_at_runtime"`
 	VerifiedAt            pgtype.Timestamptz `json:"verified_at"`
+	Embedding             pgvector.Vector    `json:"embedding"`
+	EmbeddedAt            pgtype.Timestamptz `json:"embedded_at"`
 }
 
 type MemoryArtifactLink struct {

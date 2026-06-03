@@ -294,8 +294,13 @@ vec AS (
     LIMIT 200
 )
 SELECT m.*,
-       COALESCE(1.0 / (60 + fts.rrf_rank), 0.0) +
-       COALESCE(1.0 / (60 + vec.rrf_rank), 0.0) AS rank
+       -- Cast the RRF score to double precision so sqlc infers float64
+       -- for the Rank field instead of guessing integer (which would
+       -- then panic at Scan time when Postgres returns a NUMERIC).
+       (
+           COALESCE(1.0 / (60 + fts.rrf_rank), 0.0) +
+           COALESCE(1.0 / (60 + vec.rrf_rank), 0.0)
+       )::double precision AS rank
 FROM memory_artifact m
 LEFT JOIN fts ON fts.id = m.id
 LEFT JOIN vec ON vec.id = m.id

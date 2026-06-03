@@ -13,6 +13,22 @@
       "sync_failed": "语言已在本设备保存，但同步到账号失败。其他设备可能仍显示旧语言。"
     }
   },
+  "agent_prefs": {
+    "heading": "Agent 偏好",
+    "description": "Agent 在与你协作时应该了解的事。这些以记忆条目的形式锚定到你的成员身份。后续运行时会将其自动注入你触发的派遣。",
+    "loading": "加载偏好…",
+    "no_membership": "加入工作区后即可设置 Agent 偏好。",
+    "field_title": "标题",
+    "field_content": "内容",
+    "placeholder_title": "语气：简洁，无破折号",
+    "placeholder_content": "回复要简短；优先使用项目符号而非段落；正文中不要使用破折号。",
+    "add_button": "添加偏好",
+    "delete_aria": "删除偏好",
+    "toast_created": "偏好已保存",
+    "toast_create_failed": "保存偏好失败",
+    "toast_deleted": "偏好已删除",
+    "toast_delete_failed": "删除偏好失败"
+  },
   "page": {
     "title": "设置",
     "my_account": "我的账号",

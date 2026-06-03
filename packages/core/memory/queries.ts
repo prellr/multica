@@ -168,6 +168,13 @@ export const MEMORY_SYSTEM_KINDS: readonly MemoryArtifactKind[] = [
   "dispatch_event",
 ] as const;
 
+// Personal kinds — anchored to a specific member, not the workspace as a
+// whole. Hidden from the default memory list (same policy as system kinds),
+// surfaced through the per-user Agent preferences settings panel instead.
+export const MEMORY_PERSONAL_KINDS: readonly MemoryArtifactKind[] = [
+  "preference",
+] as const;
+
 // Display labels — short, human-friendly. Used by list filters and
 // detail-page headers. Must cover every MemoryArtifactKind (including system
 // kinds, which still render a label wherever they appear).
@@ -178,6 +185,7 @@ export const MEMORY_KIND_LABELS: Record<MemoryArtifactKind, string> = {
   decision: "Decision",
   session: "Session",
   dispatch_event: "Dispatch event",
+  preference: "Preference",
 };
 
 // ---------------------------------------------------------------------------

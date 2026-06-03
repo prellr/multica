@@ -68,7 +68,7 @@ WHERE workspace_id = $1
   AND (
     $8::bool
     OR $2::text IS NOT NULL
-    OR kind NOT IN ('session', 'dispatch_event')
+    OR kind NOT IN ('session', 'dispatch_event', 'preference')
   )
   AND (NOT $9::bool OR verified_at IS NULL)
 `
@@ -115,7 +115,7 @@ WHERE workspace_id = $1
   AND (
     $5::bool
     OR $3::text IS NOT NULL
-    OR kind NOT IN ('session', 'dispatch_event')
+    OR kind NOT IN ('session', 'dispatch_event', 'preference')
   )
 `
 
@@ -390,7 +390,7 @@ WHERE workspace_id = $1
   AND (
     $8::bool
     OR $2::text IS NOT NULL
-    OR kind NOT IN ('session', 'dispatch_event')
+    OR kind NOT IN ('session', 'dispatch_event', 'preference')
   )
   AND (NOT $9::bool OR verified_at IS NULL)
 ORDER BY created_at DESC
@@ -652,7 +652,7 @@ WHERE workspace_id = $1
   AND (
     $5::bool
     OR $3::text IS NOT NULL
-    OR kind NOT IN ('session', 'dispatch_event')
+    OR kind NOT IN ('session', 'dispatch_event', 'preference')
   )
 ORDER BY rank DESC, created_at DESC
 LIMIT  $7::int

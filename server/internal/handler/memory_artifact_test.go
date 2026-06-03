@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -984,6 +985,167 @@ func TestMemoryArtifactListTags(t *testing.T) {
 	if counts[uniq+"-rare"] != 1 {
 		t.Fatalf("expected rare tag count 1, got %d", counts[uniq+"-rare"])
 	}
+}
+
+// TestMemoryArtifactAcceptsPreferenceKindWithMemberAnchor — the
+// 2026-06-03 "member preferences" addition: kind='preference' anchored
+// to anchor_type='member' (anchor_id = member.id) so an agent runtime
+// can later inject the right preferences for the dispatching user.
+func TestMemoryArtifactAcceptsPreferenceKindWithMemberAnchor(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	// testWorkspaceID's owner member is the one the test framework
+	// seeded; resolve it via the membership query.
+	memberID, err := lookupTestMemberID(t)
+	if err != nil {
+		t.Fatalf("lookup member: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/memory?workspace_id="+testWorkspaceID, map[string]any{
+		"kind":        "preference",
+		"title":       "Terse, no em-dashes",
+		"content":     "Prefer short responses; avoid em-dashes in prose; bullet lists over paragraphs.",
+		"anchor_type": "member",
+		"anchor_id":   memberID,
+	})
+	testHandler.CreateMemoryArtifact(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create preference: %d %s", w.Code, w.Body.String())
+	}
+	var created MemoryArtifactResponse
+	json.NewDecoder(w.Body).Decode(&created)
+	if created.Kind != "preference" {
+		t.Errorf("kind: want preference, got %q", created.Kind)
+	}
+	if created.AnchorType == nil || *created.AnchorType != "member" {
+		t.Errorf("anchor_type: want member, got %v", created.AnchorType)
+	}
+	t.Cleanup(func() {
+		req := newRequest("DELETE", "/api/memory/"+created.ID, nil)
+		req = withURLParam(req, "id", created.ID)
+		testHandler.DeleteMemoryArtifact(httptest.NewRecorder(), req)
+	})
+}
+
+// TestMemoryArtifactRejectsPreferenceWithBadMemberAnchor — an
+// arbitrary UUID for anchor_id should 400, not silently store a
+// dangling reference. Same boundary that issue/agent/channel anchors
+// would want; member is the one with active validation today because
+// it's the one that exists.
+func TestMemoryArtifactRejectsPreferenceWithBadMemberAnchor(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/memory?workspace_id="+testWorkspaceID, map[string]any{
+		"kind":        "preference",
+		"title":       "Tries to anchor to nothing",
+		"content":     "x",
+		"anchor_type": "member",
+		"anchor_id":   "00000000-0000-0000-0000-000000000000",
+	})
+	testHandler.CreateMemoryArtifact(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on bogus member anchor, got %d %s",
+			w.Code, w.Body.String())
+	}
+}
+
+// TestMemoryArtifactPreferenceHiddenFromDefaultList — same default-
+// hide behavior as session/dispatch_event: kind='preference' is
+// "personal", not the workspace-shared substrate, so it doesn't
+// surface in the default memory page view.
+func TestMemoryArtifactPreferenceHiddenFromDefaultList(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	memberID, err := lookupTestMemberID(t)
+	if err != nil {
+		t.Fatalf("lookup member: %v", err)
+	}
+	// Seed a preference + a non-preference so we can verify the
+	// filter, not just absence.
+	mk := func(kind, title string, anchorID string) MemoryArtifactResponse {
+		body := map[string]any{"kind": kind, "title": title, "content": "x"}
+		if anchorID != "" {
+			body["anchor_type"] = "member"
+			body["anchor_id"] = anchorID
+		}
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/memory?workspace_id="+testWorkspaceID, body)
+		testHandler.CreateMemoryArtifact(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create %s: %d %s", kind, w.Code, w.Body.String())
+		}
+		var a MemoryArtifactResponse
+		json.NewDecoder(w.Body).Decode(&a)
+		t.Cleanup(func() {
+			req := newRequest("DELETE", "/api/memory/"+a.ID, nil)
+			req = withURLParam(req, "id", a.ID)
+			testHandler.DeleteMemoryArtifact(httptest.NewRecorder(), req)
+		})
+		return a
+	}
+	pref := mk("preference", "should be hidden", memberID)
+	wiki := mk("wiki_page", "should be visible", "")
+
+	listIDs := func(query string) map[string]bool {
+		w := httptest.NewRecorder()
+		req := newRequest("GET", "/api/memory?workspace_id="+testWorkspaceID+"&limit=200&"+query, nil)
+		testHandler.ListMemoryArtifacts(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("list: %d", w.Code)
+		}
+		var resp struct {
+			Artifacts []MemoryArtifactResponse `json:"memory_artifacts"`
+		}
+		json.NewDecoder(w.Body).Decode(&resp)
+		got := map[string]bool{}
+		for _, a := range resp.Artifacts {
+			got[a.ID] = true
+		}
+		return got
+	}
+	got := listIDs("")
+	if got[pref.ID] {
+		t.Errorf("default list should hide preference; got %v", got)
+	}
+	if !got[wiki.ID] {
+		t.Errorf("default list should still show wiki; got %v", got)
+	}
+	// Explicit kind=preference surfaces it.
+	got = listIDs("kind=preference")
+	if !got[pref.ID] {
+		t.Errorf("kind=preference should surface preference; got %v", got)
+	}
+}
+
+// lookupTestMemberID returns the member.id row corresponding to the
+// test workspace's seeded owner. Used by preference tests that need a
+// valid member anchor.
+func lookupTestMemberID(t *testing.T) (string, error) {
+	t.Helper()
+	// ListMembers reads workspace_id from the {id} URL param, not the
+	// header — chi route in production is /api/workspaces/{id}/members.
+	// The seeded test workspace has exactly one member (the seeded
+	// owner), so taking the first row is safe.
+	w := httptest.NewRecorder()
+	req := newRequest("GET", "/api/workspaces/"+testWorkspaceID+"/members", nil)
+	req = withURLParam(req, "id", testWorkspaceID)
+	testHandler.ListMembers(w, req)
+	if w.Code != http.StatusOK {
+		return "", fmt.Errorf("list members: %d %s", w.Code, w.Body.String())
+	}
+	var resp []struct {
+		ID string `json:"id"`
+	}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if len(resp) == 0 {
+		return "", fmt.Errorf("no members in test workspace")
+	}
+	return resp[0].ID, nil
 }
 
 // silence unused-import warnings if `chi` is otherwise unreferenced when

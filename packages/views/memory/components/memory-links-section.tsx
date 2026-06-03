@@ -25,6 +25,7 @@ import {
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../../i18n";
 
 // Detail-page section that renders an artifact's outgoing links and
 // offers a minimal create-link affordance. The create form is a popover
@@ -45,6 +46,7 @@ interface MemoryLinksSectionProps {
 }
 
 export function MemoryLinksSection({ artifactId }: MemoryLinksSectionProps) {
+  const { t } = useT("memory");
   const wsId = useWorkspaceId();
   const linksQuery = useQuery(memoryLinksOptions(wsId, artifactId));
   const createLink = useCreateMemoryArtifactLink(artifactId);
@@ -71,7 +73,7 @@ export function MemoryLinksSection({ artifactId }: MemoryLinksSectionProps) {
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground inline-flex items-center gap-1.5">
           <Link2 className="h-3 w-3" />
-          Links
+          {t(($) => $.links_section.heading)}
           {links.length > 0 && (
             <span className="rounded-full bg-accent/50 px-1.5 text-[10px] text-muted-foreground tabular-nums">
               {links.length}
@@ -86,8 +88,7 @@ export function MemoryLinksSection({ artifactId }: MemoryLinksSectionProps) {
 
       {links.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          No links yet. Connect this artifact to issues, projects, or other
-          memory artifacts to build the relation graph.
+          {t(($) => $.links_section.empty)}
         </p>
       ) : (
         <div className="space-y-2">
@@ -148,6 +149,7 @@ interface CreateLinkPopoverProps {
 // memory artifacts / etc.) is the right v2 surface but adds enough
 // complexity that v1 just takes the id as text.
 function CreateLinkPopover({ onSubmit, submitting }: CreateLinkPopoverProps) {
+  const { t } = useT("memory");
   const [open, setOpen] = useState(false);
   const [targetType, setTargetType] =
     useState<MemoryArtifactLinkTargetType>("memory_artifact");
@@ -173,7 +175,7 @@ function CreateLinkPopover({ onSubmit, submitting }: CreateLinkPopoverProps) {
         render={
           <Button variant="ghost" size="sm" className="h-6 gap-1 text-xs">
             <Plus className="h-3 w-3" />
-            Add link
+            {t(($) => $.links_section.add_button)}
           </Button>
         }
       />
@@ -181,7 +183,7 @@ function CreateLinkPopover({ onSubmit, submitting }: CreateLinkPopoverProps) {
         <form onSubmit={handleSubmit} className="space-y-2">
           <div>
             <label className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              Relation
+              {t(($) => $.links_section.relation_label)}
             </label>
             <select
               value={relationType}
@@ -203,7 +205,7 @@ function CreateLinkPopover({ onSubmit, submitting }: CreateLinkPopoverProps) {
           </div>
           <div>
             <label className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              Target type
+              {t(($) => $.links_section.target_type_label)}
             </label>
             <select
               value={targetType}
@@ -221,7 +223,7 @@ function CreateLinkPopover({ onSubmit, submitting }: CreateLinkPopoverProps) {
           </div>
           <div>
             <label className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              Target ID
+              {t(($) => $.links_section.target_id_label)}
             </label>
             <input
               type="text"

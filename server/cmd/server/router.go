@@ -24,6 +24,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/service/memory/embed"
 	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -85,6 +86,11 @@ type RouterOptions struct {
 	// background goroutines (Phase 7b's merge train). Tests leave
 	// this nil and the handler falls back to context.Background.
 	ServiceCtx context.Context
+	// MemoryEmbedClient — when non-nil, SearchMemoryArtifacts honors
+	// ?mode=hybrid. main.go wires this in when OPENAI_API_KEY is set;
+	// tests and self-hosted installs without a key leave it nil and
+	// the hybrid endpoint returns 400.
+	MemoryEmbedClient *embed.Client
 }
 
 func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus, analyticsClient analytics.Client, rdb *redis.Client, opts RouterOptions) chi.Router {
@@ -132,6 +138,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	}
 	if opts.ServiceCtx != nil {
 		h.ServiceCtx = opts.ServiceCtx
+	}
+	if opts.MemoryEmbedClient != nil {
+		h.MemoryEmbedClient = opts.MemoryEmbedClient
 	}
 	if opts.StartMCPDirectoryRefresher {
 		ctx := h.ServiceCtx

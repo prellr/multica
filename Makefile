@@ -302,6 +302,14 @@ migrate-down: ## Create the target DB if needed, then roll back database migrati
 
 sqlc: ## Regenerate sqlc code
 	cd server && sqlc generate
+	# Workaround for sqlc's hyphenated-path import bug — with a structured
+	# go_type override for pgvector-go (whose Go package name is
+	# `pgvector` but whose import path ends in `pgvector-go`), sqlc emits
+	# BOTH an unaliased AND an aliased import line for the same module,
+	# which Go rejects as a duplicate package. The unaliased line is
+	# always the bogus one; this `sed -i` drops it after generation.
+	@find server/pkg/db/generated -name '*.go' -print0 | xargs -0 \
+		sed -i '' -e '/^	"github.com\/pgvector\/pgvector-go"$$/d'
 
 # Cleanup
 ##@ Cleanup

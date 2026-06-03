@@ -215,3 +215,123 @@ RETURNING *;
 -- as the primary action; delete is reserved for admins.
 DELETE FROM memory_artifact
 WHERE id = $1 AND workspace_id = $2;
+
+-- name: ListMemoryArtifactsNeedingEmbedding :many
+-- The background embedding worker's selector. A row needs embedding if
+-- it has no embedding yet OR if the content has been edited since the
+-- last embed (updated_at > embedded_at). We exclude archived rows —
+-- they're not in active search results and re-embedding them is waste.
+--
+-- Workspace-agnostic: the worker runs server-wide, not per-workspace,
+-- and the embedding column doesn't care about scoping. The selector
+-- sorts oldest-stale first so a steady stream of writes doesn't
+-- starve the original NULLs.
+SELECT id, content
+FROM memory_artifact
+WHERE archived_at IS NULL
+  AND content IS NOT NULL AND content <> ''
+  AND (embedding IS NULL OR embedded_at IS NULL OR embedded_at < updated_at)
+ORDER BY embedded_at ASC NULLS FIRST, updated_at ASC
+LIMIT $1;
+
+-- name: UpdateMemoryArtifactEmbedding :exec
+-- Worker write — stamp the embedding + when we did it. Does NOT touch
+-- updated_at; the content didn't change. Idempotent by row.
+UPDATE memory_artifact
+SET embedding   = $2,
+    embedded_at = now()
+WHERE id = $1;
+
+-- name: SearchMemoryArtifactsHybrid :many
+-- Hybrid retrieval: Reciprocal Rank Fusion of FTS rank and vector
+-- cosine distance. RRF formula (k=60 is the literature standard):
+--   score = 1/(60 + fts_rank) + 1/(60 + vec_rank)
+-- Each side independently ranks the candidate set; rows missing from
+-- one side (no embedding yet → not in vec set; no FTS hit → not in
+-- fts set) still contribute via whichever side they're in.
+--
+-- The query text ($2) feeds FTS via websearch_to_tsquery; the query
+-- embedding ($3) is supplied by the caller (handler embeds the query
+-- once per request). The two CTEs deliberately use the SAME WHERE
+-- shape as SearchMemoryArtifacts so the same scoping (workspace,
+-- non-archived, kind narrowing, system-hide) applies on both legs.
+WITH fts AS (
+    SELECT m.id AS id,
+           ts_rank_cd(m.content_tsv, websearch_to_tsquery('english', $2)) AS rank,
+           row_number() OVER (
+               ORDER BY ts_rank_cd(m.content_tsv, websearch_to_tsquery('english', $2)) DESC
+           ) AS rrf_rank
+    FROM memory_artifact m
+    WHERE m.workspace_id = $1
+      AND m.archived_at IS NULL
+      AND m.content_tsv @@ websearch_to_tsquery('english', $2)
+      AND (sqlc.narg('kind')::text IS NULL OR m.kind = sqlc.narg('kind'))
+      AND (sqlc.narg('tags')::text[] IS NULL OR m.tags && sqlc.narg('tags')::text[])
+      AND (
+          sqlc.arg('include_system')::bool
+          OR sqlc.narg('kind')::text IS NOT NULL
+          OR m.kind NOT IN ('session', 'dispatch_event', 'preference')
+      )
+),
+vec AS (
+    SELECT m.id AS id,
+           1 - (m.embedding <=> $3) AS similarity,
+           row_number() OVER (
+               ORDER BY m.embedding <=> $3 ASC
+           ) AS rrf_rank
+    FROM memory_artifact m
+    WHERE m.workspace_id = $1
+      AND m.archived_at IS NULL
+      AND m.embedding IS NOT NULL
+      AND (sqlc.narg('kind')::text IS NULL OR m.kind = sqlc.narg('kind'))
+      AND (sqlc.narg('tags')::text[] IS NULL OR m.tags && sqlc.narg('tags')::text[])
+      AND (
+          sqlc.arg('include_system')::bool
+          OR sqlc.narg('kind')::text IS NOT NULL
+          OR m.kind NOT IN ('session', 'dispatch_event', 'preference')
+      )
+    ORDER BY m.embedding <=> $3
+    LIMIT 200
+)
+SELECT m.*,
+       COALESCE(1.0 / (60 + fts.rrf_rank), 0.0) +
+       COALESCE(1.0 / (60 + vec.rrf_rank), 0.0) AS rank
+FROM memory_artifact m
+LEFT JOIN fts ON fts.id = m.id
+LEFT JOIN vec ON vec.id = m.id
+WHERE fts.id IS NOT NULL OR vec.id IS NOT NULL
+ORDER BY rank DESC
+LIMIT  sqlc.arg('limit')::int
+OFFSET sqlc.arg('offset')::int;
+
+-- name: CountSearchMemoryArtifactsHybrid :one
+-- Total candidate count for hybrid search — union of FTS hits and
+-- vector hits. Same WHERE shape as the search query (sans rank +
+-- limit) so totals match the page.
+SELECT count(*) FROM (
+    SELECT m.id AS id
+    FROM memory_artifact m
+    WHERE m.workspace_id = $1
+      AND m.archived_at IS NULL
+      AND m.content_tsv @@ websearch_to_tsquery('english', $2)
+      AND (sqlc.narg('kind')::text IS NULL OR m.kind = sqlc.narg('kind'))
+      AND (sqlc.narg('tags')::text[] IS NULL OR m.tags && sqlc.narg('tags')::text[])
+      AND (
+          sqlc.arg('include_system')::bool
+          OR sqlc.narg('kind')::text IS NOT NULL
+          OR m.kind NOT IN ('session', 'dispatch_event', 'preference')
+      )
+    UNION
+    SELECT m.id AS id
+    FROM memory_artifact m
+    WHERE m.workspace_id = $1
+      AND m.archived_at IS NULL
+      AND m.embedding IS NOT NULL
+      AND (sqlc.narg('kind')::text IS NULL OR m.kind = sqlc.narg('kind'))
+      AND (sqlc.narg('tags')::text[] IS NULL OR m.tags && sqlc.narg('tags')::text[])
+      AND (
+          sqlc.arg('include_system')::bool
+          OR sqlc.narg('kind')::text IS NOT NULL
+          OR m.kind NOT IN ('session', 'dispatch_event', 'preference')
+      )
+) AS candidates;

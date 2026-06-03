@@ -12,6 +12,7 @@ import { useLocaleAdapter } from "@multica/core/i18n/react";
 import { useAuthStore } from "@multica/core/auth";
 import { api } from "@multica/core/api";
 import { useT } from "../../i18n";
+import { AgentPreferencesSection } from "./agent-preferences-section";
 
 const LIGHT_COLORS = {
   titleBar: "#e8e8e8",
@@ -226,6 +227,15 @@ export function PreferencesTab() {
             );
           })}
         </div>
+      </section>
+
+      {/* Memory-substrate-backed per-user "things agents should know
+          about me." See packages/views/settings/components/
+          agent-preferences-section.tsx. Sits inside Preferences (not
+          its own tab) because it's conceptually "user-scoped
+          preferences" — sibling to theme + language. */}
+      <section className="space-y-4">
+        <AgentPreferencesSection />
       </section>
     </div>
   );

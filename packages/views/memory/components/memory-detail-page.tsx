@@ -49,6 +49,9 @@ const KIND_BADGE: Record<MemoryArtifactKind, string> = {
   // but the map must be total over MemoryArtifactKind.
   session: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
   dispatch_event: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
+  // Personal kind — same intent as system: neutral, since the natural
+  // detail surface is the Agent preferences settings panel.
+  preference: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
 };
 
 const STALE_THRESHOLD_DAYS = 30;

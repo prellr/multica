@@ -38,6 +38,14 @@ vi.mock("@multica/core/api", () => ({
   api: { updateMe: mockUpdateMe },
 }));
 
+// AgentPreferencesSection pulls workspace + member + memory queries that
+// this Language-switcher test has no mocks for; render a stub so the
+// tree mounts. Behavior coverage for the section lives in its own
+// (forthcoming) tests, not here.
+vi.mock("./agent-preferences-section", () => ({
+  AgentPreferencesSection: () => null,
+}));
+
 vi.mock("sonner", () => ({
   toast: { warning: mockToastWarning },
 }));

@@ -72,6 +72,13 @@ var allowedMemoryKinds = map[string]bool{
 	"decision":       true,
 	"session":        true,
 	"dispatch_event": true,
+	// Member preference — "things agents should know about me" (tone,
+	// formatting style, working hours, language quirks). Anchored to
+	// anchor_type='member', anchor_id=member.id. Surfaced by a future
+	// runtime-injection extension into every dispatch the anchored
+	// member triggers. Borrowed from HydraDB's preference-aware pitch:
+	// preferences are first-class memory, not a separate config blob.
+	"preference": true,
 }
 
 // allowedAnchorTypes enumerates the entity types a memory artifact can
@@ -83,6 +90,13 @@ var allowedAnchorTypes = map[string]bool{
 	"project": true,
 	"agent":   true,
 	"channel": true,
+	// member — workspace-scoped person. Primary use is anchoring
+	// kind='preference' artifacts to a specific member so their
+	// preferences can be runtime-injected only into their dispatches.
+	// anchor_id is the member.id (the workspace-scoped row), not the
+	// cross-workspace user.id — keeping the scoping consistent with
+	// every other anchor type.
+	"member": true,
 }
 
 // memorySlugRE matches valid slugs: lowercase alphanumeric and hyphens,
@@ -371,7 +385,7 @@ func (h *Handler) validateAnchor(r *http.Request, w http.ResponseWriter, anchorT
 	}
 	t := strings.TrimSpace(*anchorType)
 	if !allowedAnchorTypes[t] {
-		writeError(w, http.StatusBadRequest, "anchor_type must be one of: issue, project, agent, channel")
+		writeError(w, http.StatusBadRequest, "anchor_type must be one of: issue, project, agent, channel, member")
 		return pgtype.Text{}, pgtype.UUID{}, false
 	}
 	raw := strings.TrimSpace(*anchorID)
@@ -395,6 +409,23 @@ func (h *Handler) validateAnchor(r *http.Request, w http.ResponseWriter, anchorT
 	id, ok := parseUUIDOrBadRequest(w, raw, "anchor_id")
 	if !ok {
 		return pgtype.Text{}, pgtype.UUID{}, false
+	}
+	// Member anchor — verify the member exists in THIS workspace. Same
+	// boundary that the agent anchor would want (TODO if/when an agent
+	// anchor write-path appears) but member is the one the preference
+	// use case actually exercises. Skipping this check would let a
+	// user anchor a preference at a member.id from another workspace.
+	if t == "member" {
+		workspaceID := h.resolveWorkspaceID(r)
+		wsUUID, wsOk := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+		if !wsOk {
+			return pgtype.Text{}, pgtype.UUID{}, false
+		}
+		member, err := h.Queries.GetMember(r.Context(), id)
+		if err != nil || member.WorkspaceID != wsUUID {
+			writeError(w, http.StatusBadRequest, "anchor_id is not a member of this workspace")
+			return pgtype.Text{}, pgtype.UUID{}, false
+		}
 	}
 	return pgtype.Text{String: t, Valid: true}, id, true
 }
@@ -432,7 +463,7 @@ func (h *Handler) ListMemoryArtifacts(w http.ResponseWriter, r *http.Request) {
 	var anchorIDFilter pgtype.UUID
 	if at := strings.TrimSpace(r.URL.Query().Get("anchor_type")); at != "" {
 		if !allowedAnchorTypes[at] {
-			writeError(w, http.StatusBadRequest, "anchor_type must be one of: issue, project, agent, channel")
+			writeError(w, http.StatusBadRequest, "anchor_type must be one of: issue, project, agent, channel, member")
 			return
 		}
 		anchorTypeFilter = pgtype.Text{String: at, Valid: true}
@@ -553,7 +584,7 @@ func (h *Handler) ListMemoryArtifactsByAnchor(w http.ResponseWriter, r *http.Req
 	}
 	anchorType := strings.TrimSpace(chi.URLParam(r, "anchorType"))
 	if !allowedAnchorTypes[anchorType] {
-		writeError(w, http.StatusBadRequest, "anchor type must be one of: issue, project, agent, channel")
+		writeError(w, http.StatusBadRequest, "anchor type must be one of: issue, project, agent, channel, member")
 		return
 	}
 	rawAnchorID := chi.URLParam(r, "anchorId")

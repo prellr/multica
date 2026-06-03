@@ -32,7 +32,7 @@ WHERE workspace_id = $1
   AND (
     sqlc.arg('include_system')::bool
     OR sqlc.narg('kind')::text IS NOT NULL
-    OR kind NOT IN ('session', 'dispatch_event')
+    OR kind NOT IN ('session', 'dispatch_event', 'preference')
   )
   AND (NOT sqlc.arg('unverified_only')::bool OR verified_at IS NULL)
 ORDER BY created_at DESC
@@ -54,7 +54,7 @@ WHERE workspace_id = $1
   AND (
     sqlc.arg('include_system')::bool
     OR sqlc.narg('kind')::text IS NOT NULL
-    OR kind NOT IN ('session', 'dispatch_event')
+    OR kind NOT IN ('session', 'dispatch_event', 'preference')
   )
   AND (NOT sqlc.arg('unverified_only')::bool OR verified_at IS NULL);
 
@@ -97,7 +97,7 @@ WHERE workspace_id = $1
   AND (
     sqlc.arg('include_system')::bool
     OR sqlc.narg('kind')::text IS NOT NULL
-    OR kind NOT IN ('session', 'dispatch_event')
+    OR kind NOT IN ('session', 'dispatch_event', 'preference')
   )
 ORDER BY rank DESC, created_at DESC
 LIMIT  sqlc.arg('limit')::int
@@ -116,7 +116,7 @@ WHERE workspace_id = $1
   AND (
     sqlc.arg('include_system')::bool
     OR sqlc.narg('kind')::text IS NOT NULL
-    OR kind NOT IN ('session', 'dispatch_event')
+    OR kind NOT IN ('session', 'dispatch_event', 'preference')
   );
 
 -- name: ListMemoryTags :many

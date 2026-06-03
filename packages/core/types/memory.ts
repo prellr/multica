@@ -14,7 +14,13 @@ export type MemoryArtifactKind =
   // hand-created. Hidden from the default memory list (see include_system on
   // ListMemoryArtifactsParams) so they don't bury curated knowledge.
   | "session"
-  | "dispatch_event";
+  | "dispatch_event"
+  // Personal kind — preferences anchored to a member (anchor_type='member').
+  // Surfaced by the per-user Agent preferences settings panel and (in a
+  // follow-up) auto-injected into dispatches the anchored member triggers.
+  // Same default-hide policy as system kinds: not in the shared substrate
+  // view, but visible when explicitly filtered.
+  | "preference";
 
 // Polymorphic anchor — what is this artifact about? Mirrors the
 // allowedAnchorTypes set in the server handler. New anchor types must
@@ -23,7 +29,12 @@ export type MemoryArtifactAnchorType =
   | "issue"
   | "project"
   | "agent"
-  | "channel";
+  | "channel"
+  // Member anchor — workspace-scoped person. Primary use: kind='preference'
+  // artifacts that runtime-inject only when this member triggers a dispatch.
+  // anchor_id is the member.id (the workspace-scoped row), not the
+  // cross-workspace user.id.
+  | "member";
 
 export type MemoryArtifactAuthorType = "member" | "agent";
 

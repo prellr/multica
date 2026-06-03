@@ -22,6 +22,14 @@
     "stale_badge": "Stale",
     "verified_badge": "Verified"
   },
+  "links_section": {
+    "heading": "Links",
+    "empty": "No links yet. Connect this artifact to issues, projects, or other memory artifacts to build the relation graph.",
+    "add_button": "Add link",
+    "relation_label": "Relation",
+    "target_type_label": "Target type",
+    "target_id_label": "Target ID"
+  },
   "detail": {
     "back": "Memory",
     "archived_badge": "Archived",

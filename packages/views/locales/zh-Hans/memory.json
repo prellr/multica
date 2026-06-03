@@ -22,6 +22,14 @@
     "stale_badge": "已过期",
     "verified_badge": "已验证"
   },
+  "links_section": {
+    "heading": "关联",
+    "empty": "还没有关联。将此条目与议题、项目或其他记忆条目相连,构建关系图。",
+    "add_button": "添加关联",
+    "relation_label": "关系",
+    "target_type_label": "目标类型",
+    "target_id_label": "目标 ID"
+  },
   "detail": {
     "back": "记忆",
     "archived_badge": "已归档",

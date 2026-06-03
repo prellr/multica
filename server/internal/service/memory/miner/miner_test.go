@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	pgxvec "github.com/pgvector/pgvector-go/pgx"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -34,7 +36,21 @@ func TestMain(m *testing.M) {
 	if dbURL == "" {
 		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
 	}
-	pool, err := pgxpool.New(ctx, dbURL)
+	// Register pgvector types on every new pool connection so the
+	// memory_artifact.embedding column (vector(1536)) scans without
+	// the "unsupported data type" error. Same pattern as the handler
+	// test pool; miner-specific because miner tests use their own
+	// TestMain.
+	poolCfg, err := pgxpool.ParseConfig(dbURL)
+	if err != nil {
+		fmt.Printf("Skipping miner tests: could not parse database url: %v\n", err)
+		os.Exit(0)
+	}
+	poolCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_ = pgxvec.RegisterTypes(ctx, conn)
+		return nil
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		fmt.Printf("Skipping miner tests: could not connect to database: %v\n", err)
 		os.Exit(0)

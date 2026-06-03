@@ -9,7 +9,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	pgxvec "github.com/pgvector/pgvector-go/pgx"
 )
 
 const (
@@ -78,6 +80,23 @@ func newDBPool(ctx context.Context, dbURL string) (*pgxpool.Pool, error) {
 
 	if cfg.MinConns > cfg.MaxConns {
 		cfg.MinConns = cfg.MaxConns
+	}
+
+	// Register pgvector types on every new pool connection. Without
+	// this, pgx falls back to its built-in type map which doesn't know
+	// about `vector`, and `SELECT *` on memory_artifact (which now
+	// includes the embedding column) fails to scan with
+	// "unsupported data type: <nil>". The hook is tolerant of the
+	// extension being absent — if vector isn't installed, RegisterTypes
+	// returns an error which we log and swallow so the rest of the
+	// substrate keeps working (semantic search is the only thing that
+	// breaks; FTS still works without the type registered).
+	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		if err := pgxvec.RegisterTypes(ctx, conn); err != nil {
+			slog.Warn("pgvector RegisterTypes failed; vector columns will fail to scan",
+				"error", err)
+		}
+		return nil
 	}
 
 	return pgxpool.NewWithConfig(ctx, cfg)

@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // shipReleaseMigrationApplied probes for the 085 migration. Mirrors
@@ -94,6 +95,69 @@ func seedReleasePR(t *testing.T, projectID, repoURL string, number int) string {
 	return id
 }
 
+func seedShipConciergeChannelWithPilot(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE agent_id = $1`, pilotAgentID)
+	testPool.Exec(ctx, `DELETE FROM channel WHERE id = $1`, shipConciergeChannelID)
+	testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, pilotAgentID)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent (
+			id, workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks, owner_id
+		)
+		VALUES ($1, $2, 'Pilot', '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4)
+	`, pilotAgentID, testWorkspaceID, testRuntimeID, testUserID); err != nil {
+		t.Fatalf("seed Pilot agent: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel (
+			id, workspace_id, name, display_name, description, kind, visibility,
+			created_by_type, created_by_id
+		)
+		VALUES ($1, $2, 'ship-concierge', 'ship-concierge', '', 'channel', 'public', 'member', $3)
+	`, shipConciergeChannelID, testWorkspaceID, testUserID); err != nil {
+		t.Fatalf("seed ship concierge channel: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO channel_membership (channel_id, member_type, member_id, role)
+		VALUES
+			($1, 'member', $2, 'member'),
+			($1, 'agent', $3, 'member')
+	`, shipConciergeChannelID, testUserID, pilotAgentID); err != nil {
+		t.Fatalf("seed ship concierge memberships: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx := context.Background()
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE agent_id = $1`, pilotAgentID)
+		testPool.Exec(ctx, `DELETE FROM channel WHERE id = $1`, shipConciergeChannelID)
+		testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, pilotAgentID)
+	})
+}
+
+func waitForPilotChannelMentionTask(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var count int
+		if err := testPool.QueryRow(context.Background(), `
+			SELECT count(*)
+			FROM agent_task_queue
+			WHERE agent_id = $1
+			  AND context->>'type' = 'channel_mention'
+		`, pilotAgentID).Scan(&count); err != nil {
+			t.Fatalf("count Pilot channel mention tasks: %v", err)
+		}
+		if count > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for Pilot channel mention task")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 // TestRelease_Create_HappyPath — POST /api/projects/{id}/releases with
 // two eligible PRs creates a release row + auto-creates the channel +
 // auto-creates the tracking issue. The response carries all three.
@@ -149,6 +213,85 @@ func TestRelease_Create_HappyPath(t *testing.T) {
 	}
 	if resp.Issue.Title != "Memory KB rollout" {
 		t.Fatalf("expected issue title to mirror release title, got %q", resp.Issue.Title)
+	}
+}
+
+func TestRelease_Create_NotifiesShipConciergeAndTriggersPilot(t *testing.T) {
+	enableShipReleaseTest(t)
+	seedShipConciergeChannelWithPilot(t)
+	projectID := createShipProject(t, "https://github.com/multica-ai/multica-concierge")
+	pr := seedReleasePR(t, projectID, "https://github.com/multica-ai/multica-concierge", 151)
+
+	body, _ := json.Marshal(map[string]any{
+		"title":            "Concierge watched rollout",
+		"pull_request_ids": []string{pr},
+	})
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/projects/"+projectID+"/releases", body)
+	req = withURLParam(req, "id", projectID)
+	testHandler.CreateRelease(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRelease: want 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Release struct {
+			ID string `json:"id"`
+		} `json:"release"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	var count int
+	var content string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1
+	`, shipConciergeChannelID).Scan(&count); err != nil {
+		t.Fatalf("count concierge messages: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 concierge message, got %d", count)
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT content
+		FROM channel_message
+		WHERE channel_id = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, shipConciergeChannelID).Scan(&content); err != nil {
+		t.Fatalf("read concierge message: %v", err)
+	}
+	for _, want := range []string{
+		"🚀 Release [HAN-",
+		"\"Concierge watched rollout\" is now active",
+		"[@Pilot](mention://agent/" + pilotAgentID + ")",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("concierge message missing %q: %s", want, content)
+		}
+	}
+	waitForPilotChannelMentionTask(t)
+
+	w = httptest.NewRecorder()
+	req = newRequest("PATCH", "/api/releases/"+resp.Release.ID, map[string]any{
+		"title": "Concierge watched rollout edited",
+	})
+	req = withURLParam(req, "id", resp.Release.ID)
+	testHandler.UpdateRelease(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateRelease: want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*)
+		FROM channel_message
+		WHERE channel_id = $1
+	`, shipConciergeChannelID).Scan(&count); err != nil {
+		t.Fatalf("count concierge messages after edit: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("release edit should not duplicate concierge notification, got %d messages", count)
 	}
 }
 

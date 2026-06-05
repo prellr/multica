@@ -29,6 +29,11 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+const (
+	shipConciergeChannelID = "aeeea489-f40f-4b60-b067-9121fc5fb1d2"
+	pilotAgentID           = "7e1c9cc8-2261-4aa1-8cc2-b5e4e7f47f28"
+)
+
 // releaseChannelOps adapts h.ChannelService to the ship.ChannelOps
 // interface so the service layer can stay independent of the handler
 // package (avoids an import cycle). One adapter per request because
@@ -290,6 +295,72 @@ func (h *Handler) projectShape(ctx context.Context, projectID pgtype.UUID) strin
 	return cfg.Shape
 }
 
+func shipReleaseNotificationLabel(ctx context.Context, h *Handler, workspaceID pgtype.UUID, release db.ShipRelease, issue *db.Issue) string {
+	if issue != nil && issue.Number.Valid {
+		prefix := strings.TrimSpace(h.getIssuePrefix(ctx, workspaceID))
+		if prefix != "" {
+			return fmt.Sprintf("%s-%d", prefix, issue.Number.Int32)
+		}
+	}
+	return uuidToString(release.ID)
+}
+
+func shipReleaseNotificationContent(label, title string) string {
+	return fmt.Sprintf(
+		"🚀 Release [%s] %q is now active. [@Pilot](mention://agent/%s) is watching.",
+		label,
+		title,
+		pilotAgentID,
+	)
+}
+
+func (h *Handler) notifyPilotForActiveRelease(ctx context.Context, workspaceID pgtype.UUID, release db.ShipRelease, issue *db.Issue, author pgtype.UUID) {
+	if !author.Valid {
+		return
+	}
+	channelID := parseUUID(shipConciergeChannelID)
+	ch, err := h.Queries.GetChannelInWorkspace(ctx, db.GetChannelInWorkspaceParams{
+		ID:          channelID,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		slog.Warn("ship concierge release notification skipped: channel not found",
+			"workspace_id", uuidToString(workspaceID),
+			"channel_id", shipConciergeChannelID,
+			"release_id", uuidToString(release.ID),
+			"error", err,
+		)
+		return
+	}
+
+	content := shipReleaseNotificationContent(
+		shipReleaseNotificationLabel(ctx, h, workspaceID, release, issue),
+		release.Title,
+	)
+	msg, err := h.ChannelMessageService.Create(ctx, channel.CreateMessageParams{
+		ChannelID: channelID,
+		Author:    channel.Actor{Type: channel.ActorMember, ID: author},
+		Content:   content,
+	})
+	if err != nil {
+		slog.Warn("ship concierge release notification failed",
+			"workspace_id", uuidToString(workspaceID),
+			"channel_id", shipConciergeChannelID,
+			"release_id", uuidToString(release.ID),
+			"error", err,
+		)
+		return
+	}
+
+	h.publish(protocol.EventChannelMessage, uuidToString(workspaceID), channel.ActorMember, uuidToString(author), map[string]any{
+		"channel_id":   shipConciergeChannelID,
+		"channel_name": ch.Name,
+		"message":      channelMessageToResponse(msg),
+	})
+	go h.fanOutChannelMentions(context.Background(), workspaceID, ch, msg, channel.ActorMember, uuidToString(author))
+	go h.triggerMentionedAgentTasks(context.Background(), workspaceID, ch, msg, channel.Actor{Type: channel.ActorMember, ID: author})
+}
+
 // releaseSignoffResponse is the wire shape for ship_release_signoff
 // rows. Returned by GET /api/releases/{id}; older clients ignore the
 // field per the API drift contract.
@@ -536,6 +607,7 @@ func (h *Handler) CreateRelease(w http.ResponseWriter, r *http.Request) {
 		"release_id": uuidToString(result.Release.ID),
 		"stage":      string(result.Release.Stage),
 	})
+	h.notifyPilotForActiveRelease(r.Context(), wsID, result.Release, result.Issue, creatorUUID)
 	writeJSON(w, http.StatusCreated, body)
 }
 

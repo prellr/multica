@@ -691,7 +691,7 @@ func (c *Client) doWithBody(ctx context.Context, method, path string, reqBody, t
 		// attempt (including the retries below) because each response
 		// carries an updated Remaining value — the retry path is itself
 		// load-bearing data when diagnosing pressure.
-		c.rateLimit.observeResponse(path, resp.Header)
+		c.rateLimit.observeResponse(method, path, resp.Header)
 
 		// Rate-limit backoff (one-shot regardless of which token path
 		// we're on). Only 403s with the rate-limit signals qualify.

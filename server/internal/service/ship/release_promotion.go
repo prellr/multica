@@ -571,6 +571,30 @@ func (s *Service) TryMarkReleaseDoneIfAllMerged(
 	return rel, err == nil, err
 }
 
+// TryMarkReleaseDoneOnPRMerge is the event-driven variant of
+// TryMarkReleaseDoneIfAllMerged. Unlike MarkReleaseDone (which guards
+// on in_production), this accepts any non-terminal stage — covering
+// repos without a staging/production CI pipeline whose releases stay
+// in "merging" after the last PR lands.
+func (s *Service) TryMarkReleaseDoneOnPRMerge(
+	ctx context.Context,
+	releaseID pgtype.UUID,
+	deps *StagingDeps,
+) (db.ShipRelease, bool, error) {
+	release, err := s.Q.GetRelease(ctx, releaseID)
+	if err != nil {
+		return db.ShipRelease{}, false, fmt.Errorf("get release: %w", err)
+	}
+	if isTerminalReleaseStage(release.Stage) {
+		return release, false, nil
+	}
+	if !releasePRsAllMerged(ctx, s.Q, releaseID) {
+		return release, false, nil
+	}
+	flipped, err := s.finalizeReleaseDone(ctx, release, releaseID, deps)
+	return flipped, err == nil, err
+}
+
 func releasePRsAllMerged(ctx context.Context, q *db.Queries, releaseID pgtype.UUID) bool {
 	rows, err := q.ListReleasePullRequests(ctx, releaseID)
 	if err != nil || len(rows) == 0 {

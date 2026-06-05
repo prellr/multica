@@ -216,7 +216,7 @@ func (s *Service) syncReleasePRMergeState(ctx context.Context, pr db.PullRequest
 	if err != nil {
 		return
 	}
-	if release.Stage != db.ReleaseStageMerging {
+	if isTerminalReleaseStage(release.Stage) {
 		return
 	}
 	now := time.Now()

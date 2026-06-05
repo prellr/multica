@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/service/channel"
 	"github.com/multica-ai/multica/server/internal/service/ship"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	gh "github.com/multica-ai/multica/server/pkg/github"
@@ -36,14 +37,14 @@ const maxWebhookBody = 5 * 1024 * 1024
 // every workspace that already pointed GitHub there.
 //
 // Flow:
-//   1. Read body (capped) + envelope headers.
-//   2. Locate the workspace whose secret verifies the HMAC. Reject 401
-//      if no workspace matches; reject 400 on missing/malformed sig.
-//   3. Insert into github_webhook_delivery for at-most-once dedup.
-//      Duplicate -> respond 200 immediately (GitHub retried).
-//   4. Spawn an async goroutine to dispatch the event into ship.Service.
-//      The HTTP response returns 200 within milliseconds; processing
-//      time stays off the request critical path.
+//  1. Read body (capped) + envelope headers.
+//  2. Locate the workspace whose secret verifies the HMAC. Reject 401
+//     if no workspace matches; reject 400 on missing/malformed sig.
+//  3. Insert into github_webhook_delivery for at-most-once dedup.
+//     Duplicate -> respond 200 immediately (GitHub retried).
+//  4. Spawn an async goroutine to dispatch the event into ship.Service.
+//     The HTTP response returns 200 within milliseconds; processing
+//     time stays off the request critical path.
 //
 // We accept that an async failure leaves the delivery row marked
 // processed-with-error rather than retrying — GitHub's at-least-once
@@ -197,17 +198,19 @@ func (h *Handler) dispatchWebhook(d WebhookDispatch) {
 	// are best-effort and silent on miss.
 	h.maybeLinkReleaseFromOutcome(ctx, d.WorkspaceID, outcome)
 
+	h.maybeAutoCloseRelease(ctx, d.WorkspaceID, outcome)
+
 	h.publishWebhookOutcome(d.WorkspaceID, outcome)
 }
 
 // maybeLinkReleaseFromOutcome inspects the webhook outcome for the
 // two Phase 7c trigger conditions:
 //
-//   1. A successful staging deploy whose sha matches a release's
-//      merged_main_sha — links staging_deploy_id and either kicks off
-//      smoke or transitions to verifying.
-//   2. A check_run completion whose external_id matches a release's
-//      smoke_run_id — flips smoke_status and (on pass) advances stage.
+//  1. A successful staging deploy whose sha matches a release's
+//     merged_main_sha — links staging_deploy_id and either kicks off
+//     smoke or transitions to verifying.
+//  2. A check_run completion whose external_id matches a release's
+//     smoke_run_id — flips smoke_status and (on pass) advances stage.
 //
 // Best-effort: any error path logs and returns; releases with no
 // matching sha / run id render the linkage as a no-op.
@@ -234,6 +237,72 @@ func (h *Handler) maybeLinkReleaseFromOutcome(ctx context.Context, workspaceID p
 	if o.CheckRunExternalID != "" && o.CheckRunConclusion != "" {
 		h.recordSmokeOutcomeForRelease(ctx, workspaceID, o.CheckRunExternalID, o.CheckRunConclusion)
 	}
+}
+
+// maybeAutoCloseRelease fires on every PR-merge webhook and checks
+// whether the merged PR was the last unmerged PR in an active Ship
+// release. If so, advances the release to done immediately and posts
+// a done-notification to #ship-concierge tagging Pilot for validation.
+func (h *Handler) maybeAutoCloseRelease(ctx context.Context, workspaceID pgtype.UUID, o ship.WebhookOutcome) {
+	if o.Kind != "pr_state_changed" || o.PRAction != "closed" || !o.PR.PrMergedAt.Valid {
+		return
+	}
+	release, err := h.Queries.GetActiveReleaseForPullRequest(ctx, o.PRID)
+	if err != nil {
+		return // pgx.ErrNoRows is the normal case — PR not in any release
+	}
+	svc := &ship.Service{Q: h.Queries}
+	flipped, advanced, err := svc.TryMarkReleaseDoneOnPRMerge(ctx, release.ID, h.stagingDepsFor(workspaceID))
+	if err != nil {
+		slog.Warn("ship webhook: auto-close release failed",
+			"release_id", uuidToString(release.ID), "error", err)
+		return
+	}
+	if !advanced {
+		return
+	}
+	h.postReleaseDoneToConcierge(ctx, workspaceID, flipped)
+}
+
+// postReleaseDoneToConcierge posts a done-notification to
+// #ship-concierge attributed to the workspace's orchestrator agent,
+// mentioning Pilot for end-to-end validation.
+func (h *Handler) postReleaseDoneToConcierge(ctx context.Context, workspaceID pgtype.UUID, release db.ShipRelease) {
+	const pilotAgentID = "7e1c9cc8-2261-4aa1-8cc2-b5e4e7f47f28"
+	channelID := parseUUID(shipConciergeChannelID)
+	ch, err := h.Queries.GetChannelInWorkspace(ctx, db.GetChannelInWorkspaceParams{
+		ID:          channelID,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		slog.Warn("ship webhook: concierge channel not found for done notification",
+			"channel_id", shipConciergeChannelID, "error", err)
+		return
+	}
+	ws, err := h.Queries.GetWorkspace(ctx, workspaceID)
+	if err != nil || !ws.OrchestratorAgentID.Valid {
+		return
+	}
+	content := fmt.Sprintf(
+		"🎉 **%s** — all PRs merged, release marked done automatically.\n\n[@Pilot](mention://agent/%s) please validate end-to-end.",
+		release.Title, pilotAgentID,
+	)
+	msg, err := h.ChannelMessageService.Create(ctx, channel.CreateMessageParams{
+		ChannelID: channelID,
+		Author:    channel.Actor{Type: channel.ActorAgent, ID: ws.OrchestratorAgentID},
+		Content:   content,
+	})
+	if err != nil {
+		slog.Warn("ship webhook: concierge done notification failed",
+			"release_id", uuidToString(release.ID), "error", err)
+		return
+	}
+	h.publish(protocol.EventChannelMessage, uuidToString(workspaceID), channel.ActorAgent, uuidToString(ws.OrchestratorAgentID), map[string]any{
+		"channel_id":   shipConciergeChannelID,
+		"channel_name": ch.Name,
+		"message":      channelMessageToResponse(msg),
+	})
+	go h.triggerMentionedAgentTasks(context.Background(), workspaceID, ch, msg, channel.Actor{Type: channel.ActorAgent, ID: ws.OrchestratorAgentID})
 }
 
 // maybeManagePRConversationChannel inspects the webhook outcome and

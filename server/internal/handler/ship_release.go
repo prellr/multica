@@ -168,6 +168,38 @@ func (a *releaseIssueOps) CloseReleaseIssue(ctx context.Context, issueID pgtype.
 	return err
 }
 
+func (a *releaseIssueOps) PostReleaseIssueComment(ctx context.Context, issueID pgtype.UUID, content string) error {
+	issue, err := a.h.Queries.GetIssue(ctx, issueID)
+	if err != nil {
+		return err
+	}
+	_, err = a.h.Queries.CreateComment(ctx, db.CreateCommentParams{
+		IssueID:     issueID,
+		WorkspaceID: issue.WorkspaceID,
+		AuthorType:  "system",
+		AuthorID:    pgtype.UUID{},
+		Content:     content,
+		Type:        "comment",
+	})
+	if err == nil {
+		return nil
+	}
+	if issue.CreatorID.Valid && (issue.CreatorType == "member" || issue.CreatorType == "agent") {
+		_, fallbackErr := a.h.Queries.CreateComment(ctx, db.CreateCommentParams{
+			IssueID:     issueID,
+			WorkspaceID: issue.WorkspaceID,
+			AuthorType:  issue.CreatorType,
+			AuthorID:    issue.CreatorID,
+			Content:     content,
+			Type:        "comment",
+		})
+		if fallbackErr == nil {
+			return nil
+		}
+	}
+	return err
+}
+
 // ----- response shapes ------------------------------------------------------
 
 type releaseResponse struct {
@@ -889,7 +921,8 @@ func (h *Handler) AddPullRequestToRelease(w http.ResponseWriter, r *http.Request
 	}
 
 	svc := &ship.Service{Q: h.Queries}
-	pr, err := svc.AddPullRequestToRelease(r.Context(), rel.ID, prUUID, addedBy)
+	pr, err := svc.AddPullRequestToRelease(r.Context(), rel.ID, prUUID, addedBy,
+		&releaseIssueOps{h: h}, h.stagingDepsFor(wsID))
 	if err != nil {
 		switch {
 		case errors.Is(err, ship.ErrReleaseNotAssembling):

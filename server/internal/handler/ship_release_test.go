@@ -95,6 +95,19 @@ func seedReleasePR(t *testing.T, projectID, repoURL string, number int) string {
 	return id
 }
 
+func markReleasePRMerged(t *testing.T, prID string, number int) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE pull_request
+		SET state = 'merged',
+		    pr_merged_at = NOW() + ($2)::interval,
+		    merge_commit_sha = $3
+		WHERE id = $1
+	`, prID, fmt.Sprintf("%d seconds", number), fmt.Sprintf("merge-sha-%d", number)); err != nil {
+		t.Fatalf("mark release PR merged: %v", err)
+	}
+}
+
 func seedShipConciergeChannelWithPilot(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
@@ -501,6 +514,47 @@ func TestRelease_GetRelease_ReturnsPRsAndEvents(t *testing.T) {
 	}
 }
 
+func TestRelease_CreateWithAlreadyMergedPRsAutoCloses(t *testing.T) {
+	enableShipReleaseTest(t)
+	projectID := createShipProject(t, "https://github.com/multica-ai/multica-premerged-create")
+	pr1 := seedReleasePR(t, projectID, "https://github.com/multica-ai/multica-premerged-create", 451)
+	pr2 := seedReleasePR(t, projectID, "https://github.com/multica-ai/multica-premerged-create", 452)
+	markReleasePRMerged(t, pr1, 451)
+	markReleasePRMerged(t, pr2, 452)
+
+	body, _ := json.Marshal(map[string]any{
+		"title":            "Premerged release",
+		"pull_request_ids": []string{pr1, pr2},
+	})
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/projects/"+projectID+"/releases", body)
+	req = withURLParam(req, "id", projectID)
+	testHandler.CreateRelease(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var createResp struct {
+		Release struct {
+			ID    string `json:"id"`
+			Stage string `json:"stage"`
+		} `json:"release"`
+		Issue struct {
+			ID string `json:"id"`
+		} `json:"issue"`
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&createResp); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	if createResp.Release.Stage != "done" {
+		t.Fatalf("expected release stage done, got %q", createResp.Release.Stage)
+	}
+	if !strings.Contains(strings.Join(createResp.Warnings, "\n"), "All PRs already merged") {
+		t.Fatalf("expected auto-close warning, got %+v", createResp.Warnings)
+	}
+	assertReleaseAutoClosed(t, createResp.Release.ID, createResp.Issue.ID)
+}
+
 // TestRelease_AddRemovePR — once created, the assembling release
 // accepts add/remove PR operations.
 func TestRelease_AddRemovePR(t *testing.T) {
@@ -560,6 +614,88 @@ func TestRelease_AddRemovePR(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&getResp)
 	if len(getResp.PullRequests) != 1 {
 		t.Fatalf("expected 1 PR after add+remove, got %d", len(getResp.PullRequests))
+	}
+}
+
+func TestRelease_AddMergedPRAutoClosesWhenAllPRsMerged(t *testing.T) {
+	enableShipReleaseTest(t)
+	projectID := createShipProject(t, "https://github.com/multica-ai/multica-premerged-add")
+	pr1 := seedReleasePR(t, projectID, "https://github.com/multica-ai/multica-premerged-add", 551)
+	pr2 := seedReleasePR(t, projectID, "https://github.com/multica-ai/multica-premerged-add", 552)
+
+	body, _ := json.Marshal(map[string]any{
+		"title":            "Add closes release",
+		"pull_request_ids": []string{pr1},
+	})
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/projects/"+projectID+"/releases", body)
+	req = withURLParam(req, "id", projectID)
+	testHandler.CreateRelease(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var createResp struct {
+		Release struct {
+			ID string `json:"id"`
+		} `json:"release"`
+		Issue struct {
+			ID string `json:"id"`
+		} `json:"issue"`
+	}
+	json.NewDecoder(w.Body).Decode(&createResp)
+
+	markReleasePRMerged(t, pr1, 551)
+	markReleasePRMerged(t, pr2, 552)
+
+	addBody, _ := json.Marshal(map[string]any{"pull_request_id": pr2})
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/releases/"+createResp.Release.ID+"/pull_requests", addBody)
+	req = withURLParam(req, "id", createResp.Release.ID)
+	testHandler.AddPullRequestToRelease(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("add PR: %d %s", w.Code, w.Body.String())
+	}
+	assertReleaseAutoClosed(t, createResp.Release.ID, createResp.Issue.ID)
+}
+
+func assertReleaseAutoClosed(t *testing.T, releaseID, issueID string) {
+	t.Helper()
+	var stage, issueStatus string
+	var activeCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT stage FROM ship_release WHERE id = $1
+	`, releaseID).Scan(&stage); err != nil {
+		t.Fatalf("load release stage: %v", err)
+	}
+	if stage != "done" {
+		t.Fatalf("expected release stage done, got %q", stage)
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM ship_release_pull_request WHERE release_id = $1 AND is_active
+	`, releaseID).Scan(&activeCount); err != nil {
+		t.Fatalf("count active release PRs: %v", err)
+	}
+	if activeCount != 0 {
+		t.Fatalf("expected release PR memberships deactivated, got %d active", activeCount)
+	}
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT status FROM issue WHERE id = $1
+	`, issueID).Scan(&issueStatus); err != nil {
+		t.Fatalf("load issue status: %v", err)
+	}
+	if issueStatus != "done" {
+		t.Fatalf("expected tracking issue done, got %q", issueStatus)
+	}
+	var commentCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM comment
+		WHERE issue_id = $1
+		  AND content = 'All PRs already merged — auto-closing release.'
+	`, issueID).Scan(&commentCount); err != nil {
+		t.Fatalf("count auto-close comments: %v", err)
+	}
+	if commentCount != 1 {
+		t.Fatalf("expected one auto-close comment, got %d", commentCount)
 	}
 }
 

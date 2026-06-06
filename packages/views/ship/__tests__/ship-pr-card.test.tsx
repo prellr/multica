@@ -129,6 +129,64 @@ describe("ShipPRCard", () => {
     expect(useShipPrDetailStore.getState().openPrId).toBeNull();
   });
 
+  // Multi-select checkbox visibility — the checkbox only makes sense for
+  // PRs that aren't yet part of a release pipeline. Once a PR is locked
+  // into a release (any stage, including in_production / done), the
+  // checkbox is hidden so it doesn't pile up as visual noise on cards
+  // that can't lead anywhere via selection.
+  it("renders the selection checkbox for a PR not in any release", () => {
+    render(<ShipPRCard pr={makePR()} />, { wrapper: I18nWrapper });
+    // The checkbox is always in the DOM for eligible PRs (hidden until
+    // hover via opacity classes); only the rendered presence matters here.
+    expect(screen.getByTestId("ship-pr-card-checkbox")).toBeInTheDocument();
+  });
+
+  it("hides the selection checkbox when the PR is locked into a release", () => {
+    // Stage doesn't matter — any active_release pins the PR to that
+    // release for the rest of its pipeline. Use `in_production` because
+    // that's the user-reported case that prompted this rule.
+    render(
+      <ShipPRCard
+        pr={makePR({
+          active_release: {
+            id: "rel-1",
+            title: "feat release",
+            stage: "in_production",
+          },
+        })}
+      />,
+      { wrapper: I18nWrapper },
+    );
+    expect(screen.queryByTestId("ship-pr-card-checkbox")).not.toBeInTheDocument();
+    // The release badge would normally render alongside (so the card
+    // still tells you which release this PR belongs to) but it requires
+    // a workspace slug from the provider; that wiring is tested
+    // separately. The load-bearing assertion here is the missing
+    // checkbox.
+  });
+
+  // Title wrapping — clamp to two lines so a long PR title carrying a
+  // ROA-NNN prefix + scope tag still has room for the human-readable
+  // summary before clipping. Card heights become mildly variable; columns
+  // accept that for legibility.
+  it("clamps the title to two lines instead of single-line truncating", () => {
+    render(
+      <ShipPRCard
+        pr={makePR({
+          title:
+            "feat(memory): hybrid vector + FTS retrieval with RRF blend and HNSW index for the semantic-search rollout [ROA-NNN]",
+        })}
+      />,
+      { wrapper: I18nWrapper },
+    );
+    const title = screen.getByText(/hybrid vector/);
+    // We assert on the utility class rather than the rendered height —
+    // jsdom doesn't compute multi-line layout reliably, but the class
+    // presence is the load-bearing wiring this test guards.
+    expect(title.className).toMatch(/line-clamp-2/);
+    expect(title.className).not.toMatch(/\btruncate\b/);
+  });
+
   it("renders a 'View diff' link pointing at /files in a new tab", () => {
     // Phase 6.5 — the deep-link goes to the GitHub Files tab so a
     // reviewer lands on the unified diff rather than the conversation.

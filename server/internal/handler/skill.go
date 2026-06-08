@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -1898,6 +1899,22 @@ func (h *Handler) SetAgentSkills(w http.ResponseWriter, r *http.Request) {
 
 	qtx := h.Queries.WithTx(tx)
 
+	// Capture the BEFORE skill set inside the tx so the revision record
+	// below sees a consistent (skills-as-they-were, skills-as-they-are)
+	// pair. Reading outside the tx would race with a concurrent
+	// SetAgentSkills call against the same agent. The two skill sets are
+	// compared as ordered slices in the helper; we don't have to sort
+	// here.
+	beforeRows, err := qtx.ListAgentSkills(r.Context(), agent.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list current agent skills")
+		return
+	}
+	beforeSkillIDs := make([]pgtype.UUID, 0, len(beforeRows))
+	for _, sr := range beforeRows {
+		beforeSkillIDs = append(beforeSkillIDs, sr.ID)
+	}
+
 	if err := qtx.RemoveAllAgentSkills(r.Context(), agent.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to clear agent skills")
 		return
@@ -1911,6 +1928,20 @@ func (h *Handler) SetAgentSkills(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to add agent skill: "+err.Error())
 			return
 		}
+	}
+
+	// Revision record while we still hold the tx. SetAgentSkills doesn't
+	// touch agent fields, so the helper sees the same agent row on both
+	// sides — only the "skills" field will ever appear in changed_fields
+	// here. If the helper fails we abort the whole tx: skills sync and
+	// revision history have to be atomic, otherwise a downstream
+	// consumer comparing revision_id against task.session_id would treat
+	// a brand-new skill set as "no change recorded."
+	actorUserID := parseUUID(requestUserID(r))
+	if _, _, err := h.recordAgentRevisionIfChanged(r.Context(), qtx, agent, agent, beforeSkillIDs, skillUUIDs, actorUserID); err != nil {
+		slog.Warn("revision: skill-change record failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+		writeError(w, http.StatusInternalServerError, "failed to record revision: "+err.Error())
+		return
 	}
 
 	if err := tx.Commit(r.Context()); err != nil {

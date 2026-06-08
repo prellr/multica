@@ -86,6 +86,7 @@ type IssueOps interface {
 		title, description string,
 		creator pgtype.UUID,
 	) (db.Issue, error)
+	PostReleaseIssueComment(ctx context.Context, issueID pgtype.UUID, content string) error
 	// CloseReleaseIssue moves the tracking issue to "cancelled"
 	// (release cancelled) or "done" (release shipped). Phase 7a only
 	// uses the cancellation path.
@@ -341,6 +342,14 @@ func (s *Service) CreateRelease(
 			}
 		}
 	}
+	if allMerged(prs) {
+		if updated, done, err := s.autoCloseReleaseIfAllPRsMerged(ctx, release.ID, issueOps, nil); err != nil {
+			warnings = append(warnings, "auto-close skipped: "+err.Error())
+		} else if done {
+			release = updated
+			warnings = append(warnings, "All PRs already merged — auto-closing release.")
+		}
+	}
 
 	return &CreateReleaseResult{
 		Release:  release,
@@ -450,6 +459,8 @@ func (s *Service) OpenReleaseChannel(
 func (s *Service) AddPullRequestToRelease(
 	ctx context.Context,
 	releaseID, prID, addedBy pgtype.UUID,
+	issueOps IssueOps,
+	deps *StagingDeps,
 ) (db.PullRequest, error) {
 	release, err := s.Q.GetRelease(ctx, releaseID)
 	if err != nil {
@@ -494,6 +505,9 @@ func (s *Service) AddPullRequestToRelease(
 		// Soft fail — the PR is attached; risk level just stays at
 		// the previous max. The detail page recomputes anyway.
 		_ = err
+	}
+	if _, _, err := s.autoCloseReleaseIfAllPRsMerged(ctx, release.ID, issueOps, deps); err != nil {
+		return pr, fmt.Errorf("auto-close release: %w", err)
 	}
 	return pr, nil
 }
@@ -907,6 +921,36 @@ func (s *Service) autoCreateReleaseIssue(
 		return nil, warnings
 	}
 	return &issue, warnings
+}
+
+func (s *Service) autoCloseReleaseIfAllPRsMerged(
+	ctx context.Context,
+	releaseID pgtype.UUID,
+	issueOps IssueOps,
+	deps *StagingDeps,
+) (db.ShipRelease, bool, error) {
+	release, err := s.Q.GetRelease(ctx, releaseID)
+	if err != nil {
+		return db.ShipRelease{}, false, fmt.Errorf("get release: %w", err)
+	}
+	if isTerminalReleaseStage(release.Stage) {
+		return release, false, nil
+	}
+	if !releasePRsAllMerged(ctx, s.Q, releaseID) {
+		return release, false, nil
+	}
+	if issueOps != nil && release.IssueID.Valid {
+		if err := issueOps.PostReleaseIssueComment(ctx, release.IssueID, "All PRs already merged — auto-closing release."); err != nil {
+			_, _ = s.insertReleaseEvent(ctx, releaseID, "warning", pgtype.UUID{}, map[string]any{
+				"reason": "auto-close issue comment failed: " + err.Error(),
+			})
+		}
+	}
+	updated, done, err := s.TryMarkReleaseDoneOnPRMerge(ctx, releaseID, deps)
+	if err != nil {
+		return updated, done, err
+	}
+	return updated, done, nil
 }
 
 // buildReleaseIssueBody is exposed (lowercase but pkg-internal) so

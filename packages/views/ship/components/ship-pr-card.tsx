@@ -269,7 +269,22 @@ export function ShipPRCard({
   const openDrawer = useShipPrDetailStore((s) => s.open);
   const workspace = useCurrentWorkspace();
   const slug = workspace?.slug ?? "";
-  const showCheckbox = isSelected || selectionCount > 0;
+  // The selection bar's only actions are "create new release" / "add to
+  // assembling release" — both require the PR not to already belong to a
+  // release. Once `pr.active_release` is set the PR is committed to that
+  // release for the duration of its pipeline (assembling → done), so the
+  // checkbox can't lead to a useful action. Hiding it removes the visual
+  // noise on the In Production / Done columns where every card was
+  // sprouting a checkbox the user couldn't meaningfully toggle.
+  //
+  // Edge case worth noting: a PR in a TERMINAL release (done / rolled_back
+  // / cancelled) is technically re-eligible per the backend (see
+  // create-release-dialog.tsx's `eligibilityReason`). We still hide the
+  // checkbox there — retrospective-tracking-release is an unusual flow
+  // that deserves its own affordance rather than reusing the day-to-day
+  // multi-select. If we ever ship that flow, this is the gate to relax.
+  const selectionEligible = !pr.active_release;
+  const showCheckbox = selectionEligible && (isSelected || selectionCount > 0);
 
   // Click handler — opens the in-app PR detail drawer. The card was
   // previously wrapped in a GitHub-deep-link anchor; user feedback
@@ -314,9 +329,10 @@ export function ShipPRCard({
       data-testid="ship-pr-card"
       aria-label={`Open details for PR #${pr.number} ${pr.title}`}
     >
-      {/* Phase 7a — multi-select checkbox. Always rendered to keep
-          DOM stable; visually hidden until hover or until something
-          else is selected.
+      {/* Phase 7a — multi-select checkbox. Rendered only when the PR is
+          selection-eligible (not yet in a release). When eligible it stays
+          in the DOM at all times to keep tab order stable; visually hidden
+          until hover or until something else is selected.
           Click handling stops propagation on BOTH the wrapper div
           AND the Checkbox itself: Base UI Checkbox dispatches its
           internal pointer handlers before the React click listener,
@@ -325,31 +341,41 @@ export function ShipPRCard({
           trigger the card's role="button" handler and open the
           detail drawer — surfaced as "checkbox click also opens the
           sidebar". */}
-      <div
-        className={cn(
-          "absolute left-2 top-2 transition-opacity",
-          showCheckbox
-            ? "opacity-100"
-            : "opacity-0 group-hover/card:opacity-100",
-        )}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
-      >
-        <Checkbox
-          checked={isSelected}
-          onCheckedChange={() => toggleSelection(pr.id)}
-          onClick={(e) => {
-            e.stopPropagation();
-          }}
-          aria-label={`Select PR #${pr.number}`}
-          data-testid="ship-pr-card-checkbox"
-        />
-      </div>
+      {selectionEligible && (
+        <div
+          className={cn(
+            "absolute left-2 top-2 transition-opacity",
+            showCheckbox
+              ? "opacity-100"
+              : "opacity-0 group-hover/card:opacity-100",
+          )}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <Checkbox
+            checked={isSelected}
+            onCheckedChange={() => toggleSelection(pr.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+            }}
+            aria-label={`Select PR #${pr.number}`}
+            data-testid="ship-pr-card-checkbox"
+          />
+        </div>
+      )}
       {/* Author + PR number row. Avatar is just the GitHub URL — no
           additional preflight; the user already trusts the destination.
           Phase 4 — the source icon sits to the LEFT of the avatar so the
-          card's first visual signal is "where did this PR come from". */}
-      <div className="ml-6 flex items-center gap-2 text-xs text-muted-foreground">
+          card's first visual signal is "where did this PR come from".
+          The `ml-6` only applies when there's a checkbox to clear out of
+          — on selection-ineligible cards (PR is locked into a release)
+          the checkbox is gone and the row reclaims the left edge. */}
+      <div
+        className={cn(
+          "flex items-center gap-2 text-xs text-muted-foreground",
+          selectionEligible && "ml-6",
+        )}
+      >
         <SourceIcon source={pr.source} />
         {pr.author_avatar_url ? (
           <img
@@ -390,12 +416,16 @@ export function ShipPRCard({
         )}
       </div>
 
-      {/* Title — single line truncate so the card height stays predictable
-          and the Kanban columns visually align. The full title is in the
-          tooltip via the native title attribute. */}
+      {/* Title — clamp to two lines so a long title wraps once before
+          clipping instead of always disappearing into a single-line
+          ellipsis. Card heights are now mildly variable; the Kanban's
+          column alignment trades visual rigidity for legibility, which
+          operators flagged as the better default once titles started
+          carrying meaningful prefixes (ROA-NNN, scope tags, etc.). The
+          full title remains in the native tooltip for the 3+ line case. */}
       <div
         title={pr.title}
-        className="mt-1 truncate text-sm font-medium text-foreground"
+        className="mt-1 line-clamp-2 text-sm font-medium text-foreground"
       >
         {pr.title}
       </div>

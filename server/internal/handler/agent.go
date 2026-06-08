@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -670,6 +671,21 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(created.ID), "name", created.Name, "workspace_id", workspaceID)...)
 
+	// Initial revision row. The migration 120 backfill catches agents
+	// that existed at migration time; this catches every agent born
+	// after. Best-effort: if it fails the agent is still usable, but
+	// downstream consumers comparing against current_revision_* will
+	// see zero values until the first UpdateAgent.
+	if err := h.recordInitialAgentRevision(r.Context(), h.Queries, created, nil, parseUUID(ownerID)); err != nil {
+		slog.Warn("revision: record initial failed (agent already created)",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(created.ID))...)
+	} else {
+		// Re-read so the response carries the populated revision pointers.
+		if refreshed, err := h.Queries.GetAgent(r.Context(), created.ID); err == nil {
+			created = refreshed
+		}
+	}
+
 	if runtime.Status == "online" {
 		h.TaskService.ReconcileAgentStatus(r.Context(), created.ID)
 		created, _ = h.Queries.GetAgent(r.Context(), created.ID)
@@ -977,12 +993,56 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Record an agent_revision row if the trigger field set changed.
+	// UpdateAgent doesn't touch skills, so the helper sees an identical
+	// skill set on both sides — only agent-row fields can cause a bump.
+	// Best-effort: log + continue on failure. The agent IS already
+	// persisted by this point; failing the response because we couldn't
+	// write a history row would force the client to retry an idempotent
+	// no-op against a now-divergent revision number.
+	skillIDs, err := h.listAgentSkillIDs(r.Context(), existing.ID)
+	if err != nil {
+		slog.Warn("revision: list skills failed (continuing without revision record)",
+			append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+	} else {
+		actorUserID := parseUUID(requestUserID(r))
+		if _, _, err := h.recordAgentRevisionIfChanged(r.Context(), h.Queries, existing, updated, skillIDs, skillIDs, actorUserID); err != nil {
+			slog.Warn("revision: record failed (agent update persisted)",
+				append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+		} else {
+			// Re-read the agent so the response carries the just-bumped
+			// current_revision_* columns. One extra DB roundtrip, but
+			// otherwise the client would see stale pointer values and
+			// have to re-fetch to learn the new revision.
+			if refreshed, err := h.Queries.GetAgent(r.Context(), updated.ID); err == nil {
+				updated = refreshed
+			}
+		}
+	}
+
 	resp := agentToResponse(updated)
 	slog.Info("agent updated", append(logger.RequestAttrs(r), "agent_id", id, "workspace_id", uuidToString(updated.WorkspaceID))...)
 	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(updated.WorkspaceID))
 	h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), actorType, actorID, map[string]any{"agent": resp})
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// listAgentSkillIDs returns the agent's current skill ids as a slice of
+// pgtype.UUID. Used by the revision-recording helpers; intentionally
+// returns just the ids (not full skill rows) so a SetAgentSkills call
+// that changes hundreds of skills doesn't pay for hundreds of
+// description/config fetches it doesn't need.
+func (h *Handler) listAgentSkillIDs(ctx context.Context, agentID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := h.Queries.ListAgentSkills(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]pgtype.UUID, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.ID)
+	}
+	return out, nil
 }
 
 // resolveAgentProvider returns the provider name for the runtime that

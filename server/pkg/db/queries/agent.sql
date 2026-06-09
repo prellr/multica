@@ -272,17 +272,27 @@ WHERE id = $1 AND status = 'running'
 RETURNING *;
 
 -- name: GetLastChannelMentionSession :one
--- Returns the most recent channel-mention task's session_id and work_dir for a
--- given (agent_id, channel_id) pair. Phase 3 channel-mention tasks have all
--- four FK columns NULL — workspace_id and channel_id live in the JSONB
--- context — so this query filters on context->>'type' and ->>'channel_id'.
+-- Returns the most recent channel-mention task's session_id, work_dir, and
+-- runtime_id for a given (agent_id, channel_id) pair. Phase 3 channel-mention
+-- tasks have all four FK columns NULL — workspace_id and channel_id live in
+-- the JSONB context — so this query filters on context->>'type' and
+-- ->>'channel_id'.
+--
+-- runtime_id is returned so the claim handler can refuse to resume a session
+-- produced by a DIFFERENT runtime, mirroring the issue and chat paths. Agent
+-- CLI sessions are machine-local state (Claude Code transcripts live under
+-- ~/.claude on the daemon host); after a server migration the new daemon
+-- registers a new runtime row, and resuming the old runtime's session id is
+-- guaranteed to fail. The 2026-06-09 server2 move surfaced exactly this:
+-- every channel @mention died with "No conversation found with session ID"
+-- because this lookup had no runtime guard.
 --
 -- Mirrors GetLastTaskSession's leniency: 'completed' tasks plus 'failed' tasks
 -- whose failure_reason is not a known "poisoned" terminal state. Without this
 -- a daemon crash mid-reply would silently drop the conversation and the next
 -- @mention would start the agent fresh, defeating the whole point of
 -- channel-session continuity.
-SELECT session_id, work_dir FROM agent_task_queue
+SELECT session_id, work_dir, runtime_id FROM agent_task_queue
 WHERE agent_id = $1
   AND issue_id IS NULL
   AND chat_session_id IS NULL

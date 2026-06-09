@@ -479,6 +479,7 @@ func TestResolveSessionID(t *testing.T) {
 		requested string
 		emitted   string
 		failed    bool
+		numTurns  int
 		want      string
 	}{
 		{
@@ -486,6 +487,7 @@ func TestResolveSessionID(t *testing.T) {
 			requested: "",
 			emitted:   "fresh-abc",
 			failed:    false,
+			numTurns:  1,
 			want:      "fresh-abc",
 		},
 		{
@@ -493,6 +495,7 @@ func TestResolveSessionID(t *testing.T) {
 			requested: "sess-old",
 			emitted:   "sess-old",
 			failed:    false,
+			numTurns:  1,
 			want:      "sess-old",
 		},
 		{
@@ -500,6 +503,7 @@ func TestResolveSessionID(t *testing.T) {
 			requested: "sess-old",
 			emitted:   "sess-old",
 			failed:    true,
+			numTurns:  3,
 			want:      "sess-old",
 		},
 		{
@@ -507,6 +511,7 @@ func TestResolveSessionID(t *testing.T) {
 			requested: "sess-dead",
 			emitted:   "fresh-new",
 			failed:    true,
+			numTurns:  0,
 			want:      "",
 		},
 		{
@@ -514,6 +519,7 @@ func TestResolveSessionID(t *testing.T) {
 			requested: "sess-dead",
 			emitted:   "fresh-new",
 			failed:    false,
+			numTurns:  1,
 			want:      "fresh-new",
 		},
 		{
@@ -521,7 +527,29 @@ func TestResolveSessionID(t *testing.T) {
 			requested: "sess-old",
 			emitted:   "",
 			failed:    true,
+			numTurns:  0,
 			want:      "",
+		},
+		{
+			// The 2026-06-09 server2 shape: current claude CLIs echo the
+			// requested id back in the result event with num_turns 0 and
+			// exit failed. Must clear so the daemon fallback retries fresh.
+			name:      "failed resume echoing requested id with zero turns clears id",
+			requested: "sess-dead",
+			emitted:   "sess-dead",
+			failed:    true,
+			numTurns:  0,
+			want:      "",
+		},
+		{
+			// Zero-turn failure on a genuinely fresh run (no resume asked):
+			// nothing to clear, propagate whatever claude emitted.
+			name:      "zero-turn failure without resume keeps emitted id",
+			requested: "",
+			emitted:   "fresh-abc",
+			failed:    true,
+			numTurns:  0,
+			want:      "fresh-abc",
 		},
 	}
 
@@ -529,10 +557,10 @@ func TestResolveSessionID(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := resolveSessionID(tc.requested, tc.emitted, tc.failed)
+			got := resolveSessionID(tc.requested, tc.emitted, tc.failed, tc.numTurns)
 			if got != tc.want {
-				t.Fatalf("resolveSessionID(%q, %q, %v) = %q, want %q",
-					tc.requested, tc.emitted, tc.failed, got, tc.want)
+				t.Fatalf("resolveSessionID(%q, %q, %v, %d) = %q, want %q",
+					tc.requested, tc.emitted, tc.failed, tc.numTurns, got, tc.want)
 			}
 		})
 	}

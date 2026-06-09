@@ -6,6 +6,17 @@ import { useRefreshPullRequest } from "@multica/core/ship";
  *  room without hammering the API. */
 export const MERGEABLE_POLL_INTERVAL_MS = 10_000;
 
+/** Width of the random initial-tick window. Each card delays its first
+ *  poll by 0–5s ON TOP of the standard 10s grace period — so a kanban
+ *  burst that mounts 20 cards in the same render spreads their first
+ *  refresh across a 5s window instead of arriving in one ~50 ms thundering
+ *  herd (the 2026-06-09 GitHub rate-limit incident). The grace period
+ *  itself stays unchanged; this only desynchronizes simultaneous mounts.
+ *  Subsequent ticks remain on the standard interval, but starting from
+ *  the staggered first fire, so the desync persists for the full poll
+ *  window. */
+export const MERGEABLE_POLL_JITTER_MS = 5_000;
+
 /** Hard cap on poll attempts. 6 × 10s ≈ 1 minute — if GitHub still hasn't
  *  computed mergeability by then, something is wrong upstream and a
  *  manual sync is the right escape hatch. Stopping also prevents a card
@@ -21,8 +32,10 @@ export const MERGEABLE_POLL_MAX_ATTEMPTS = 6;
  * computed asynchronously — and Ship maps that to `mergeable === "UNKNOWN"`.
  * Without re-polling, the PR card shows "computing" forever until the user
  * manually syncs the project. This hook closes that gap: while the passed
- * `mergeable` value is `"UNKNOWN"`, it calls `POST /api/pull_requests/{id}/refresh`
- * every 10s, capped at 6 attempts, then stops.
+ * `mergeable` value is `"UNKNOWN"`, it calls
+ * `POST /api/pull_requests/{id}/refresh` every 10s (with 0–5s random
+ * initial jitter — see {@link MERGEABLE_POLL_JITTER_MS}), capped at 6
+ * attempts, then stops.
  *
  * It is intentionally minimal — the hook only triggers refetches. The
  * refresh mutation patches the refreshed PR row into the TanStack Query
@@ -49,10 +62,11 @@ export function useMergeablePoll(
     if (!shouldPoll) return;
 
     let attempts = 0;
+    let interval: ReturnType<typeof setInterval> | undefined;
     const tick = () => {
       attempts += 1;
       if (attempts > MERGEABLE_POLL_MAX_ATTEMPTS) {
-        clearInterval(timer);
+        if (interval !== undefined) clearInterval(interval);
         return;
       }
       // Skip overlapping triggers if a refresh is still in flight — the
@@ -61,8 +75,25 @@ export function useMergeablePoll(
       refreshRef.current.mutate();
     };
 
-    const timer = setInterval(tick, MERGEABLE_POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
+    // Stagger the FIRST tick by a per-card random offset in
+    // [0, MERGEABLE_POLL_JITTER_MS). The 10s grace period stays intact
+    // (we still wait INTERVAL_MS before the first fire); the jitter
+    // only spreads the burst when a kanban mounts many UNKNOWN cards in
+    // the same render. After the first fire we move to the standard
+    // INTERVAL_MS cadence — the desync from the staggered start carries
+    // through for the rest of the poll window.
+    const jitter = Math.random() * MERGEABLE_POLL_JITTER_MS;
+    const initialDelay = MERGEABLE_POLL_INTERVAL_MS + jitter;
+
+    const startTimer = setTimeout(() => {
+      tick();
+      interval = setInterval(tick, MERGEABLE_POLL_INTERVAL_MS);
+    }, initialDelay);
+
+    return () => {
+      clearTimeout(startTimer);
+      if (interval !== undefined) clearInterval(interval);
+    };
     // shouldPoll flips to false once mergeable resolves (the refresh
     // mutation patches the cache), which tears the interval down. prId is
     // included so switching PR identity restarts the attempt counter.

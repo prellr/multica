@@ -49,10 +49,22 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// shipHubDeployWorkflowPollInterval — every 2 minutes. See file header
-// for the rate-budget math. Exposed as a const so tests can override
-// when driving runShipHubDeployWorkflowPollOnce directly.
-const shipHubDeployWorkflowPollInterval = 2 * time.Minute
+// shipHubDeployWorkflowPollInterval — every 5 minutes.
+//
+// Bumped 2 min → 5 min on 2026-06-08 alongside the reconciler/adapter,
+// for the same rate-budget reason — see ship_hub_reconciler.go for the
+// full PAT-vs-App-token math. This poller iterated per (workspace,
+// project, environment) tuple and was responsible for the largest
+// share of post-disconnect traffic against the PAT bucket: a workspace
+// with 5 projects × 2 environments × 30 ticks/hr = 300 API calls/hr
+// just for "did Deploy Production finish?" polling. The webhook path
+// (deployment_status events) delivers in seconds so this poller is
+// the missed-webhook backstop; pushing the backstop latency from 2 min
+// to 5 min is invisible in normal operation and saves ~180 calls/hr.
+//
+// Exposed as a const so tests can override when driving
+// runShipHubDeployWorkflowPollOnce directly.
+const shipHubDeployWorkflowPollInterval = 5 * time.Minute
 
 // shipHubDeployWorkflowRunsPerPoll — how many recent runs to fetch per
 // (workspace, project, environment) tick. 10 covers the worst case of

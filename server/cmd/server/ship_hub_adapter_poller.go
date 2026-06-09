@@ -16,11 +16,15 @@ import (
 	"github.com/multica-ai/multica/server/pkg/secrets"
 )
 
-// shipHubAdapterPollInterval matches the existing Ship Hub reconciler
-// cadence. 5 minutes is a reasonable default for "recently deployed?"
-// telemetry and stays well under provider rate limits at the team
-// sizes Ship Hub targets.
-const shipHubAdapterPollInterval = 5 * time.Minute
+// shipHubAdapterPollInterval matches the Ship Hub reconciler cadence.
+//
+// Bumped 5 min → 15 min on 2026-06-08 alongside the reconciler, for
+// the same rate-budget reason — see ship_hub_reconciler.go for the
+// full PAT-vs-App-token math. Net effect: the deploy-environment
+// "current_sha" telemetry takes up to 15 min to reflect a successful
+// deploy when the deployment_status webhook misses; in practice the
+// webhook fires within seconds so the poller is mostly a backstop.
+const shipHubAdapterPollInterval = 15 * time.Minute
 
 // runShipHubAdapterPoller periodically iterates every deploy_environment
 // whose adapter supports polling and refreshes its current_sha /

@@ -13,11 +13,22 @@ import (
 )
 
 // shipHubReconcileInterval is how often the reconciler scans every
-// Ship-Hub-enabled workspace and refreshes its PR cache. 5 minutes is the
-// spec default — tight enough that PR state in the Kanban feels live, loose
-// enough that GitHub's per-token rate limit (5,000/hour) covers a fleet of
-// dozens of repos.
-const shipHubReconcileInterval = 5 * time.Minute
+// Ship-Hub-enabled workspace and refreshes its PR cache.
+//
+// 15 minutes is the post-2026-06-08 default. The original 5-minute spec
+// assumed a single workspace with a handful of repos under an active
+// GitHub App installation token (15k/hr quota). On 2026-06-08 we
+// disconnected the workspace's App (broken `account_login=unknown`
+// install path) and the system fell through to PAT-only auth, which
+// shares a 5k/hr quota with every other tool the operator runs against
+// the same account. A 5-project workspace pinging check-runs + status
+// for every open PR every 5 minutes alone was exhausting the budget
+// before any human interaction. Bumping to 15 minutes cuts the steady-
+// state pull rate by 3x while keeping the "missed-webhook backstop"
+// guarantee — the latency on a dropped webhook becomes "up to 15 min"
+// instead of "up to 5 min", which is acceptable given webhooks
+// themselves deliver in seconds when they work.
+const shipHubReconcileInterval = 15 * time.Minute
 
 // runShipHubReconciler periodically iterates every workspace with
 // ship_hub_enabled = TRUE and calls Service.SyncWorkspace on each. Errors

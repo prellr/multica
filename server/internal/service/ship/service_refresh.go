@@ -27,6 +27,17 @@ import (
 // owned by the webhook-driven targeted writers, and a live PR fetch
 // doesn't carry a reliable check rollup anyway.
 func (s *Service) RefreshPullRequest(ctx context.Context, prID pgtype.UUID) (db.PullRequest, error) {
+	// Short-circuit if this PR was refreshed within the cache TTL. See
+	// service_refresh_cache.go for the full rationale; tl;dr the
+	// useMergeablePoll hook on the frontend fires this endpoint for
+	// every UNKNOWN-mergeable card every 10s, and on a 20+ card
+	// kanban that burst exhausts the GitHub rate budget. The cache
+	// collapses the burst at the cost of "every other poll round-
+	// trips to GitHub."
+	if cached, ok := prRefreshCacheInstance.get(prID); ok {
+		return cached, nil
+	}
+
 	row, err := s.Q.GetPullRequest(ctx, prID)
 	if err != nil {
 		return db.PullRequest{}, fmt.Errorf("get pull request: %w", err)
@@ -59,5 +70,9 @@ func (s *Service) RefreshPullRequest(ctx context.Context, prID pgtype.UUID) (db.
 	if err != nil {
 		return db.PullRequest{}, fmt.Errorf("write refreshed pull request: %w", err)
 	}
+	// Cache only on the success path. A failed write or GH fetch
+	// must not pin a stale row — the next caller should retry
+	// against GitHub.
+	prRefreshCacheInstance.put(prID, updated)
 	return updated, nil
 }

@@ -157,6 +157,22 @@ func (s *Service) SyncProject(ctx context.Context, workspaceID, projectID pgtype
 			result.Errors++
 		}
 
+		// Per-(owner,repo) cache mapping head_sha → ci_status string. The
+		// only purpose is to collapse the per-PR GH fan-out when multiple
+		// PRs in this repo share the same head SHA (a release-train branch
+		// that's been retargeted, two PRs cherry-picking from the same
+		// commit, automation that opens many PRs against one base, etc.).
+		//
+		// GetCIStatus under the hood makes TWO GH calls per invocation —
+		// /commits/{sha}/status + /commits/{sha}/check-runs — so a single
+		// shared SHA saves 2N calls for N PRs. On 2026-06-09 the heatmap
+		// showed bursts where prellr/multica's commits/{sha}/check-runs
+		// path was the hottest entry; this cache flattens the per-sync
+		// portion of that pattern. The cache is scoped to one sync of one
+		// repo because a SHA's CI status can drift between syncs and we
+		// always want a fresh read on the next reconciler tick.
+		ciCache := map[string]string{}
+
 		for _, pr := range append(open, closed...) {
 			if err := s.upsertPR(ctx, workspaceID, projectID, repoURL, pr); err != nil {
 				slog.Warn("ship: upsert PR failed",
@@ -203,7 +219,7 @@ func (s *Service) SyncProject(ctx context.Context, workspaceID, projectID pgtype
 				}
 			}
 			if shouldRefresh {
-				if err := s.refreshPRCIStatus(ctx, workspaceID, repoURL, owner, repo, pr); err != nil {
+				if err := s.refreshPRCIStatus(ctx, workspaceID, repoURL, owner, repo, pr, ciCache); err != nil {
 					slog.Warn("ship: refresh PR ci_status failed",
 						"repo", result.Repo, "pr", pr.Number, "error", err)
 					// Not incrementing result.Errors — the row is
@@ -219,15 +235,25 @@ func (s *Service) SyncProject(ctx context.Context, workspaceID, projectID pgtype
 // and writes the result through the targeted UpdatePullRequestCIStatus
 // writer. Mirrors what the check_run webhook does (without needing the
 // individual per-check rows) so a missed webhook is repaired by the next
-// 5-min reconciler tick or any manual Sync Now click.
+// reconciler tick or any manual Sync Now click.
+//
+// ciCache (optional, may be nil) is a per-(owner,repo) sha→status map
+// owned by the caller — typically scoped to one SyncProject loop body
+// so multiple PRs sharing the same head SHA collapse to a single GH
+// fetch. Each GetCIStatus invocation makes two GH calls under the hood
+// (commits/{sha}/status + commits/{sha}/check-runs), so a single shared
+// SHA saves 2N calls for N colliding PRs. Pass nil to opt out and always
+// fetch (used by tests and any future caller that hasn't built a cache).
 //
 // Returns nil on success; on best-effort failures (PR row not found, GH
 // fetch fails, write fails) returns a wrapped error the caller should log
 // and move on. We never propagate refresh failures up to the SyncProject
 // caller because the row is still upserted; only the optional CI rollup
-// is missing.
-func (s *Service) refreshPRCIStatus(ctx context.Context, workspaceID pgtype.UUID, repoURL, owner, repo string, pr gh.PullRequest) error {
-	status, err := s.Github.GetCIStatus(ctx, owner, repo, pr.Head.SHA)
+// is missing. A cache hit short-circuits the GH call but still performs
+// the per-PR DB write — different PRs need their own ci_status row even
+// when the CI verdict is the same.
+func (s *Service) refreshPRCIStatus(ctx context.Context, workspaceID pgtype.UUID, repoURL, owner, repo string, pr gh.PullRequest, ciCache map[string]string) error {
+	status, err := s.fetchOrCacheCIStatus(ctx, owner, repo, pr.Head.SHA, ciCache)
 	if err != nil {
 		return fmt.Errorf("fetch ci status: %w", err)
 	}
@@ -246,6 +272,32 @@ func (s *Service) refreshPRCIStatus(ctx context.Context, workspaceID pgtype.UUID
 		return fmt.Errorf("write ci status: %w", err)
 	}
 	return nil
+}
+
+// fetchOrCacheCIStatus returns the CI status string for sha, consulting
+// ciCache first when non-nil. A cache miss does the full GetCIStatus
+// fetch (two GH calls under the hood — commits/{sha}/status and
+// commits/{sha}/check-runs) and writes the result back. Failed fetches
+// are NOT cached: a transient error must not pin an empty status for
+// the next PR that shares the SHA in the same sync.
+//
+// Extracted so the dedup behavior can be exercised in unit tests
+// without standing up a real db.Queries — the DB-touching half of
+// refreshPRCIStatus stays integration-test territory.
+func (s *Service) fetchOrCacheCIStatus(ctx context.Context, owner, repo, sha string, ciCache map[string]string) (string, error) {
+	if ciCache != nil {
+		if status, ok := ciCache[sha]; ok {
+			return status, nil
+		}
+	}
+	status, err := s.Github.GetCIStatus(ctx, owner, repo, sha)
+	if err != nil {
+		return "", err
+	}
+	if ciCache != nil {
+		ciCache[sha] = status
+	}
+	return status, nil
 }
 
 // SyncWorkspace iterates every project with at least one github_repo

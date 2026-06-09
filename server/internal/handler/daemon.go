@@ -1740,11 +1740,19 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				// re-fetching channel history. Mirrors the chat-session
 				// pattern but keyed on (agent, channel) since channel
 				// tasks have no chat_session_id.
+				//
+				// The session id is only resumable on the runtime that
+				// produced it — CLI transcripts are machine-local state —
+				// so the runtime guard here mirrors the issue and chat
+				// paths above. Without it, a server migration (new daemon
+				// host, new runtime row) keeps serving the old machine's
+				// session ids and every channel mention fails with "No
+				// conversation found" (the 2026-06-09 server2 incident).
 				if !task.ForceFreshSession && cm.ChannelID != "" {
 					if prior, err := h.Queries.GetLastChannelMentionSession(r.Context(), db.GetLastChannelMentionSessionParams{
 						AgentID:   task.AgentID,
 						ChannelID: cm.ChannelID,
-					}); err == nil && prior.SessionID.Valid {
+					}); err == nil && prior.SessionID.Valid && prior.RuntimeID == task.RuntimeID {
 						resp.PriorSessionID = prior.SessionID.String
 						if prior.WorkDir.Valid {
 							resp.PriorWorkDir = prior.WorkDir.String

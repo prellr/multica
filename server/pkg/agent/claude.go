@@ -132,6 +132,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		var sessionID string
 		finalStatus := "completed"
 		var finalError string
+		numTurns := 0
 		usage := make(map[string]TokenUsage)
 
 		// Close stdout when the context is cancelled so scanner.Scan() unblocks.
@@ -167,6 +168,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 			case "result":
 				closeStdin()
 				sessionID = msg.SessionID
+				numTurns = msg.NumTurns
 				if msg.ResultText != "" {
 					output.Reset()
 					output.WriteString(msg.ResultText)
@@ -212,11 +214,12 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 
 		b.cfg.Logger.Info("claude finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
 
-		reportedSessionID := resolveSessionID(opts.ResumeSessionID, sessionID, finalStatus == "failed")
+		reportedSessionID := resolveSessionID(opts.ResumeSessionID, sessionID, finalStatus == "failed", numTurns)
 		if reportedSessionID != sessionID {
-			b.cfg.Logger.Info("claude resume did not land; clearing fresh session id for daemon fallback",
+			b.cfg.Logger.Info("claude resume did not land; clearing session id for daemon fallback",
 				"requested_resume", opts.ResumeSessionID,
 				"emitted_session", sessionID,
+				"num_turns", numTurns,
 			)
 		}
 
@@ -491,15 +494,34 @@ func buildClaudeInput(prompt string) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-// resolveSessionID decides which session id to report on the Result. When the
-// caller requested --resume but claude emitted a fresh, different session id
-// AND the run failed, the resume did not land (claude prints
-// "No conversation found with session ID: ..." to stderr, generates a fresh
-// session, and exits). Returning "" in that case keeps the daemon's
-// retry-with-fresh-session fallback able to trigger, instead of silently
-// persisting a brand-new id as if resume had succeeded.
-func resolveSessionID(requestedResume, emitted string, failed bool) string {
-	if failed && requestedResume != "" && emitted != "" && emitted != requestedResume {
+// resolveSessionID decides which session id to report on the Result. A failed
+// `--resume` must report "" so the daemon's retry-with-fresh-session fallback
+// can trigger, instead of persisting a session pointer as if resume had
+// succeeded. Claude CLI versions differ in how a failed resume looks on the
+// wire, so two shapes are detected:
+//
+//   - Older CLIs print "No conversation found with session ID: ..." to
+//     stderr, generate a FRESH session id, and exit failed → emitted differs
+//     from requested.
+//   - Current CLIs ECHO the requested id back in the result event
+//     (`"session_id": "<requested>"`, `"num_turns": 0`) and exit failed →
+//     emitted equals requested, indistinguishable from a genuine resumed run
+//     except that zero turns ran. This shape caused the 2026-06-09 server2
+//     incident: every channel mention resumed a transcript that didn't exist
+//     on the new machine, claude echoed the id, the fallback never fired, and
+//     the task failed permanently.
+//
+// A genuinely-resumed run that fails MID-EXECUTION has numTurns > 0 and keeps
+// its id, so auto-retry can still resume the in-flight conversation (the
+// MUL-1128 B-branch behavior).
+func resolveSessionID(requestedResume, emitted string, failed bool, numTurns int) string {
+	if !failed || requestedResume == "" {
+		return emitted
+	}
+	if emitted != "" && emitted != requestedResume {
+		return ""
+	}
+	if emitted == requestedResume && numTurns == 0 {
 		return ""
 	}
 	return emitted

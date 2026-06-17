@@ -111,6 +111,14 @@ func (f *fakeShipGithub) GetCIStatus(ctx context.Context, owner, repo, sha strin
 	return "success", nil
 }
 
+// ListPullRequestsEnriched satisfies the ROA-946 addition to the interface.
+// These handler tests don't drive SyncProject's enrichment path, so the
+// default returns gh.ErrNotFound (the "no batch data" signal SyncProject
+// falls back from).
+func (f *fakeShipGithub) ListPullRequestsEnriched(_ context.Context, _, _ string, _ int) ([]gh.PullRequestEnriched, error) {
+	return nil, gh.ErrNotFound
+}
+
 // fakeShipTaskEnqueuer captures spawn calls so tests can assert on the
 // payload without standing up a real TaskService.
 type fakeShipTaskEnqueuer struct {

@@ -39,6 +39,11 @@ type fakeGithub struct {
 	// "success" so existing sync tests (which don't care about CI)
 	// keep their PRs eligible.
 	getCIStatusFn func(ctx context.Context, owner, repo, sha string) (string, error)
+	// ROA-946 — batch GraphQL PR enrichment. Default returns
+	// gh.ErrNotFound so existing sync tests fall back to the per-PR REST
+	// GetCIStatus path and keep their original call expectations. Tests
+	// exercising the GraphQL fast path set this explicitly.
+	listEnrichedFn func(ctx context.Context, owner, repo string, first int) ([]gh.PullRequestEnriched, error)
 }
 
 type ghResponse struct {
@@ -130,6 +135,15 @@ func (f *fakeGithub) GetCIStatus(ctx context.Context, owner, repo, sha string) (
 		return f.getCIStatusFn(ctx, owner, repo, sha)
 	}
 	return "success", nil
+}
+
+func (f *fakeGithub) ListPullRequestsEnriched(ctx context.Context, owner, repo string, first int) ([]gh.PullRequestEnriched, error) {
+	if f.listEnrichedFn != nil {
+		return f.listEnrichedFn(ctx, owner, repo, first)
+	}
+	// Default: signal "no batch data" so SyncProject falls back to the
+	// per-PR REST GetCIStatus path, preserving pre-ROA-946 test behavior.
+	return nil, gh.ErrNotFound
 }
 
 // ListRepoDir / GetRepoFile satisfy the introspector slice of the

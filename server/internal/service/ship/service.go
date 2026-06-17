@@ -29,6 +29,13 @@ import (
 // price for the test ergonomics.
 type GithubClient interface {
 	ListPullRequests(ctx context.Context, owner, repo string, opts gh.ListOptions) ([]gh.PullRequest, error)
+	// ListPullRequestsEnriched batch-fetches mergeable + CI rollup for all
+	// open PRs in one GraphQL query — replacing the per-PR REST fan-out
+	// (GetPullRequest for mergeable + GetCIStatus's two commit-status calls)
+	// that exhausted the core rate budget on busy repos (ROA-946). Returns
+	// gh.ErrNotFound when no configured token can see the repo, so the
+	// caller can fall back to the per-PR REST path.
+	ListPullRequestsEnriched(ctx context.Context, owner, repo string, first int) ([]gh.PullRequestEnriched, error)
 	// GetPullRequest fetches a single PR's detail, including
 	// merge_commit_sha — the merge-train reconciler needs the true
 	// merged SHA (not the head SHA) after a missed webhook.
@@ -157,7 +164,32 @@ func (s *Service) SyncProject(ctx context.Context, workspaceID, projectID pgtype
 			result.Errors++
 		}
 
+		// One GraphQL query enriches every OPEN PR (mergeable + CI rollup)
+		// so the per-PR REST fan-out below is avoided on the hot path
+		// (ROA-946): a repo with N open PRs went from ~2N+ REST calls to
+		// ~1 GraphQL call. Best-effort — on ANY failure (GraphQL outage,
+		// repo not visible to the App token) we leave `enriched` nil and
+		// fall back to the per-PR REST GetCIStatus path below, so this
+		// degrades to the old behavior rather than dropping CI state.
+		var enriched map[int]gh.PullRequestEnriched
+		if list, err := s.Github.ListPullRequestsEnriched(ctx, owner, repo, 100); err != nil {
+			slog.Warn("ship: graphql PR enrichment failed; falling back to per-PR REST",
+				"repo", result.Repo, "error", err)
+		} else {
+			enriched = make(map[int]gh.PullRequestEnriched, len(list))
+			for _, e := range list {
+				enriched[e.Number] = e
+			}
+		}
+
 		for _, pr := range append(open, closed...) {
+			// Fill mergeable from the GraphQL batch when available — the
+			// REST list endpoint omits it, so without this every open PR
+			// upserts as UNKNOWN and the frontend has to poll each one
+			// individually (its own rate-budget contributor).
+			if e, ok := enriched[pr.Number]; ok {
+				pr.Mergeable = e.MergeableBool()
+			}
 			if err := s.upsertPR(ctx, workspaceID, projectID, repoURL, pr); err != nil {
 				slog.Warn("ship: upsert PR failed",
 					"repo", result.Repo, "pr", pr.Number, "error", err)
@@ -203,7 +235,16 @@ func (s *Service) SyncProject(ctx context.Context, workspaceID, projectID pgtype
 				}
 			}
 			if shouldRefresh {
-				if err := s.refreshPRCIStatus(ctx, workspaceID, repoURL, owner, repo, pr); err != nil {
+				if e, ok := enriched[pr.Number]; ok {
+					// CI rollup already in hand from the batch GraphQL
+					// query — just write it, no per-PR GitHub call.
+					if err := s.writePRCIStatus(ctx, workspaceID, repoURL, pr.Number, e.CIStatus); err != nil {
+						slog.Warn("ship: write PR ci_status failed",
+							"repo", result.Repo, "pr", pr.Number, "error", err)
+					}
+				} else if err := s.refreshPRCIStatus(ctx, workspaceID, repoURL, owner, repo, pr); err != nil {
+					// Merged PRs (not in the OPEN-only batch) and GraphQL-
+					// miss repos still use the per-PR REST path.
 					slog.Warn("ship: refresh PR ci_status failed",
 						"repo", result.Repo, "pr", pr.Number, "error", err)
 					// Not incrementing result.Errors — the row is
@@ -231,10 +272,19 @@ func (s *Service) refreshPRCIStatus(ctx context.Context, workspaceID pgtype.UUID
 	if err != nil {
 		return fmt.Errorf("fetch ci status: %w", err)
 	}
+	return s.writePRCIStatus(ctx, workspaceID, repoURL, pr.Number, status)
+}
+
+// writePRCIStatus is the DB-write half of refreshPRCIStatus, shared with the
+// GraphQL batch path (ROA-946) which already has the CI rollup in hand and
+// must NOT make a per-PR GitHub call to re-fetch it. Looks up the PR row by
+// (workspace, repo, number) and writes ci_status through the same targeted
+// UpdatePullRequestCIStatus writer the check_run webhook uses.
+func (s *Service) writePRCIStatus(ctx context.Context, workspaceID pgtype.UUID, repoURL string, prNumber int, status string) error {
 	row, err := s.Q.GetPullRequestByNumber(ctx, db.GetPullRequestByNumberParams{
 		WorkspaceID: workspaceID,
 		RepoUrl:     repoURL,
-		PrNumber:    int32(pr.Number),
+		PrNumber:    int32(prNumber),
 	})
 	if err != nil {
 		return fmt.Errorf("lookup PR row: %w", err)

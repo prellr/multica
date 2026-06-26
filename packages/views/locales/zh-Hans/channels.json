@@ -119,6 +119,7 @@
   },
   "messages": {
     "loading": "加载消息中…",
+    "loading_older": "加载更早的消息…",
     "empty": "还没有消息。来打个招呼吧。",
     "new_messages": "新消息",
     "new_messages_aria": "新消息",

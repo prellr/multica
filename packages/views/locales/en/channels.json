@@ -119,6 +119,7 @@
   },
   "messages": {
     "loading": "Loading messages…",
+    "loading_older": "Loading older messages…",
     "empty": "No messages yet. Be the first to say hello.",
     "new_messages": "New messages",
     "new_messages_aria": "New messages",

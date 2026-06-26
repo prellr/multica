@@ -267,6 +267,87 @@ describe("ApiClient", () => {
     });
   });
 
+  describe("listChannelMessagesPage", () => {
+    // The paginated sibling preserves the { has_more, next_cursor } envelope
+    // the load-older UI depends on, and must fail closed on drift (CLAUDE.md
+    // "API Response Compatibility") — never throw into the infinite query.
+
+    it("preserves the pagination envelope", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              messages: [{ id: "m1" }, { id: "m2" }],
+              has_more: true,
+              next_cursor: "2026-01-01T00:00:00.123456Z",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        ),
+      );
+
+      const client = new ApiClient("https://api.example.test");
+      const page = await client.listChannelMessagesPage("c-1");
+      expect(page.messages).toHaveLength(2);
+      expect(page.has_more).toBe(true);
+      expect(page.next_cursor).toBe("2026-01-01T00:00:00.123456Z");
+    });
+
+    it("treats a legacy raw array as a single terminal page", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify([{ id: "m1" }]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+
+      const client = new ApiClient("https://api.example.test");
+      const page = await client.listChannelMessagesPage("c-1");
+      expect(page.messages).toHaveLength(1);
+      // No envelope ⇒ no cursor ⇒ the infinite query stops after this page.
+      expect(page.has_more).toBe(false);
+      expect(page.next_cursor).toBeNull();
+    });
+
+    it("coerces a missing/empty cursor to null and a non-true has_more to false", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            // has_more omitted, next_cursor empty-string — the terminal page.
+            JSON.stringify({ messages: [{ id: "m1" }], next_cursor: "" }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        ),
+      );
+
+      const client = new ApiClient("https://api.example.test");
+      const page = await client.listChannelMessagesPage("c-1");
+      expect(page.has_more).toBe(false);
+      expect(page.next_cursor).toBeNull();
+    });
+
+    it("returns an empty terminal page for an unknown shape rather than throwing", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ unexpected: "shape" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+
+      const client = new ApiClient("https://api.example.test");
+      const page = await client.listChannelMessagesPage("c-1");
+      expect(page).toEqual({ messages: [], has_more: false, next_cursor: null });
+    });
+  });
+
   describe("getAttachmentTextContent", () => {
     it("returns body text and the original content type from the X-* header", async () => {
       vi.stubGlobal(

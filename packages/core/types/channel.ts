@@ -102,6 +102,17 @@ export interface ChannelMessageThread {
   replies: ChannelMessage[];
 }
 
+/** One page of timeline messages (newest-first) plus the cursor needed to
+ * fetch the page of OLDER messages before it. Returned by the paginated
+ * `listChannelMessagesPage` and consumed by the infinite-query load-older
+ * flow. `next_cursor` is the created_at of the oldest message in this page;
+ * `has_more` is false once the channel's history is exhausted. */
+export interface ChannelMessagesPage {
+  messages: ChannelMessage[];
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
 /** Phase 5c — full-text search hit. Carries enough channel context that
  * results can render with a "#channel" prefix without an extra fetch. */
 export interface ChannelSearchHit extends ChannelMessage {

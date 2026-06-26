@@ -1,14 +1,15 @@
 "use client";
 
-import { Fragment, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
   agentListOptions,
   memberListOptions,
 } from "@multica/core/workspace/queries";
-import { channelMessagesOptions } from "@multica/core/channels";
+import { channelMessagesInfiniteOptions } from "@multica/core/channels";
 import { useTranscriptScroll } from "@multica/ui/hooks/use-transcript-scroll";
+import { Loader2 } from "lucide-react";
 import { ChevronDown } from "lucide-react";
 import { MessageRow } from "./message-row";
 import { useT } from "../../i18n";
@@ -68,9 +69,13 @@ export function ChannelMessageList({
 }: ChannelMessageListProps) {
   const { t } = useT("channels");
   const wsId = useWorkspaceId();
-  const { data: rawMessages = [], isLoading } = useQuery(
-    channelMessagesOptions(channelId, enabled),
-  );
+  const {
+    data,
+    isLoading,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useInfiniteQuery(channelMessagesInfiniteOptions(channelId, enabled));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const todayLabel = t(($) => $.messages.date_today);
@@ -79,9 +84,13 @@ export function ChannelMessageList({
   const memberById = new Map(members.map((m) => [m.user_id, m]));
   const agentById = new Map(agents.map((a) => [a.id, a]));
 
-  // Server returns newest-first; reverse so we render oldest at top, newest
-  // at bottom (chat convention).
-  const messages = [...rawMessages].reverse();
+  // Pages are newest-first across pages (page 0 = newest) and within a page;
+  // flatten then reverse so we render oldest at top, newest at bottom (chat
+  // convention). `hasNextPage` here means "there is OLDER history to load".
+  const messages = useMemo(
+    () => (data ? data.pages.flatMap((p) => p.messages).reverse() : []),
+    [data],
+  );
 
   // Locate the divider position: we render the "New messages" divider
   // immediately BEFORE the first message that's newer than the cursor.
@@ -118,10 +127,63 @@ export function ChannelMessageList({
     dividerBeforeIndex !== null && messages[dividerBeforeIndex]
       ? messages[dividerBeforeIndex].id
       : null;
-  const { containerRef, sentinelRef, hasNewBelow, jumpToLatest } = useTranscriptScroll({
+  const {
+    containerRef,
+    sentinelRef,
+    hasNewBelow,
+    jumpToLatest,
+    prepareForPrepend,
+    restorePrepend,
+  } = useTranscriptScroll({
     initialAnchor: anchorMessageId ? { messageId: anchorMessageId } : "bottom",
     resetKey: channelId,
   });
+
+  // ─── Load older history (#10/#12) ───────────────────────────────────────
+  // A top sentinel + IntersectionObserver fetches the next OLDER page as the
+  // reader nears the top. prepareForPrepend() captures the place before the
+  // fetch; restorePrepend() (below) puts it back once the older rows render,
+  // so loading history never moves the reader. Live values are read through a
+  // ref so the observer is set up once per channel, not re-subscribed on
+  // every fetch-state flip.
+  const topSentinelRef = useRef<HTMLDivElement | null>(null);
+  const loadStateRef = useRef({ hasNextPage, isFetchingNextPage });
+  loadStateRef.current = { hasNextPage, isFetchingNextPage };
+  // The scroll container only mounts once the list renders (the loading/empty
+  // states return earlier), so re-run when it becomes available.
+  const listMounted = !isLoading && messages.length > 0;
+  useEffect(() => {
+    const root = containerRef.current;
+    const sentinel = topSentinelRef.current;
+    if (!root || !sentinel || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        const { hasNextPage: more, isFetchingNextPage: busy } = loadStateRef.current;
+        if (more && !busy) {
+          prepareForPrepend();
+          void fetchNextPage();
+        }
+      },
+      // Preload ~1 viewport before the absolute top so the join is seamless.
+      { root, rootMargin: "400px 0px 0px 0px", threshold: 0 },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [containerRef, channelId, listMounted, fetchNextPage, prepareForPrepend]);
+
+  // Restore the reader's place once an older fetch settles. Keying on the
+  // false-edge of isFetchingNextPage (not the page count) guarantees we also
+  // release prepend suppression when a fetch returns nothing — otherwise the
+  // engine would stay pinned. Layout effect = runs after the older rows are
+  // in the DOM but before paint, so there's no visible jump.
+  const wasFetchingOlderRef = useRef(false);
+  useLayoutEffect(() => {
+    if (wasFetchingOlderRef.current && !isFetchingNextPage) {
+      restorePrepend();
+    }
+    wasFetchingOlderRef.current = isFetchingNextPage;
+  }, [isFetchingNextPage, restorePrepend]);
 
   if (isLoading && messages.length === 0) {
     return (
@@ -140,6 +202,18 @@ export function ChannelMessageList({
   return (
     <div className="relative min-h-0 flex-1">
       <div ref={containerRef} className="h-full overflow-y-auto py-1">
+        {/* Top sentinel: nearing it loads the older page (#10). */}
+        <div ref={topSentinelRef} aria-hidden className="h-px w-full" />
+        {hasNextPage ? (
+          <div className="flex items-center justify-center py-2 text-xs text-muted-foreground">
+            {isFetchingNextPage ? (
+              <span className="flex items-center gap-1.5">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {t(($) => $.messages.loading_older)}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
         {messages.map((m, i) => {
           const prev = i > 0 ? messages[i - 1] : null;
           // The unread divider visually breaks a group, so a continuation

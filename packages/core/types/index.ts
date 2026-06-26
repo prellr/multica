@@ -77,6 +77,7 @@ export type {
   ChannelMembership,
   ChannelMessage,
   ChannelMessageAttachment,
+  ChannelMessagesPage,
   ChannelReaction,
   ChannelMessageThread,
   ChannelSearchHit,

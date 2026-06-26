@@ -43,7 +43,7 @@ export function chatMessagesOptions(sessionId: string) {
     queryKey: chatKeys.messages(sessionId),
     queryFn: () => api.listChatMessages(sessionId),
     enabled: !!sessionId,
-    // See channelMessagesOptions for why this query overrides the
+    // See channelMessagesInfiniteOptions for why this query overrides the
     // global staleTime: Infinity / refetchOnWindowFocus: false defaults.
     // Short version: agent reply events sometimes miss the WS subscriber
     // (sleeping tab, race between publish and connect) and the cache

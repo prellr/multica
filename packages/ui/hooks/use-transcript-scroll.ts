@@ -94,6 +94,18 @@ export interface UseTranscriptScrollResult {
    * No-op if the element isn't found. (Principles #4/#5/#6.)
    */
   anchorNewTurn: (messageId: string) => void;
+  /**
+   * Call right BEFORE fetching an older page of history. Captures the
+   * topmost-visible message as an anchor and suppresses tail-follow while the
+   * older rows render above the viewport. (Principles #10/#12.)
+   */
+  prepareForPrepend: () => void;
+  /**
+   * Call AFTER the older page has rendered (in a layout effect). Restores the
+   * captured anchor to its prior offset so loading history never moves the
+   * reader, then re-enables normal growth handling.
+   */
+  restorePrepend: () => void;
 }
 
 interface UseTranscriptScrollOptions {
@@ -130,6 +142,13 @@ export function useTranscriptScroll(
   // While a new turn is anchored at the top, we let content grow into the
   // space below WITHOUT chasing the tail, until it overflows the viewport.
   const pinTopRef = useRef(false);
+
+  // While older history is being prepended ABOVE the viewport, growth is
+  // suppressed (it's not a tail update) and a captured top-anchor is restored
+  // so the reader's place doesn't jump (#12). prependAnchorRef holds the
+  // topmost-visible message and its offset across the prepend.
+  const prependingRef = useRef(false);
+  const prependAnchorRef = useRef<{ id: string; offset: number } | null>(null);
 
   const dispatch = useCallback((event: TranscriptScrollEvent) => {
     const next = transcriptScrollReducer(stateRef.current, event);
@@ -246,6 +265,10 @@ export function useTranscriptScroll(
     if (!el || typeof ResizeObserver === "undefined") return;
 
     const onGrow = () => {
+      // Older history is rendering ABOVE the viewport — this isn't a tail
+      // update. restorePrepend() owns the scroll position; don't follow or
+      // flag "new below" (#12).
+      if (prependingRef.current) return;
       if (stateRef.current === "reading") {
         // Content arrived offscreen — surface it, never move (#7/#8).
         if (!atLiveEdge()) setHasNewBelow(true);
@@ -347,6 +370,54 @@ export function useTranscriptScroll(
     setHasNewBelow(false);
   }, []);
 
+  // ─── Older-history prepend (#10/#12) ────────────────────────────────────
+  // The topmost message currently overlapping the viewport top, plus its
+  // offset from the scroll position. Restoring this exact pair after older
+  // rows render above keeps the reader's place to the pixel, regardless of
+  // the inserted heights.
+  const captureTopAnchor = useCallback((): { id: string; offset: number } | null => {
+    const el = containerRef.current;
+    if (!el) return null;
+    const rows = el.querySelectorAll<HTMLElement>("[data-message-id]");
+    for (const row of Array.from(rows)) {
+      // First row whose bottom is below the viewport top = topmost visible.
+      if (row.offsetTop + row.offsetHeight > el.scrollTop) {
+        const id = row.getAttribute("data-message-id");
+        if (id) return { id, offset: row.offsetTop - el.scrollTop };
+      }
+    }
+    return null;
+  }, []);
+
+  // Call right BEFORE fetching an older page. Captures the anchor and enters
+  // "prepending" mode so the growth observer ignores the inbound rows.
+  const prepareForPrepend = useCallback(() => {
+    prependingRef.current = true;
+    prependAnchorRef.current = captureTopAnchor();
+  }, [captureTopAnchor]);
+
+  // Call AFTER the older page has rendered (a layout effect). Restores the
+  // captured message to its prior offset, then releases prepending mode one
+  // frame later so the ResizeObserver burst from the new rows is absorbed.
+  const restorePrepend = useCallback(() => {
+    const el = containerRef.current;
+    const anchor = prependAnchorRef.current;
+    if (el && anchor) {
+      const row = el.querySelector<HTMLElement>(
+        `[data-message-id="${cssEscape(anchor.id)}"]`,
+      );
+      if (row) el.scrollTop = row.offsetTop - anchor.offset;
+    }
+    prependAnchorRef.current = null;
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => {
+        prependingRef.current = false;
+      });
+    } else {
+      prependingRef.current = false;
+    }
+  }, []);
+
   return {
     containerRef,
     sentinelRef,
@@ -355,6 +426,8 @@ export function useTranscriptScroll(
     jumpToLatest,
     scrollToMessage,
     anchorNewTurn,
+    prepareForPrepend,
+    restorePrepend,
   };
 }
 

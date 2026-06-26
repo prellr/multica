@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -311,15 +312,42 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		params.IncludeThreaded = true
 	}
 
+	// Permalink / deep-link path: `?around=<messageId>` returns a window
+	// centered on the target message instead of the newest page, so a shared
+	// link can land mid-history with context above and below (ROA-1138).
+	if aroundID := q.Get("around"); aroundID != "" {
+		h.listChannelMessagesAround(w, r, wsID, channelUUID, aroundID, params.Limit)
+		return
+	}
+
 	msgs, hasMore, err := h.ChannelMessageService.List(r.Context(), params)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list messages")
 		return
 	}
 
-	// Batch the reaction and thread-reply-count fetches so the timeline
-	// query stays cheap even on busy channels. Both are best-effort — a
-	// failure renders the messages without the badge rather than 500ing.
+	out := h.enrichChannelMessages(r, wsID, msgs)
+	var nextCursor string
+	if hasMore && len(msgs) > 0 {
+		// Use the raw DB timestamp at nanosecond precision so the cursor
+		// survives a round-trip through the SQL `created_at <` comparison.
+		// out[last].CreatedAt is already formatted with second precision
+		// (time.RFC3339), which truncates sub-second timestamps and causes
+		// the next page to miss messages created in the same second.
+		nextCursor = msgs[len(msgs)-1].CreatedAt.Time.UTC().Format(time.RFC3339Nano)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"messages":    out,
+		"has_more":    hasMore,
+		"next_cursor": nextCursor,
+	})
+}
+
+// enrichChannelMessages batches the reaction, thread-reply-count, and
+// attachment fetches for a page of messages into one response slice. Each
+// fetch is best-effort — a failure renders the messages without the badge
+// rather than 500ing. Shared by the newest-page and `?around=` paths.
+func (h *Handler) enrichChannelMessages(r *http.Request, wsID pgtype.UUID, msgs []db.ChannelMessage) []ChannelMessageResponse {
 	ids := make([]pgtype.UUID, len(msgs))
 	for i, m := range msgs {
 		ids[i] = m.ID
@@ -343,19 +371,43 @@ func (h *Handler) ListChannelMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		out[i] = resp
 	}
+	return out
+}
+
+// listChannelMessagesAround serves GET .../messages?around=<id>: a window of
+// messages centered on the target, newest-first, plus a cursor flag in each
+// direction (`has_more` for older, `has_more_after` for newer). Returns 404
+// when the target isn't a live top-level row of this channel.
+func (h *Handler) listChannelMessagesAround(
+	w http.ResponseWriter,
+	r *http.Request,
+	wsID, channelUUID pgtype.UUID,
+	aroundID string,
+	limit int32,
+) {
+	targetUUID, ok := parseUUIDOrBadRequest(w, aroundID, "around message id")
+	if !ok {
+		return
+	}
+	result, err := h.ChannelMessageService.ListAround(r.Context(), channelUUID, targetUUID, limit)
+	if err != nil {
+		if errors.Is(err, channel.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "message not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to list messages")
+		return
+	}
+	out := h.enrichChannelMessages(r, wsID, result.Messages)
 	var nextCursor string
-	if hasMore && len(msgs) > 0 {
-		// Use the raw DB timestamp at nanosecond precision so the cursor
-		// survives a round-trip through the SQL `created_at <` comparison.
-		// out[last].CreatedAt is already formatted with second precision
-		// (time.RFC3339), which truncates sub-second timestamps and causes
-		// the next page to miss messages created in the same second.
-		nextCursor = msgs[len(msgs)-1].CreatedAt.Time.UTC().Format(time.RFC3339Nano)
+	if result.HasMoreBefore && len(result.Messages) > 0 {
+		nextCursor = result.Messages[len(result.Messages)-1].CreatedAt.Time.UTC().Format(time.RFC3339Nano)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"messages":    out,
-		"has_more":    hasMore,
-		"next_cursor": nextCursor,
+		"messages":       out,
+		"has_more":       result.HasMoreBefore,
+		"has_more_after": result.HasMoreAfter,
+		"next_cursor":    nextCursor,
 	})
 }
 

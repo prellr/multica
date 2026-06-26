@@ -261,6 +261,59 @@ func (q *Queries) ListChannelMessages(ctx context.Context, arg ListChannelMessag
 	return items, nil
 }
 
+const listChannelMessagesAfter = `-- name: ListChannelMessagesAfter :many
+SELECT id, channel_id, author_type, author_id, content, parent_message_id, edited_at, deleted_at, deletion_reason, metadata, created_at, content_tsv FROM channel_message
+WHERE channel_id = $1
+  AND parent_message_id IS NULL
+  AND deleted_at IS NULL
+  AND created_at > $3::timestamptz
+ORDER BY created_at ASC
+LIMIT $2
+`
+
+type ListChannelMessagesAfterParams struct {
+	ChannelID      pgtype.UUID        `json:"channel_id"`
+	Limit          int32              `json:"limit"`
+	AfterCreatedAt pgtype.Timestamptz `json:"after_created_at"`
+}
+
+// Top-level timeline rows strictly NEWER than the cursor, oldest-first. The
+// forward complement of ListChannelMessages — used by the fetch-around-id
+// (permalink / deep-link) path to load the context after a target message.
+// Application layer reverses to newest-first for the wire.
+func (q *Queries) ListChannelMessagesAfter(ctx context.Context, arg ListChannelMessagesAfterParams) ([]ChannelMessage, error) {
+	rows, err := q.db.Query(ctx, listChannelMessagesAfter, arg.ChannelID, arg.Limit, arg.AfterCreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ChannelMessage{}
+	for rows.Next() {
+		var i ChannelMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.AuthorType,
+			&i.AuthorID,
+			&i.Content,
+			&i.ParentMessageID,
+			&i.EditedAt,
+			&i.DeletedAt,
+			&i.DeletionReason,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.ContentTsv,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listChannelMessagesIncludingThreads = `-- name: ListChannelMessagesIncludingThreads :many
 SELECT id, channel_id, author_type, author_id, content, parent_message_id, edited_at, deleted_at, deletion_reason, metadata, created_at, content_tsv FROM channel_message
 WHERE channel_id = $1

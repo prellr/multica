@@ -1290,3 +1290,90 @@ func channelNames(chs []db.Channel) []string {
 }
 
 func ptrActor(a Actor) *Actor { return &a }
+
+// ROA-1138 — fetch-around-id (permalink / deep-link windows). Centers a page
+// on a target message with context above and below, newest-first.
+func TestListAround(t *testing.T) {
+	if testPool == nil {
+		t.Skip("database not available")
+	}
+	t.Cleanup(func() { wipeChannels(t) })
+	ctx := context.Background()
+
+	ch, err := testService.Create(ctx, CreateChannelParams{
+		WorkspaceID: testWorkspaceID, Name: "around", DisplayName: "Around",
+		Kind: KindChannel, Visibility: VisibilityPublic, CreatedBy: memberActor(),
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	// 7 messages, oldest (index 0) → newest (index 6), one minute apart so the
+	// created_at ordering is deterministic.
+	const n = 7
+	ids := make([]pgtype.UUID, n)
+	for i := 0; i < n; i++ {
+		m, err := testMessageSvc.Create(ctx, CreateMessageParams{
+			ChannelID: ch.ID, Author: memberActor(), Content: fmt.Sprintf("m%d", i),
+		})
+		if err != nil {
+			t.Fatalf("create m%d: %v", i, err)
+		}
+		if _, err := testPool.Exec(ctx, `UPDATE channel_message SET created_at = $1 WHERE id = $2`,
+			time.Now().Add(time.Duration(i-n)*time.Minute), m.ID); err != nil {
+			t.Fatalf("backdate m%d: %v", i, err)
+		}
+		ids[i] = m.ID
+	}
+
+	// Around the middle (index 3), limit 4 → half 2 → 2 newer + target + 2 older,
+	// newest-first: [m5 m4 m3 m2 m1]. Older (m0) and newer (m6) remain → both cursors set.
+	res, err := testMessageSvc.ListAround(ctx, ch.ID, ids[3], 4)
+	if err != nil {
+		t.Fatalf("ListAround middle: %v", err)
+	}
+	want := []pgtype.UUID{ids[5], ids[4], ids[3], ids[2], ids[1]}
+	if len(res.Messages) != len(want) {
+		t.Fatalf("got %d messages, want %d", len(res.Messages), len(want))
+	}
+	for i, id := range want {
+		if res.Messages[i].ID != id {
+			t.Errorf("messages[%d] = %s, want m%d", i, uuidString(res.Messages[i].ID), 5-i)
+		}
+	}
+	if !res.HasMoreBefore || !res.HasMoreAfter {
+		t.Errorf("middle window: HasMoreBefore=%v HasMoreAfter=%v, want both true", res.HasMoreBefore, res.HasMoreAfter)
+	}
+
+	// Around the newest message: no newer rows → HasMoreAfter=false, target leads.
+	res, err = testMessageSvc.ListAround(ctx, ch.ID, ids[6], 4)
+	if err != nil {
+		t.Fatalf("ListAround newest: %v", err)
+	}
+	if res.HasMoreAfter {
+		t.Error("newest window: expected HasMoreAfter=false")
+	}
+	if !res.HasMoreBefore {
+		t.Error("newest window: expected HasMoreBefore=true")
+	}
+	if len(res.Messages) == 0 || res.Messages[0].ID != ids[6] {
+		t.Error("newest window should start with the target message")
+	}
+
+	// Unknown id → ErrNotFound (all-zero UUID never exists).
+	if _, err := testMessageSvc.ListAround(ctx, ch.ID, pgtype.UUID{Valid: true}, 4); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown id: got %v, want ErrNotFound", err)
+	}
+
+	// A thread reply is not on the timeline → ErrNotFound.
+	parent := ids[3]
+	reply, err := testMessageSvc.Create(ctx, CreateMessageParams{
+		ChannelID: ch.ID, Author: memberActor(), Content: "reply", ParentMessageID: &parent,
+	})
+	if err != nil {
+		t.Fatalf("create reply: %v", err)
+	}
+	if _, err := testMessageSvc.ListAround(ctx, ch.ID, reply.ID, 4); !errors.Is(err, ErrNotFound) {
+		t.Errorf("thread reply: got %v, want ErrNotFound", err)
+	}
+}

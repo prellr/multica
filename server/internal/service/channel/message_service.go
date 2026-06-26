@@ -112,6 +112,84 @@ func (s *MessageService) List(ctx context.Context, p ListMessagesParams) ([]db.C
 	return rows, hasMore, nil
 }
 
+// AroundResult is the window returned by ListAround: a target message plus its
+// surrounding context, newest-first, with a cursor flag in each direction.
+type AroundResult struct {
+	Messages      []db.ChannelMessage
+	HasMoreBefore bool // older messages exist beyond the window (page with `before`)
+	HasMoreAfter  bool // newer messages exist beyond the window
+}
+
+// ListAround returns a window of up to `limit` top-level messages centered on
+// `messageID` — the target plus ~limit/2 older and ~limit/2 newer, newest-first
+// — so a permalink / deep link can land mid-history with context above and
+// below (ROA-1138 / docs/transcript-scroll-engine.md §4).
+//
+// Returns ErrNotFound when the target isn't a live top-level row of this
+// channel (wrong channel, a thread reply, or soft-deleted) — you can't
+// deep-link to something that isn't on the timeline.
+func (s *MessageService) ListAround(ctx context.Context, channelID, messageID pgtype.UUID, limit int32) (AroundResult, error) {
+	if limit <= 0 {
+		limit = DefaultPageLimit
+	}
+	if limit > MaxPageLimit {
+		limit = MaxPageLimit
+	}
+
+	target, err := s.Get(ctx, messageID)
+	if err != nil {
+		return AroundResult{}, err
+	}
+	if target.ChannelID != channelID || target.ParentMessageID.Valid || target.DeletedAt.Valid {
+		return AroundResult{}, ErrNotFound
+	}
+
+	half := limit / 2
+
+	// Older: strictly before the target, newest-first. Over-fetch by one to
+	// detect whether more older messages exist.
+	older, err := s.Queries.ListChannelMessages(ctx, db.ListChannelMessagesParams{
+		ChannelID:       channelID,
+		BeforeCreatedAt: target.CreatedAt,
+		Limit:           half + 1,
+	})
+	if err != nil {
+		return AroundResult{}, err
+	}
+	hasMoreBefore := int32(len(older)) > half
+	if hasMoreBefore {
+		older = older[:half]
+	}
+
+	// Newer: strictly after the target, oldest-first. Over-fetch by one.
+	newer, err := s.Queries.ListChannelMessagesAfter(ctx, db.ListChannelMessagesAfterParams{
+		ChannelID:      channelID,
+		AfterCreatedAt: target.CreatedAt,
+		Limit:          half + 1,
+	})
+	if err != nil {
+		return AroundResult{}, err
+	}
+	hasMoreAfter := int32(len(newer)) > half
+	if hasMoreAfter {
+		newer = newer[:half]
+	}
+
+	// Assemble newest-first: newer (reverse ASC→DESC) + target + older (DESC).
+	out := make([]db.ChannelMessage, 0, len(newer)+1+len(older))
+	for i := len(newer) - 1; i >= 0; i-- {
+		out = append(out, newer[i])
+	}
+	out = append(out, target)
+	out = append(out, older...)
+
+	return AroundResult{
+		Messages:      out,
+		HasMoreBefore: hasMoreBefore,
+		HasMoreAfter:  hasMoreAfter,
+	}, nil
+}
+
 // UpdateContent edits the body of an existing message. Phase 5 contract:
 // only the original author may edit, the caller must already be the
 // resolved actor (member or agent) — admins cannot edit someone else's

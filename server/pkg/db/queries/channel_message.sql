@@ -33,6 +33,19 @@ WHERE channel_id = $1
 ORDER BY created_at DESC
 LIMIT $2;
 
+-- name: ListChannelMessagesAfter :many
+-- Top-level timeline rows strictly NEWER than the cursor, oldest-first. The
+-- forward complement of ListChannelMessages — used by the fetch-around-id
+-- (permalink / deep-link) path to load the context after a target message.
+-- Application layer reverses to newest-first for the wire.
+SELECT * FROM channel_message
+WHERE channel_id = $1
+  AND parent_message_id IS NULL
+  AND deleted_at IS NULL
+  AND created_at > sqlc.arg('after_created_at')::timestamptz
+ORDER BY created_at ASC
+LIMIT $2;
+
 -- name: ListThreadReplies :many
 -- Phase 4 surface, but the index already exists. Returns oldest-first since
 -- threads are read top-down.

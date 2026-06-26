@@ -103,6 +103,14 @@ interface UseTranscriptScrollOptions {
    * READING — used by the open-at-last-user-turn policy (#11).
    */
   initialAnchor?: "bottom" | { messageId: string };
+  /**
+   * Identity of the conversation being shown (e.g. a channel id). When it
+   * changes, the engine fully re-anchors and resets FOLLOWING/READING +
+   * `hasNewBelow`, so switching channels doesn't carry one channel's scroll
+   * state into the next. Without it, the anchor only re-runs when the anchor
+   * message id changes — which misses all-read → all-read switches.
+   */
+  resetKey?: string;
 }
 
 const LIVE_EDGE_THRESHOLD_PX = 24;
@@ -277,13 +285,17 @@ export function useTranscriptScroll(
     };
   }, [atLiveEdge, scrollToBottom]);
 
-  // ─── Initial anchor (principle #11) ─────────────────────────────────────
+  // ─── Initial anchor (principles #11, conversation reset) ────────────────
   const initialAnchor = options.initialAnchor;
   const initialKey =
     initialAnchor && initialAnchor !== "bottom" ? initialAnchor.messageId : "bottom";
+  const resetKey = options.resetKey;
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    // Re-anchoring is a full reset of scroll intent for this conversation.
+    pinTopRef.current = false;
+    setHasNewBelow(false);
     if (initialKey !== "bottom") {
       const target = el.querySelector<HTMLElement>(
         `[data-message-id="${cssEscape(initialKey)}"]`,
@@ -295,10 +307,13 @@ export function useTranscriptScroll(
         return;
       }
     }
+    stateRef.current = "following";
+    setStateRaw("following");
     scrollToBottom();
-    // Only on mount / when the open-anchor identity changes.
+    // Runs on mount, when the open-anchor identity changes, or when the
+    // conversation (resetKey) changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialKey]);
+  }, [initialKey, resetKey]);
 
   const jumpToLatest = useCallback(() => {
     pinTopRef.current = false;

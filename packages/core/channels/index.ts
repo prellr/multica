@@ -11,7 +11,8 @@ export {
   channelsListOptions,
   channelDetailOptions,
   channelMembersOptions,
-  channelMessagesOptions,
+  channelMessagesInfiniteOptions,
+  CHANNEL_PAGE_SIZE,
   channelMessageThreadOptions,
   channelSearchOptions,
 } from "./queries";

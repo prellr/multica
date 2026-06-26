@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useDefaultLayout } from "react-resizable-panels";
 import { ArrowLeft } from "lucide-react";
 import {
@@ -15,7 +15,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { paths, useCurrentWorkspace, useRequiredWorkspaceSlug } from "@multica/core/paths";
 import {
   channelDetailOptions,
-  channelMessagesOptions,
+  channelMessagesInfiniteOptions,
   channelsListOptions,
   useMarkChannelRead,
 } from "@multica/core/channels";
@@ -85,9 +85,13 @@ export function ChannelsPage({ activeChannelId }: ChannelsPageProps) {
   const { data: channel, isLoading: channelLoading } = useQuery(
     channelDetailOptions(wsId, activeChannelId ?? "", enabled && !!activeChannelId),
   );
-  const { data: messages = [] } = useQuery(
-    channelMessagesOptions(activeChannelId ?? "", enabled && !!activeChannelId),
+  // Shares the channelKeys.messages cache with the transcript's infinite
+  // query; we only need the newest message (page 0, index 0) to drive
+  // mark-read.
+  const { data: messagePages } = useInfiniteQuery(
+    channelMessagesInfiniteOptions(activeChannelId ?? "", enabled && !!activeChannelId),
   );
+  const newestMessage = messagePages?.pages[0]?.messages[0] ?? null;
   // The list response carries per-channel unread state. We freeze the
   // last_read_message_id captured at the moment the user opened this
   // channel so the unread divider doesn't jump as we mark-read.
@@ -118,17 +122,16 @@ export function ChannelsPage({ activeChannelId }: ChannelsPageProps) {
   // no-op. Optimistic messages (id starts with "optimistic-") are
   // skipped — we only persist canonical server ids.
   //
-  // The list query returns newest-first so messages[0] is the latest.
+  // newestMessage is page 0, index 0 of the infinite timeline (newest-first).
   const lastSentRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!enabled || !activeChannelId || messages.length === 0) return;
-    const newest = messages[0];
-    if (!newest || newest.id.startsWith("optimistic-")) return;
-    const key = `${activeChannelId}:${newest.id}`;
+    if (!enabled || !activeChannelId || !newestMessage) return;
+    if (newestMessage.id.startsWith("optimistic-")) return;
+    const key = `${activeChannelId}:${newestMessage.id}`;
     if (lastSentRef.current === key) return;
     lastSentRef.current = key;
-    markRead.mutate(newest.id);
-  }, [enabled, activeChannelId, messages, markRead]);
+    markRead.mutate(newestMessage.id);
+  }, [enabled, activeChannelId, newestMessage, markRead]);
 
   if (!enabled) {
     return (

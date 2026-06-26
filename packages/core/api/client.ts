@@ -104,6 +104,7 @@ import type {
   Channel,
   ChannelMembership,
   ChannelMessage,
+  ChannelMessagesPage,
   ChannelReaction,
   ChannelMessageThread,
   ChannelSearchHit,
@@ -1698,6 +1699,54 @@ export class ApiClient {
       raw,
     );
     return [];
+  }
+
+  /**
+   * Paginated sibling of {@link listChannelMessages} that preserves the
+   * `{ has_more, next_cursor }` envelope so the UI can load older history.
+   * `before` is the RFC3339(Nano) cursor returned as `next_cursor` from the
+   * previous (newer) page. Per CLAUDE.md "API Response Compatibility" this
+   * parses defensively for the bare-array (pre-#43 server) and the envelope
+   * shapes, and never throws into the UI — an unknown shape yields an empty
+   * terminal page (no `has_more`) so the infinite query simply stops.
+   */
+  async listChannelMessagesPage(
+    channelId: string,
+    params?: { before?: string; limit?: number },
+  ): Promise<ChannelMessagesPage> {
+    const search = new URLSearchParams();
+    if (params?.before) search.set("before", params.before);
+    if (params?.limit) search.set("limit", String(params.limit));
+    const qs = search.toString();
+    const raw = await this.fetch<unknown>(
+      `/api/channels/${channelId}/messages${qs ? `?${qs}` : ""}`,
+    );
+    if (Array.isArray(raw)) {
+      // Pre-#43 server: a bare array is the whole (and only) page.
+      return { messages: raw as ChannelMessage[], has_more: false, next_cursor: null };
+    }
+    if (raw && typeof raw === "object") {
+      const o = raw as {
+        messages?: unknown;
+        has_more?: unknown;
+        next_cursor?: unknown;
+      };
+      if (Array.isArray(o.messages)) {
+        return {
+          messages: o.messages as ChannelMessage[],
+          has_more: o.has_more === true,
+          next_cursor:
+            typeof o.next_cursor === "string" && o.next_cursor !== ""
+              ? o.next_cursor
+              : null,
+        };
+      }
+    }
+    console.warn(
+      "listChannelMessagesPage: unexpected response shape; returning empty page",
+      raw,
+    );
+    return { messages: [], has_more: false, next_cursor: null };
   }
 
   async sendChannelMessage(channelId: string, data: CreateChannelMessageRequest): Promise<ChannelMessage> {

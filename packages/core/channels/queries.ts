@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
 
 // Workspace scoping note: `wsId` is part of the queryKey for cache isolation
@@ -85,25 +85,38 @@ export function channelSearchOptions(
   });
 }
 
-export function channelMessagesOptions(channelId: string, enabled: boolean) {
-  return queryOptions({
+/** Page size for the channel timeline (newest page + each older page). */
+export const CHANNEL_PAGE_SIZE = 50;
+
+/**
+ * Infinite timeline for a channel. Page 0 is the newest {@link CHANNEL_PAGE_SIZE}
+ * messages; each `fetchNextPage()` loads the OLDER slice before it via the
+ * `before` cursor (`next_cursor` from the previous page). Messages are
+ * newest-first both across pages (page 0 newest) and within a page — the view
+ * flattens + reverses for display and prepends older pages above with the
+ * engine's scroll compensation so loading history never moves the reader.
+ *
+ * Keyed on `channelKeys.messages(channelId)` — the SAME key the WS
+ * `channel:message` invalidator targets, so a new message refetches the
+ * loaded pages (page 0 = newest) and surfaces without extra wiring.
+ *
+ * 30s staleTime + refetchOnWindowFocus backstop WS gaps (a tab returning from
+ * sleep refetches instead of sitting on a stale timeline); the global default
+ * is `staleTime: Infinity` since most workspace data is small + WS-driven, but
+ * channel messages are the noisy ones where missed events are visible bugs.
+ */
+export function channelMessagesInfiniteOptions(channelId: string, enabled: boolean) {
+  return infiniteQueryOptions({
     queryKey: channelKeys.messages(channelId),
-    // Default page (newest 50). Older pages are an explicit follow-up using
-    // useInfiniteQuery if/when the UI needs them.
-    queryFn: () => api.listChannelMessages(channelId, { limit: 50 }),
-    // 30s staleTime + refetchOnWindowFocus together backstop WS gaps.
-    // The primary fresh-data path is still the `channel:message` event
-    // invalidator in use-realtime-sync; this combination just ensures
-    // that a tab returning from sleep (WS reconnected, but missed
-    // events while disconnected) refetches the timeline instead of
-    // sitting on a stale "30 messages ago" cache forever.
-    //
-    // The global query-client default is `staleTime: Infinity` +
-    // `refetchOnWindowFocus: false` because most workspace data is
-    // small + WS-driven. Chat / channel messages are the noisy ones
-    // where missed events show up as visible UX bugs ("the agent
-    // replied but I have to refresh to see it"); they warrant the
-    // per-query override.
+    queryFn: ({ pageParam }) =>
+      api.listChannelMessagesPage(channelId, {
+        ...(pageParam ? { before: pageParam } : {}),
+        limit: CHANNEL_PAGE_SIZE,
+      }),
+    initialPageParam: null as string | null,
+    // "next" page = the older slice. Stop once history is exhausted.
+    getNextPageParam: (lastPage) =>
+      lastPage.has_more ? lastPage.next_cursor : undefined,
     staleTime: 30_000,
     refetchOnWindowFocus: true,
     enabled: enabled && !!channelId,

@@ -547,6 +547,18 @@ func mergeEnv(base []string, extra map[string]string) []string {
 }
 
 func isFilteredChildEnvKey(key string) bool {
+	// CLAUDE_CODE_OAUTH_TOKEN is the documented headless-auth credential
+	// (produced by `claude setup-token`). Unlike the other CLAUDE_CODE_*
+	// vars — which are session markers leaking from the daemon's OWN Claude
+	// Code process and must not bleed into the child — this one is an INPUT
+	// the operator deliberately sets to authenticate the spawned agent. A
+	// headless daemon (e.g. a macOS launchd agent with no login-Keychain
+	// access) has no other way to use a subscription token, so it must pass
+	// through. ANTHROPIC_API_KEY already passes (it isn't CLAUDE_CODE_*);
+	// this gives the subscription path parity.
+	if key == "CLAUDE_CODE_OAUTH_TOKEN" {
+		return false
+	}
 	return key == "CLAUDECODE" ||
 		strings.HasPrefix(key, "CLAUDECODE_") ||
 		strings.HasPrefix(key, "CLAUDE_CODE_")

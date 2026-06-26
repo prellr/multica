@@ -23,7 +23,8 @@
     "process_steps_other": "{{count}} 步",
     "copy_action": "复制",
     "copied_toast": "已复制",
-    "copy_failed_toast": "复制失败"
+    "copy_failed_toast": "复制失败",
+    "jump_to_latest": "跳到最新"
   },
   "session_history": {
     "untitled": "无标题",

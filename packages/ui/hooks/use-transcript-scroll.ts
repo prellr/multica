@@ -1,0 +1,356 @@
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
+
+/**
+ * useTranscriptScroll — the headless scroll engine behind first-class chat
+ * (ROA-1135 / docs/transcript-scroll-engine.md). One controller for Agent
+ * Chat, Channels, and the thread panel. Core rule: **never move the reader
+ * against their intent.**
+ *
+ * Two states:
+ *  - FOLLOWING — the live edge (bottom) is kept in view as content grows.
+ *  - READING   — the reader's place is frozen; new content accrues offscreen
+ *                and we surface `hasNewBelow` instead of moving them.
+ *
+ * What flips FOLLOWING → READING is *any* reader intent — not just scrolling:
+ * wheel-up, upward touch drag, keyboard navigation, a non-collapsed text
+ * selection, or focusing a message. READING → FOLLOWING happens only on an
+ * explicit return (reaching the live edge by scrolling, or `jumpToLatest`).
+ *
+ * The transition rules are extracted into `transcriptScrollReducer` so they're
+ * unit-testable without layout (jsdom has no real scroll metrics).
+ */
+
+export type TranscriptScrollState = "following" | "reading";
+
+export type TranscriptScrollEvent =
+  /** Any signal the reader wants to stay put (scroll up, select, keyboard…). */
+  | { type: "reader-intent" }
+  /** The bottom sentinel entered view — reader is at the live edge. */
+  | { type: "reached-live-edge" }
+  /** Explicit "jump to latest" affordance. */
+  | { type: "jump-to-latest" };
+
+export function transcriptScrollReducer(
+  state: TranscriptScrollState,
+  event: TranscriptScrollEvent,
+): TranscriptScrollState {
+  switch (event.type) {
+    case "reader-intent":
+      return "reading";
+    case "reached-live-edge":
+    case "jump-to-latest":
+      return "following";
+    default:
+      return state;
+  }
+}
+
+/**
+ * Classify a wheel event as reader intent. Upward wheel (deltaY < 0) is an
+ * unambiguous "I want to read up" signal. Downward wheel is left to the
+ * sentinel: reaching the live edge re-enters FOLLOWING on its own.
+ */
+export function isUpwardWheel(deltaY: number): boolean {
+  return deltaY < 0;
+}
+
+/**
+ * Keys that express "I'm navigating/reading, don't move me": page/line up,
+ * Home, and Shift+Space (scroll up). Down-direction keys are intentionally
+ * NOT intent — they walk toward the live edge, where the sentinel takes over.
+ */
+export function isNavigationIntentKey(
+  key: string,
+  shiftKey: boolean,
+): boolean {
+  switch (key) {
+    case "PageUp":
+    case "ArrowUp":
+    case "Home":
+      return true;
+    case " ":
+    case "Spacebar":
+      return shiftKey;
+    default:
+      return false;
+  }
+}
+
+export interface UseTranscriptScrollResult {
+  /** Attach to the scrollable container. */
+  containerRef: RefObject<HTMLDivElement | null>;
+  /** Attach to a zero-height element rendered as the LAST child (live edge). */
+  sentinelRef: RefObject<HTMLDivElement | null>;
+  state: TranscriptScrollState;
+  /** True while READING and new content has arrived below the fold. */
+  hasNewBelow: boolean;
+  /** Return to the live edge and resume FOLLOWING. */
+  jumpToLatest: () => void;
+  /** Scroll a message into view (by `data-message-id`); enters READING. */
+  scrollToMessage: (messageId: string) => void;
+  /**
+   * Anchor a new turn (by `data-message-id`) near the top of the viewport and
+   * let the answer grow into the space below — instead of pinning the tail.
+   * No-op if the element isn't found. (Principles #4/#5/#6.)
+   */
+  anchorNewTurn: (messageId: string) => void;
+}
+
+interface UseTranscriptScrollOptions {
+  /**
+   * Where to land on first content / dependency change. "bottom" (default)
+   * starts at the live edge in FOLLOWING. A `data-message-id` anchors there in
+   * READING — used by the open-at-last-user-turn policy (#11).
+   */
+  initialAnchor?: "bottom" | { messageId: string };
+}
+
+const LIVE_EDGE_THRESHOLD_PX = 24;
+
+export function useTranscriptScroll(
+  options: UseTranscriptScrollOptions = {},
+): UseTranscriptScrollResult {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  // State is mirrored into a ref so the imperative observer callbacks read the
+  // latest value without re-subscribing on every transition.
+  const [state, setStateRaw] = useState<TranscriptScrollState>("following");
+  const stateRef = useRef<TranscriptScrollState>("following");
+  const [hasNewBelow, setHasNewBelow] = useState(false);
+
+  // While a new turn is anchored at the top, we let content grow into the
+  // space below WITHOUT chasing the tail, until it overflows the viewport.
+  const pinTopRef = useRef(false);
+
+  const dispatch = useCallback((event: TranscriptScrollEvent) => {
+    const next = transcriptScrollReducer(stateRef.current, event);
+    if (next !== stateRef.current) {
+      stateRef.current = next;
+      setStateRaw(next);
+    }
+    if (next === "following") setHasNewBelow(false);
+  }, []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }, []);
+
+  const atLiveEdge = useCallback((): boolean => {
+    const el = containerRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < LIVE_EDGE_THRESHOLD_PX;
+  }, []);
+
+  // ─── Intent listeners (principle #3) ────────────────────────────────────
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (isUpwardWheel(e.deltaY)) {
+        pinTopRef.current = false;
+        dispatch({ type: "reader-intent" });
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isNavigationIntentKey(e.key, e.shiftKey)) {
+        pinTopRef.current = false;
+        dispatch({ type: "reader-intent" });
+      }
+    };
+    let touchStartY = 0;
+    const onTouchStart = (e: TouchEvent) => {
+      touchStartY = e.touches[0]?.clientY ?? 0;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0]?.clientY ?? 0;
+      // Finger moving DOWN drags content down = reading upward.
+      if (y - touchStartY > 8) {
+        pinTopRef.current = false;
+        dispatch({ type: "reader-intent" });
+      }
+    };
+    // Text selection anywhere inside the transcript is intent — this is what
+    // fixes "yanked mid-copy". Debounced via rAF to avoid per-range churn.
+    let selRaf = 0;
+    const onSelectionChange = () => {
+      if (selRaf) return;
+      selRaf = requestAnimationFrame(() => {
+        selRaf = 0;
+        const sel = document.getSelection();
+        if (!sel || sel.isCollapsed) return;
+        const anchor = sel.anchorNode;
+        if (anchor && el.contains(anchor)) {
+          dispatch({ type: "reader-intent" });
+        }
+      });
+    };
+    const onFocusIn = (e: FocusEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("[data-message-id]")) {
+        dispatch({ type: "reader-intent" });
+      }
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: true });
+    el.addEventListener("keydown", onKeyDown);
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
+    el.addEventListener("focusin", onFocusIn);
+    document.addEventListener("selectionchange", onSelectionChange);
+
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("keydown", onKeyDown);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("selectionchange", onSelectionChange);
+      if (selRaf) cancelAnimationFrame(selRaf);
+    };
+  }, [dispatch]);
+
+  // ─── Live-edge sentinel (principles #2/#9) ──────────────────────────────
+  useEffect(() => {
+    const root = containerRef.current;
+    const sentinel = sentinelRef.current;
+    if (!root || !sentinel || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.some((e) => e.isIntersecting);
+        if (visible) {
+          pinTopRef.current = false;
+          dispatch({ type: "reached-live-edge" });
+        }
+      },
+      { root, threshold: 0 },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [dispatch]);
+
+  // ─── Growth handling (principles #1/#4/#5/#7/#8) ─────────────────────────
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+
+    const onGrow = () => {
+      if (stateRef.current === "reading") {
+        // Content arrived offscreen — surface it, never move (#7/#8).
+        if (!atLiveEdge()) setHasNewBelow(true);
+        return;
+      }
+      // FOLLOWING:
+      if (pinTopRef.current) {
+        // New turn is anchored at top; let it grow into the space below until
+        // it would overflow the viewport, THEN resume tail-follow (#4/#5).
+        if (el.scrollHeight - el.scrollTop > el.clientHeight + LIVE_EDGE_THRESHOLD_PX) {
+          pinTopRef.current = false;
+          scrollToBottom();
+        }
+        return;
+      }
+      scrollToBottom();
+    };
+
+    const ro = new ResizeObserver(onGrow);
+    // Observe the content wrapper (first child) plus the container itself.
+    ro.observe(el);
+    for (const child of Array.from(el.children)) ro.observe(child);
+
+    const mo = new MutationObserver((muts) => {
+      for (const m of muts) {
+        for (const node of Array.from(m.addedNodes)) {
+          if (node instanceof Element) ro.observe(node);
+        }
+      }
+      onGrow();
+    });
+    mo.observe(el, { childList: true, subtree: true });
+
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, [atLiveEdge, scrollToBottom]);
+
+  // ─── Initial anchor (principle #11) ─────────────────────────────────────
+  const initialAnchor = options.initialAnchor;
+  const initialKey =
+    initialAnchor && initialAnchor !== "bottom" ? initialAnchor.messageId : "bottom";
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (initialKey !== "bottom") {
+      const target = el.querySelector<HTMLElement>(
+        `[data-message-id="${cssEscape(initialKey)}"]`,
+      );
+      if (target) {
+        target.scrollIntoView({ block: "start", behavior: "auto" });
+        stateRef.current = "reading";
+        setStateRaw("reading");
+        return;
+      }
+    }
+    scrollToBottom();
+    // Only on mount / when the open-anchor identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialKey]);
+
+  const jumpToLatest = useCallback(() => {
+    pinTopRef.current = false;
+    scrollToBottom("smooth");
+    dispatch({ type: "jump-to-latest" });
+  }, [dispatch, scrollToBottom]);
+
+  const scrollToMessage = useCallback((messageId: string) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const target = el.querySelector<HTMLElement>(
+      `[data-message-id="${cssEscape(messageId)}"]`,
+    );
+    if (!target) return;
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    dispatch({ type: "reader-intent" });
+  }, [dispatch]);
+
+  const anchorNewTurn = useCallback((messageId: string) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const target = el.querySelector<HTMLElement>(
+      `[data-message-id="${cssEscape(messageId)}"]`,
+    );
+    if (!target) return;
+    target.scrollIntoView({ block: "start", behavior: "auto" });
+    // Stay in FOLLOWING but pin the top until the answer overflows (#4/#5).
+    pinTopRef.current = true;
+    stateRef.current = "following";
+    setStateRaw("following");
+    setHasNewBelow(false);
+  }, []);
+
+  return {
+    containerRef,
+    sentinelRef,
+    state,
+    hasNewBelow,
+    jumpToLatest,
+    scrollToMessage,
+    anchorNewTurn,
+  };
+}
+
+/**
+ * Minimal CSS.escape shim — message ids are UUIDs (safe), but querySelector
+ * still needs escaping for the rare non-UUID id, and CSS.escape is absent in
+ * some test/SSR environments.
+ */
+function cssEscape(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/["\\\]]/g, "\\$&");
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@multica/ui/lib/utils";
@@ -18,7 +18,7 @@ import {
 } from "@multica/ui/components/ui/tooltip";
 import { ChevronRight, ChevronDown, Brain, AlertCircle, AlertTriangle, Copy } from "lucide-react";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
-import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";
+import { useTranscriptScroll } from "@multica/ui/hooks/use-transcript-scroll";
 import { taskMessagesOptions } from "@multica/core/chat/queries";
 import { Markdown } from "@multica/views/common/markdown";
 import { copyMarkdown } from "../../editor";
@@ -49,11 +49,29 @@ export function ChatMessageList({
   pendingTask,
   availability,
 }: ChatMessageListProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const fadeStyle = useScrollFade(scrollRef);
-  useAutoScroll(scrollRef);
+  const { t } = useT("chat");
+  const { containerRef, sentinelRef, hasNewBelow, jumpToLatest, anchorNewTurn } =
+    useTranscriptScroll();
+  const fadeStyle = useScrollFade(containerRef);
 
   const pendingTaskId = pendingTask?.task_id ?? null;
+
+  // New turn: when a task starts (the user just sent a message), anchor that
+  // user message near the top so the streamed answer reads from its first
+  // line and grows into the space below — instead of pinning the tail
+  // (ROA-1135 principles #4/#5). Keyed on pendingTaskId so it fires once per
+  // turn, after the user message has rendered with its data-message-id.
+  useEffect(() => {
+    if (!pendingTaskId) return;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m && m.role === "user") {
+        anchorNewTurn(m.id);
+        break;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingTaskId]);
 
   // Once the assistant message for this pending task has landed in the
   // messages list, AssistantMessage owns its rendering — suppress the live
@@ -75,32 +93,53 @@ export function ChatMessageList({
   const showStatusPill = !!pendingTaskId && !pendingAlreadyPersisted && !!pendingTask;
 
   return (
-    <div ref={scrollRef} style={fadeStyle} className="flex-1 overflow-y-auto">
-      {/* Inner container matches issue / project detail width convention
-       *  (max-w-4xl + mx-auto) so switching between chat and content
-       *  views doesn't jolt the reading width. px-5 is a touch tighter
-       *  than issue-detail's px-8 because the chat window can be narrow. */}
-      <div className="mx-auto w-full max-w-4xl px-5 py-4 space-y-4">
-        {messages.map((msg) => (
-          <MessageBubble
-            key={msg.id}
-            message={msg}
-            isPending={!!pendingTaskId && msg.task_id === pendingTaskId}
-          />
-        ))}
-        {hasLive && (
-          <div className="w-full space-y-1.5">
-            <TimelineView items={liveTimeline} isStreaming />
-          </div>
-        )}
-        {showStatusPill && pendingTask && (
-          <TaskStatusPill
-            pendingTask={pendingTask}
-            taskMessages={liveTaskMessages ?? []}
-            availability={availability}
-          />
-        )}
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div ref={containerRef} style={fadeStyle} className="flex-1 overflow-y-auto">
+        {/* Inner container matches issue / project detail width convention
+         *  (max-w-4xl + mx-auto) so switching between chat and content
+         *  views doesn't jolt the reading width. px-5 is a touch tighter
+         *  than issue-detail's px-8 because the chat window can be narrow. */}
+        <div className="mx-auto w-full max-w-4xl px-5 py-4 space-y-4">
+          {messages.map((msg) => (
+            // data-message-id is the engine's anchor handle — used by
+            // anchorNewTurn (#4) and scrollToMessage (deep links, #10).
+            <div key={msg.id} data-message-id={msg.id}>
+              <MessageBubble
+                message={msg}
+                isPending={!!pendingTaskId && msg.task_id === pendingTaskId}
+              />
+            </div>
+          ))}
+          {hasLive && (
+            <div className="w-full space-y-1.5">
+              <TimelineView items={liveTimeline} isStreaming />
+            </div>
+          )}
+          {showStatusPill && pendingTask && (
+            <TaskStatusPill
+              pendingTask={pendingTask}
+              taskMessages={liveTaskMessages ?? []}
+              availability={availability}
+            />
+          )}
+          {/* Live-edge sentinel — the engine's IntersectionObserver watches
+           *  this to know when the reader is at the bottom (FOLLOWING). */}
+          <div ref={sentinelRef} aria-hidden className="h-px w-full" />
+        </div>
       </div>
+      {hasNewBelow && (
+        <div className="pointer-events-none absolute bottom-3 left-0 right-0 flex justify-center">
+          <button
+            type="button"
+            onClick={jumpToLatest}
+            aria-label={t(($) => $.message_list.jump_to_latest)}
+            className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-md hover:bg-primary/90"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+            {t(($) => $.message_list.jump_to_latest)}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

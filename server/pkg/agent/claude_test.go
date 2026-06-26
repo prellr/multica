@@ -367,6 +367,9 @@ func TestMergeEnvFiltersClaudeCodeVars(t *testing.T) {
 		"CLAUDECODE=1",
 		"CLAUDE_CODE_ENTRYPOINT=cli",
 		"CLAUDECODEX=keep-me",
+		// The headless-auth token must survive the filter — a launchd
+		// daemon with no Keychain access relies on it for subscription auth.
+		"CLAUDE_CODE_OAUTH_TOKEN=tok-123",
 	}, map[string]string{"FOO": "bar"})
 
 	for _, entry := range env {
@@ -388,6 +391,21 @@ func TestMergeEnvFiltersClaudeCodeVars(t *testing.T) {
 	}
 	if !found["FOO=bar"] {
 		t.Fatalf("expected extra env var to be appended, got %v", env)
+	}
+	if !found["CLAUDE_CODE_OAUTH_TOKEN=tok-123"] {
+		t.Fatalf("expected CLAUDE_CODE_OAUTH_TOKEN to pass through for headless auth, got %v", env)
+	}
+}
+
+func TestIsFilteredChildEnvKey_OAuthTokenExempt(t *testing.T) {
+	t.Parallel()
+	if isFilteredChildEnvKey("CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Fatal("CLAUDE_CODE_OAUTH_TOKEN must NOT be filtered (headless subscription auth)")
+	}
+	for _, k := range []string{"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDECODE_FOO"} {
+		if !isFilteredChildEnvKey(k) {
+			t.Errorf("%q should still be filtered", k)
+		}
 	}
 }
 

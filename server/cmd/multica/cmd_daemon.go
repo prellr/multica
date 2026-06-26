@@ -326,8 +326,14 @@ func runDaemonForeground(cmd *cobra.Command) error {
 	if d, _ := cmd.Flags().GetDuration("heartbeat-interval"); d > 0 {
 		overrides.HeartbeatInterval = d
 	}
-	if d, _ := cmd.Flags().GetDuration("agent-timeout"); d > 0 {
-		overrides.AgentTimeout = d
+	// AgentTimeout: the override is now a *time.Duration so an explicit
+	// `--agent-timeout 0` (operator opting out of the wall-clock cap) can be
+	// distinguished from "flag not passed at all". Set the pointer only when
+	// the flag was changed; the LoadConfig path falls back to env/default
+	// when the pointer is nil.
+	if cmd.Flags().Changed("agent-timeout") {
+		d, _ := cmd.Flags().GetDuration("agent-timeout")
+		overrides.AgentTimeout = &d
 	}
 	if d, _ := cmd.Flags().GetDuration("codex-semantic-inactivity-timeout"); d > 0 {
 		overrides.CodexSemanticInactivityTimeout = d

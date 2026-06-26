@@ -30,10 +30,6 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 	}
 
 	timeout := opts.Timeout
-	if timeout == 0 {
-		timeout = 20 * time.Minute
-	}
-
 	// Pi's --session flag expects a file path where events are appended.
 	// The path doubles as our opaque session identifier: we return it as
 	// SessionID and expect it back as ResumeSessionID on the next turn.
@@ -49,7 +45,7 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 		return nil, fmt.Errorf("pi session file: %w", err)
 	}
 
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	runCtx, cancel := runContext(ctx, timeout)
 
 	args := buildPiArgs(prompt, sessionPath, opts, b.cfg.Logger)
 

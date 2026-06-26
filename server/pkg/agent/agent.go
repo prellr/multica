@@ -43,6 +43,20 @@ type ExecOptions struct {
 	ThinkingLevel string
 }
 
+// runContext derives the execution context for an agent subprocess from the
+// configured per-run timeout. A positive timeout imposes a hard wall-clock
+// deadline; a zero (or negative) timeout imposes NO deadline, leaving liveness
+// entirely to the daemon's inactivity watchdog so a session that keeps emitting
+// events is never killed merely for running long (ported from upstream MUL-3064
+// — see fix(daemon) commit 3708fb0f0). The caller owns the returned CancelFunc
+// and must call it to release resources, exactly as with context.WithTimeout.
+func runContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout > 0 {
+		return context.WithTimeout(ctx, timeout)
+	}
+	return context.WithCancel(ctx)
+}
+
 // Session represents a running agent execution.
 type Session struct {
 	// Messages streams events as the agent works. The channel is closed

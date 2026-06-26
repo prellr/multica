@@ -897,6 +897,29 @@ export function useRealtimeSync(
       }
     });
 
+    // Channel lifecycle (create / rename / archive) — keep the sidebar list
+    // live without a refresh. The originating client also invalidates via its
+    // mutation, but these propagate the change to every other tab and member:
+    // a new release coordination channel appears in real time, a rename
+    // updates, and an archive drops out of the list. `updated` also refreshes
+    // the open channel's detail (header title / settings).
+    const invalidateChannelList = () => {
+      const wsId = getCurrentWsId();
+      if (wsId) qc.invalidateQueries({ queryKey: channelKeys.list(wsId) });
+    };
+    const unsubChannelCreated = ws.on("channel:created", invalidateChannelList);
+    const unsubChannelArchived = ws.on("channel:archived", invalidateChannelList);
+    const unsubChannelUpdated = ws.on("channel:updated", (p) => {
+      invalidateChannelList();
+      const payload = p as { channel_id?: string };
+      const wsId = getCurrentWsId();
+      if (wsId && payload?.channel_id) {
+        qc.invalidateQueries({
+          queryKey: channelKeys.detail(wsId, payload.channel_id),
+        });
+      }
+    });
+
     // Ship Hub: PR sync completion → refetch the affected project's PR list
     // (every state filter — open / closed / merged / all share the same
     // backing data). Also bumps the workspace project list so the open-PR
@@ -1288,6 +1311,9 @@ export function useRealtimeSync(
       unsubChannelReactionRemoved();
       unsubChannelMessageUpdated();
       unsubChannelMessageDeleted();
+      unsubChannelCreated();
+      unsubChannelArchived();
+      unsubChannelUpdated();
       unsubPullRequestSynced();
       unsubPullRequestStateChanged();
       unsubDeployStarted();

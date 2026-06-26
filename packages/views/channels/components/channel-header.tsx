@@ -116,6 +116,19 @@ export function ChannelHeader({ channel, enabled }: ChannelHeaderProps) {
   );
   const isAdmin = selfMembership?.role === "admin";
 
+  // Workspace owners/admins can manage any channel they belong to. The
+  // backend authorizes archive/update on channel *access*, not channel
+  // role, so a channel they're a member of but didn't create — e.g. an
+  // auto-created release coordination channel — is fair game. Without this,
+  // system-created channels have no archive affordance for anyone but the
+  // (often non-human) creator, so they pile up in the sidebar forever.
+  const selfWorkspaceRole = workspaceMembers.find(
+    (m) => m.user_id === selfUserId,
+  )?.role;
+  const isWorkspaceAdmin =
+    selfWorkspaceRole === "owner" || selfWorkspaceRole === "admin";
+  const canManageChannel = isAdmin || isWorkspaceAdmin;
+
   const handleArchive = () => {
     setArchiveConfirmOpen(false);
     archiveMut.mutate(channel.id, {
@@ -170,7 +183,7 @@ export function ChannelHeader({ channel, enabled }: ChannelHeaderProps) {
           <Users className="mr-2 h-4 w-4" />
           {members.length}
         </Button>
-        {isAdmin && (
+        {canManageChannel && (
           <DropdownMenu>
             <DropdownMenuTrigger
               render={

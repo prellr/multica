@@ -98,22 +98,31 @@ export function MessageRow(props: MessageRowProps) {
   // thread continuity isn't broken (replies under it still render).
   if (message.deleted_at) {
     return (
-      <div className="px-4 py-0.5 text-sm italic text-muted-foreground">
+      <div
+        data-message-id={message.id}
+        className="px-4 py-0.5 text-sm italic text-muted-foreground"
+      >
         {t(($) => $.messages.deleted_placeholder)}
       </div>
     );
   }
 
+  // data-message-id is the transcript engine's anchor handle (ROA-1135):
+  // the unread open-anchor, scrollToMessage (permalinks), and focus-intent
+  // detection all key on it. A passthrough wrapper keeps MessageRowBody's
+  // layout untouched.
   return (
-    <MessageRowBody
-      {...props}
-      name={name}
-      isAgent={isAgent}
-      isOwnMessage={isOwnMessage}
-      onOpenThread={onOpenThread}
-      disableReplyAction={disableReplyAction}
-      channelId={channelId}
-    />
+    <div data-message-id={message.id}>
+      <MessageRowBody
+        {...props}
+        name={name}
+        isAgent={isAgent}
+        isOwnMessage={isOwnMessage}
+        onOpenThread={onOpenThread}
+        disableReplyAction={disableReplyAction}
+        channelId={channelId}
+      />
+    </div>
   );
 }
 

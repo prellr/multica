@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
@@ -8,6 +8,7 @@ import {
   memberListOptions,
 } from "@multica/core/workspace/queries";
 import { channelMessagesOptions } from "@multica/core/channels";
+import { useTranscriptScroll } from "@multica/ui/hooks/use-transcript-scroll";
 import { ChevronDown } from "lucide-react";
 import { MessageRow } from "./message-row";
 import { useT } from "../../i18n";
@@ -107,70 +108,20 @@ export function ChannelMessageList({
     return idx + 1;
   }, [messages, initialUnreadCursor]);
 
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const dividerRef = useRef<HTMLDivElement | null>(null);
-  const initialScrollDoneRef = useRef<{ channelId: string | null }>({ channelId: null });
-  const prevCountRef = useRef(messages.length);
-  const isAtBottomRef = useRef(true);
-  const [hasNewMessages, setHasNewMessages] = useState(false);
-
-  // Channel switch resets initial-scroll bookkeeping so the new channel
-  // gets its own anchor decision (divider into view OR scroll to bottom).
-  useEffect(() => {
-    initialScrollDoneRef.current = { channelId: null };
-    prevCountRef.current = 0;
-    isAtBottomRef.current = true;
-    setHasNewMessages(false);
-  }, [channelId]);
-
-  const handleScroll = () => {
-    const el = containerRef.current;
-    if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-    isAtBottomRef.current = atBottom;
-    if (atBottom) setHasNewMessages(false);
-  };
-
-  const scrollToBottom = () => {
-    const el = containerRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-    setHasNewMessages(false);
-  };
-
-  // First render with messages: anchor to divider if we have one, else
-  // scroll to bottom. Subsequent message arrivals fall through to the
-  // "tail" effect below.
-  useEffect(() => {
-    if (initialScrollDoneRef.current.channelId === channelId) return;
-    if (messages.length === 0) return;
-    const el = containerRef.current;
-    if (!el) return;
-    const divider = dividerRef.current;
-    if (divider) {
-      divider.scrollIntoView({ block: "center", behavior: "auto" });
-    } else {
-      el.scrollTop = el.scrollHeight;
-    }
-    initialScrollDoneRef.current = { channelId };
-    prevCountRef.current = messages.length;
-  }, [channelId, messages.length, dividerBeforeIndex]);
-
-  // Tail behavior: on new messages after initial scroll, preserve scroll
-  // position unless the user is already following the bottom.
-  useEffect(() => {
-    if (initialScrollDoneRef.current.channelId !== channelId) return;
-    if (messages.length > prevCountRef.current) {
-      const el = containerRef.current;
-      if (el) {
-        if (isAtBottomRef.current) {
-          el.scrollTop = el.scrollHeight;
-        } else {
-          setHasNewMessages(true);
-        }
-      }
-    }
-    prevCountRef.current = messages.length;
-  }, [channelId, messages.length]);
+  // Scroll behavior is owned by the shared transcript engine (ROA-1135):
+  // intent-aware FOLLOWING/READING (text-selection, keyboard, wheel — not
+  // just scrollTop), a live-edge sentinel, and jump-to-latest. Open policy
+  // (#11): anchor to the first unread message when there's an unread divider,
+  // else open at the live edge. resetKey=channelId re-anchors + resets state
+  // on every channel switch.
+  const anchorMessageId =
+    dividerBeforeIndex !== null && messages[dividerBeforeIndex]
+      ? messages[dividerBeforeIndex].id
+      : null;
+  const { containerRef, sentinelRef, hasNewBelow, jumpToLatest } = useTranscriptScroll({
+    initialAnchor: anchorMessageId ? { messageId: anchorMessageId } : "bottom",
+    resetKey: channelId,
+  });
 
   if (isLoading && messages.length === 0) {
     return (
@@ -188,7 +139,7 @@ export function ChannelMessageList({
   }
   return (
     <div className="relative min-h-0 flex-1">
-      <div ref={containerRef} className="h-full overflow-y-auto py-1" onScroll={handleScroll}>
+      <div ref={containerRef} className="h-full overflow-y-auto py-1">
         {messages.map((m, i) => {
           const prev = i > 0 ? messages[i - 1] : null;
           // The unread divider visually breaks a group, so a continuation
@@ -215,7 +166,6 @@ export function ChannelMessageList({
               ) : null}
               {dividerBeforeIndex === i ? (
                 <UnreadDivider
-                  ref={dividerRef}
                   ariaLabel={t(($) => $.messages.new_messages_aria)}
                   label={t(($) => $.messages.new_messages)}
                 />
@@ -231,11 +181,14 @@ export function ChannelMessageList({
             </Fragment>
           );
         })}
+        {/* Live-edge sentinel for the engine's IntersectionObserver. */}
+        <div ref={sentinelRef} aria-hidden className="h-px w-full" />
       </div>
-      {hasNewMessages && (
+      {hasNewBelow && (
         <div className="pointer-events-none absolute bottom-2 left-0 right-0 flex justify-center">
           <button
-            onClick={scrollToBottom}
+            type="button"
+            onClick={jumpToLatest}
             className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-md hover:bg-primary/90"
           >
             <ChevronDown className="h-3.5 w-3.5" />

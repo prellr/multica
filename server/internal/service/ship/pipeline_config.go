@@ -332,31 +332,31 @@ func DefaultDirectToProdConfig() PipelineConfig {
 // DefaultStagedStrictConfig — canonical shape for projects with a
 // promote-to-prod gate that requires manual operator action
 // (e.g. safra-360: push to main → auto staging via workflow_run, prod
-// via workflow_dispatch). Six columns capture the full lifecycle.
+// via workflow_dispatch). Four columns capture the lifecycle the kanban
+// can actually render.
+//
+// The "merged" (Merged to main) and "staging_verified" (Staging
+// verified) stages were dropped: their ids are not in the kanban's
+// known-bucket set (COLUMN_ACCENT / use-pr-state.ts), so no PR ever
+// mapped to them and they rendered as permanently-empty columns. They
+// are display-only stages — nothing in the backend release state
+// machine (DeriveReleaseStage, the deploy-link path, the AcceptPipeline-
+// Proposal safety check) keys off these pipeline-config stage ids, so
+// removing them changes only what the board renders, not progression.
 func DefaultStagedStrictConfig() PipelineConfig {
 	return PipelineConfig{
 		Shape: "staged_strict",
 		Stages: []PipelineStage{
 			{ID: "in_review", Name: "In Review", Position: 0},
-			{ID: "merged", Name: "Merged to main", Position: 1, Triggers: []PipelineTrigger{
-				{Kind: TriggerPushBranch, Config: TriggerConfig{Branch: "main"}},
-			}},
-			{ID: "in_staging", Name: "In Staging", Position: 2, Triggers: []PipelineTrigger{
+			{ID: "in_staging", Name: "In Staging", Position: 1, Triggers: []PipelineTrigger{
 				{Kind: TriggerWorkflowRun, Config: TriggerConfig{Workflow: "deploy-staging.yml"}},
 				{Kind: TriggerDeploymentStatus, Config: TriggerConfig{Environment: "staging"}},
 			}},
-			{
-				ID: "staging_verified", Name: "Staging verified", Position: 3,
-				RequiresHumanAck: true,
-				Triggers: []PipelineTrigger{
-					{Kind: TriggerManualAck},
-				},
-			},
-			{ID: "in_production", Name: "In Production", Position: 4, Triggers: []PipelineTrigger{
+			{ID: "in_production", Name: "In Production", Position: 2, Triggers: []PipelineTrigger{
 				{Kind: TriggerWorkflowDispatch, Config: TriggerConfig{Workflow: "deploy-prod.yml"}},
 				{Kind: TriggerDeploymentStatus, Config: TriggerConfig{Environment: "production"}},
 			}},
-			{ID: "done", Name: "Done", Position: 5, IsTerminal: true},
+			{ID: "done", Name: "Done", Position: 3, IsTerminal: true},
 		},
 	}
 }
@@ -371,35 +371,25 @@ func DefaultManualOnlyConfig() PipelineConfig {
 		Shape: "manual_only",
 		Stages: []PipelineStage{
 			{ID: "in_review", Name: "In Review", Position: 0},
-			{ID: "merged", Name: "Merged to main", Position: 1, Triggers: []PipelineTrigger{
-				{Kind: TriggerPushBranch, Config: TriggerConfig{Branch: "main"}},
-			}},
 			{
-				ID: "awaiting_staging_deploy", Name: "Awaiting staging deploy", Position: 2,
+				ID: "awaiting_staging_deploy", Name: "Awaiting staging deploy", Position: 1,
 				RequiresHumanAck: true,
 				Triggers: []PipelineTrigger{
 					{Kind: TriggerWorkflowDispatch, Config: TriggerConfig{Workflow: "deploy-backend.yml"}},
 				},
 			},
-			{ID: "in_staging", Name: "In Staging", Position: 3, Triggers: []PipelineTrigger{
+			{ID: "in_staging", Name: "In Staging", Position: 2, Triggers: []PipelineTrigger{
 				{Kind: TriggerDeploymentStatus, Config: TriggerConfig{Environment: "staging"}},
 			}},
 			{
-				ID: "staging_verified", Name: "Staging verified", Position: 4,
-				RequiresHumanAck: true,
-				Triggers: []PipelineTrigger{
-					{Kind: TriggerManualAck},
-				},
-			},
-			{
-				ID: "in_production", Name: "In Production", Position: 5,
+				ID: "in_production", Name: "In Production", Position: 3,
 				RequiresHumanAck: true,
 				Triggers: []PipelineTrigger{
 					{Kind: TriggerWorkflowDispatch, Config: TriggerConfig{Workflow: "deploy-backend.yml"}},
 					{Kind: TriggerDeploymentStatus, Config: TriggerConfig{Environment: "production"}},
 				},
 			},
-			{ID: "done", Name: "Done", Position: 6, IsTerminal: true},
+			{ID: "done", Name: "Done", Position: 4, IsTerminal: true},
 		},
 	}
 }

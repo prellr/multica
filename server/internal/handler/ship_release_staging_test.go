@@ -501,6 +501,136 @@ func TestUnverify_HTTPHandler_RequiresReason(t *testing.T) {
 	}
 }
 
+// TestLinkStagingDeploy_TimeBasedFallback_LinksNonMatchingSHA — the
+// staging analog of the production stuck-promoting fallback. A
+// succeeded STAGING deploy whose sha does NOT equal the release's
+// merged_main_sha (squash/rebase merge, or CI fired on a later commit)
+// still links to the project's release waiting in_staging, advancing it
+// instead of leaving it stranded "waiting for the staging deploy of
+// <sha>" until the operator clicks "Mark deploy as landed".
+func TestLinkStagingDeploy_TimeBasedFallback_LinksNonMatchingSHA(t *testing.T) {
+	enableStagingTest(t)
+	projectID := createShipProject(t, "https://github.com/multica-ai/staging-fallback")
+
+	// Clear any workspace-level smoke workflow a sibling test may have
+	// set on the shared test workspace, so the no-smoke linkage branch
+	// runs deterministically (LinkStagingDeploy → verifying).
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE workspace SET ship_hub_smoke_workflow = NULL WHERE id = $1`,
+		testWorkspaceID); err != nil {
+		t.Fatalf("clear smoke workflow: %v", err)
+	}
+
+	// Staging env + a SUCCEEDED deploy at the commit the CI actually
+	// ran (deploySHA). triggered_at defaults to now().
+	var envID, deployID string
+	const deploySHA = "deploy-sha-aaaaaaaaaaaaaaaa"
+	if err := testPool.QueryRow(context.Background(),
+		`INSERT INTO deploy_environment (workspace_id, project_id, kind, name, target_branch)
+		 VALUES ($1, $2, 'staging', 'staging', 'main') RETURNING id`,
+		testWorkspaceID, projectID).Scan(&envID); err != nil {
+		t.Fatalf("seed env: %v", err)
+	}
+	if err := testPool.QueryRow(context.Background(),
+		`INSERT INTO deploy (workspace_id, environment_id, ref, sha, status, completed_at)
+		 VALUES ($1, $2, 'main', $3, 'succeeded', NOW()) RETURNING id`,
+		testWorkspaceID, envID, deploySHA).Scan(&deployID); err != nil {
+		t.Fatalf("seed deploy: %v", err)
+	}
+
+	// Release waiting in_staging with a DIFFERENT merged_main_sha and a
+	// merge that predates the deploy. The strict-SHA lookup will miss.
+	var releaseID string
+	const releaseSHA = "merge-train-sha-bbbbbbbbbbbb"
+	if err := testPool.QueryRow(context.Background(),
+		`INSERT INTO ship_release
+			(workspace_id, project_id, title, risk_level, stage, merged_at, merged_main_sha)
+		 VALUES ($1, $2, 'fallback release', 'low', 'in_staging', NOW() - INTERVAL '1 hour', $3)
+		 RETURNING id`,
+		testWorkspaceID, projectID, releaseSHA).Scan(&releaseID); err != nil {
+		t.Fatalf("seed release: %v", err)
+	}
+
+	// Drive the webhook entry helper with the deploy's (non-matching)
+	// sha. No smoke workflow configured ⇒ linkage flips straight to
+	// verifying.
+	testHandler.linkStagingDeployForRelease(
+		context.Background(),
+		parseUUID(testWorkspaceID),
+		parseUUID(deployID),
+		deploySHA,
+		"",
+	)
+
+	if got := readReleaseStagingDeploy(t, releaseID); got != deployID {
+		t.Fatalf("expected staging_deploy_id=%s after fallback link, got %q", deployID, got)
+	}
+	var stage string
+	var stagedAt pgtype.Timestamptz
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT stage, staged_at FROM ship_release WHERE id = $1`, releaseID).Scan(&stage, &stagedAt); err != nil {
+		t.Fatalf("read release: %v", err)
+	}
+	if stage != "verifying" {
+		t.Fatalf("expected stage=verifying after fallback link (no smoke), got %q", stage)
+	}
+	if !stagedAt.Valid {
+		t.Fatalf("expected staged_at stamped after fallback link")
+	}
+}
+
+// TestLinkStagingDeploy_TimeBasedFallback_SkipsAlreadyLinked — the
+// fallback must never re-link a release that already has a staging
+// deploy. A second deploy event for the same project is a no-op.
+func TestLinkStagingDeploy_TimeBasedFallback_SkipsAlreadyLinked(t *testing.T) {
+	enableStagingTest(t)
+	projectID := createShipProject(t, "https://github.com/multica-ai/staging-fallback-linked")
+
+	var envID, firstDeployID, secondDeployID string
+	if err := testPool.QueryRow(context.Background(),
+		`INSERT INTO deploy_environment (workspace_id, project_id, kind, name, target_branch)
+		 VALUES ($1, $2, 'staging', 'staging', 'main') RETURNING id`,
+		testWorkspaceID, projectID).Scan(&envID); err != nil {
+		t.Fatalf("seed env: %v", err)
+	}
+	if err := testPool.QueryRow(context.Background(),
+		`INSERT INTO deploy (workspace_id, environment_id, ref, sha, status, completed_at)
+		 VALUES ($1, $2, 'main', 'first-deploy-sha', 'succeeded', NOW()) RETURNING id`,
+		testWorkspaceID, envID).Scan(&firstDeployID); err != nil {
+		t.Fatalf("seed first deploy: %v", err)
+	}
+	if err := testPool.QueryRow(context.Background(),
+		`INSERT INTO deploy (workspace_id, environment_id, ref, sha, status, completed_at)
+		 VALUES ($1, $2, 'main', 'second-deploy-sha', 'succeeded', NOW()) RETURNING id`,
+		testWorkspaceID, envID).Scan(&secondDeployID); err != nil {
+		t.Fatalf("seed second deploy: %v", err)
+	}
+
+	// Release already linked to the FIRST deploy.
+	var releaseID string
+	if err := testPool.QueryRow(context.Background(),
+		`INSERT INTO ship_release
+			(workspace_id, project_id, title, risk_level, stage, merged_at, merged_main_sha, staging_deploy_id)
+		 VALUES ($1, $2, 'already linked', 'low', 'in_staging', NOW() - INTERVAL '1 hour', 'merge-sha', $3)
+		 RETURNING id`,
+		testWorkspaceID, projectID, firstDeployID).Scan(&releaseID); err != nil {
+		t.Fatalf("seed release: %v", err)
+	}
+
+	// A second, non-matching deploy must NOT re-link.
+	testHandler.linkStagingDeployForRelease(
+		context.Background(),
+		parseUUID(testWorkspaceID),
+		parseUUID(secondDeployID),
+		"second-deploy-sha",
+		"",
+	)
+
+	if got := readReleaseStagingDeploy(t, releaseID); got != firstDeployID {
+		t.Fatalf("expected staging_deploy_id to stay %s (first deploy), got %q", firstDeployID, got)
+	}
+}
+
 // TestReleaseResponseShape_Phase7c — confirms the JSON response
 // carries the new Phase 7c fields. This is the contract older
 // Electron builds cache against.

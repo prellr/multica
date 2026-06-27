@@ -491,6 +491,18 @@ func (h *Handler) MarkReleaseStagingDeployed(w http.ResponseWriter, r *http.Requ
 // up a release whose merged_main_sha matches the deploy's sha; on
 // hit, it triggers the staging linkage flow.
 //
+// Two lookup strategies, in order:
+//  1. Strict SHA match — FindReleaseByMergedMainSHA, the exact
+//     merge-commit equality. Works when the deploy ran on the same
+//     commit the merge train produced.
+//  2. Time-based fallback — FindStuckInStagingReleaseForProject, scoped
+//     to the deploy's project. Covers squash/rebase merges (which
+//     rewrite the commit so the SHA never matches) and "CI fired on a
+//     later main commit". Only applied for SUCCEEDED STAGING deploys —
+//     mirrors the production-side FindStuckPromotingReleaseForProject
+//     fallback so the release advances instead of sitting "waiting for
+//     the staging deploy of <sha>" forever.
+//
 // Best-effort: every error path logs + returns; a missed linkage is
 // recoverable by the user clicking "Run smoke tests" manually.
 func (h *Handler) linkStagingDeployForRelease(
@@ -507,13 +519,20 @@ func (h *Handler) linkStagingDeployForRelease(
 		MergedMainSha: pgtype.Text{String: deploySHA, Valid: true},
 	})
 	if err != nil {
-		// pgx.ErrNoRows is the common case — most deploys aren't
-		// from a release. Quiet on miss; warn on real errors.
 		if !isNotFound(err) {
+			// A real DB error — warn and bail.
 			slog.Warn("ship: find release by sha failed",
 				"sha", deploySHA, "error", err)
+			return
 		}
-		return
+		// No exact-SHA match — the common case (most deploys aren't
+		// from a release). Try the time-based fallback for a staging
+		// deploy whose project has a release waiting in_staging.
+		fallback, ok := h.findStuckInStagingRelease(ctx, workspaceID, deployID)
+		if !ok {
+			return
+		}
+		release = fallback
 	}
 
 	ws, err := h.Queries.GetWorkspace(ctx, workspaceID)
@@ -541,6 +560,83 @@ func (h *Handler) linkStagingDeployForRelease(
 		slog.Warn("ship: link staging deploy failed",
 			"release_id", uuidToString(release.ID), "error", err)
 	}
+}
+
+// findStuckInStagingRelease is the time-based fallback used when a
+// deploy's sha doesn't match any release's merged_main_sha exactly. It
+// resolves the deploy's project + environment and, only for a SUCCEEDED
+// STAGING deploy, looks up a release stuck in_staging for that project
+// whose merge predates the deploy.
+//
+// Returns (release, true) on a hit; (zero, false) on any miss, wrong
+// environment kind, non-succeeded status, or already-linked release.
+// Every miss is a silent no-op — this is a best-effort recovery, not a
+// hard requirement of the webhook path.
+func (h *Handler) findStuckInStagingRelease(
+	ctx context.Context,
+	workspaceID, deployID pgtype.UUID,
+) (db.ShipRelease, bool) {
+	deploy, err := h.Queries.GetDeploy(ctx, deployID)
+	if err != nil {
+		if !isNotFound(err) {
+			slog.Warn("ship: staging fallback — get deploy failed",
+				"deploy_id", uuidToString(deployID), "error", err)
+		}
+		return db.ShipRelease{}, false
+	}
+	// Only succeeded deploys advance a release. A failed/in-progress
+	// deploy must not link a waiting release.
+	if deploy.Status != db.DeployStatusSucceeded {
+		return db.ShipRelease{}, false
+	}
+
+	env, err := h.Queries.GetDeployEnvironment(ctx, deploy.EnvironmentID)
+	if err != nil {
+		if !isNotFound(err) {
+			slog.Warn("ship: staging fallback — get deploy environment failed",
+				"environment_id", uuidToString(deploy.EnvironmentID), "error", err)
+		}
+		return db.ShipRelease{}, false
+	}
+	// Scope the fallback to staging-env deploys; production deploys go
+	// through FindStuckPromotingReleaseForProject on the promotion path.
+	if env.Kind != db.DeployEnvironmentKindStaging {
+		return db.ShipRelease{}, false
+	}
+
+	// Deploy completion time bounds the lookup: never link a deploy that
+	// finished before the release merged. Prefer completed_at; fall back
+	// to triggered_at when the webhook didn't carry a completion ts.
+	deployAt := deploy.CompletedAt
+	if !deployAt.Valid {
+		deployAt = deploy.TriggeredAt
+	}
+	if !deployAt.Valid {
+		return db.ShipRelease{}, false
+	}
+
+	release, err := h.Queries.FindStuckInStagingReleaseForProject(ctx, db.FindStuckInStagingReleaseForProjectParams{
+		WorkspaceID: workspaceID,
+		ProjectID:   env.ProjectID,
+		MergedAt:    deployAt,
+	})
+	if err != nil {
+		if !isNotFound(err) {
+			slog.Warn("ship: staging fallback — find stuck release failed",
+				"project_id", uuidToString(env.ProjectID), "error", err)
+		}
+		return db.ShipRelease{}, false
+	}
+	// Guard rail: the query already filters staging_deploy_id IS NULL,
+	// but re-check defensively so a concurrent link can't double-write.
+	if release.StagingDeployID.Valid {
+		return db.ShipRelease{}, false
+	}
+	slog.Info("ship: staging deploy linked via time-based fallback",
+		"release_id", uuidToString(release.ID),
+		"deploy_id", uuidToString(deployID),
+		"project_id", uuidToString(env.ProjectID))
+	return release, true
 }
 
 // recordSmokeOutcomeForRelease maps a check_run.completed event to a

@@ -94,7 +94,6 @@ import { PageHeader } from "../../layout/page-header";
 import { useT } from "../../i18n";
 import { AppLink, useNavigation } from "../../navigation";
 import { ShipConciergeToggle } from "./ship-concierge-toggle";
-import { ShipConciergeInline } from "./ship-concierge-inline";
 
 // Stage order for the progress bar. Mirrors the Postgres release_stage
 // enum, but cancelled / rolled_back are NOT on the bar — they're
@@ -690,8 +689,6 @@ export function ShipReleasePage({ releaseId }: ShipReleasePageProps) {
               </div>
             </div>
           )}
-
-          {isPaused && <ShipConciergeInline />}
 
           {/* Start-merge preconditions (assembling only). Renders a
               soft-warning panel listing why the start button is

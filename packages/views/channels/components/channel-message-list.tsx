@@ -55,6 +55,15 @@ interface ChannelMessageListProps {
    * unread messages but we have no anchor to bisect on).
    */
   initialUnreadCursor?: string | null;
+  /**
+   * Force the transcript to open at the live edge (latest message) instead of
+   * anchoring to the unread divider. For chat-assistant surfaces like the Ship
+   * Concierge drawer, where "catch up from the first unread" is the wrong
+   * model — you want the latest reply, not to be scrolled up into history
+   * (which also keeps the load-older sentinel firing). The unread divider is
+   * still rendered; only the open-scroll anchor changes.
+   */
+  openAtBottom?: boolean;
 }
 
 /**
@@ -73,6 +82,7 @@ export function ChannelMessageList({
   enabled,
   onOpenThread,
   initialUnreadCursor,
+  openAtBottom = false,
 }: ChannelMessageListProps) {
   const { t } = useT("channels");
   const wsId = useWorkspaceId();
@@ -132,9 +142,9 @@ export function ChannelMessageList({
   // restore. The Provider is keyed on channelId so switching channels fully
   // resets scroll state.
   const anchorMessageId =
-    dividerBeforeIndex !== null && messages[dividerBeforeIndex]
-      ? messages[dividerBeforeIndex].id
-      : null;
+    openAtBottom || dividerBeforeIndex === null || !messages[dividerBeforeIndex]
+      ? null
+      : messages[dividerBeforeIndex].id;
 
   // ─── Load older history (#10) ───────────────────────────────────────────
   // A top sentinel + IntersectionObserver fetches the next OLDER page as the

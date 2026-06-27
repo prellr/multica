@@ -462,13 +462,13 @@ export function CreateReleaseDialog({
                     key={pr.id}
                     className="flex items-center gap-2 py-1 text-muted-foreground"
                   >
-                    <span className="tabular-nums">#{pr.number}</span>
+                    <span className="shrink-0 tabular-nums">#{pr.number}</span>
                     <span className="min-w-0 flex-1 truncate text-foreground">
                       {pr.title}
                     </span>
                     <span
                       className={cn(
-                        "rounded px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide",
+                        "shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide",
                         level === "critical" &&
                           "bg-destructive/15 text-destructive",
                         level === "high" &&

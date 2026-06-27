@@ -933,13 +933,13 @@ export function ShipReleasePage({ releaseId }: ShipReleasePageProps) {
                       href={pr.html_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="group/prlink flex flex-1 items-center gap-2 hover:underline"
+                      className="group/prlink flex min-w-0 flex-1 items-center gap-2 hover:underline"
                       data-testid="release-pr-row-link"
                     >
-                      <span className="tabular-nums text-muted-foreground">
+                      <span className="shrink-0 tabular-nums text-muted-foreground">
                         #{pr.number}
                       </span>
-                      <span className="truncate">{pr.title}</span>
+                      <span className="min-w-0 flex-1 truncate">{pr.title}</span>
                       <ExternalLink
                         className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/prlink:opacity-100"
                         aria-hidden
@@ -963,7 +963,7 @@ export function ShipReleasePage({ releaseId }: ShipReleasePageProps) {
                         {t(($) => $.releases.merge.retry_button)}
                       </Button>
                     )}
-                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
                       {pr.risk_level ?? "medium"}
                     </span>
                     {isAssembling && (

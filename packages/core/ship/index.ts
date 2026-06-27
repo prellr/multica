@@ -105,3 +105,7 @@ export {
 // Hub landing page. See collapsed-projects-store.ts.
 export { useCollapsedProjects } from "./collapsed-projects-store";
 export { useCollapsedRepos } from "./collapsed-repos-store";
+
+// Persisted open/closed state for the docked Ship Concierge drawer.
+// See concierge-drawer-store.ts.
+export { useShipConciergeDrawer } from "./concierge-drawer-store";

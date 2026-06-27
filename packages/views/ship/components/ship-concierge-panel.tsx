@@ -120,7 +120,7 @@ export function ShipConciergePanel() {
  * three-step wiring (create channel, add agent member, designate
  * ambient listener) atomically. No copy-paste curl required.
  */
-function ConciergeEmptyState() {
+export function ConciergeEmptyState() {
   const { t } = useT("ship");
   const [setupOpen, setSetupOpen] = useState(false);
 

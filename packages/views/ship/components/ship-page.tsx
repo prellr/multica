@@ -17,7 +17,7 @@ import { ShipActiveReleasesRail } from "./ship-active-releases-rail";
 import { ShipReleaseHistory } from "./ship-release-history";
 import { ShipSelectionBar } from "./ship-selection-bar";
 import { ShipPrDetailDrawer } from "./ship-pr-detail-drawer";
-import { ShipConciergePanel } from "./ship-concierge-panel";
+import { ShipConciergeToggle } from "./ship-concierge-toggle";
 import { ShipConciergeInline } from "./ship-concierge-inline";
 import type { PullRequest } from "@multica/core/types";
 
@@ -85,12 +85,12 @@ export function ShipPage() {
       <PageHeader className="px-5">
         <Rocket className="size-4 text-muted-foreground" />
         <h1 className="ml-2 text-sm font-medium">{t(($) => $.page.title)}</h1>
-        {/* Concierge button — opens a slide-in drawer with the
-            workspace's designated Concierge channel inside. The
-            drawer self-renders an empty-state setup recipe when no
-            channel is configured. ROA-178. */}
+        {/* Concierge toggle — flips the persistent docked drawer
+            (ShipShell) open/closed. The drawer body self-renders an
+            empty-state setup recipe when no channel is configured.
+            ROA-178. */}
         <div className="ml-auto">
-          <ShipConciergePanel />
+          <ShipConciergeToggle />
         </div>
       </PageHeader>
 

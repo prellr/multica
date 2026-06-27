@@ -20,6 +20,7 @@
 import { useMemo, useState } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
 import {
   useMergePullRequest,
   useRebasePullRequestOnMain,
@@ -28,7 +29,13 @@ import {
   useNudgePullRequestAuthor,
   useRunSmokeTests,
   useClosePullRequest,
+  useShipConciergeDrawer,
 } from "@multica/core/ship";
+import {
+  channelsListOptions,
+  useSendChannelMessage,
+} from "@multica/core/channels";
+import { useWorkspaceId } from "@multica/core/hooks";
 import { ReviewDialog } from "./review-dialog";
 import {
   AlertDialog,
@@ -142,10 +149,51 @@ export function PrChipRow({ pr, stagingEnv, maxVisible = 2 }: PrChipRowProps) {
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [confirmOverflowChip, setConfirmOverflowChip] =
     useState<PrChip | null>(null);
-  const chips = useMemo(
-    () => derivePrChips(pr, { stagingEnv: stagingEnv ?? null }),
-    [pr, stagingEnv],
+
+  // "Ask Pilot to fix" — discover the Concierge channel so we can drop a
+  // PR-referencing message into it. The chip is gated on this being set.
+  const wsId = useWorkspaceId();
+  const { data: channels = [] } = useQuery(channelsListOptions(wsId, true));
+  const conciergeChannelId = useMemo(
+    () =>
+      (channels ?? []).find((c) => c.ambient_listener_agent_id !== null)?.id ??
+      null,
+    [channels],
   );
+  // Hook must be called unconditionally; passing "" when no Concierge is
+  // configured is safe because the chip — and therefore the mutation — is
+  // never surfaced in that case.
+  const sendToConcierge = useSendChannelMessage(conciergeChannelId ?? "");
+  const setConciergeOpen = useShipConciergeDrawer((s) => s.setOpen);
+
+  const chips = useMemo(
+    () =>
+      derivePrChips(pr, {
+        stagingEnv: stagingEnv ?? null,
+        conciergeConfigured: conciergeChannelId !== null,
+      }),
+    [pr, stagingEnv, conciergeChannelId],
+  );
+
+  // Drop a PR-referencing message into the Concierge conversation. The
+  // channel is an ambient listener, so any member message auto-triggers
+  // the agent — no @mention needed. Then surface the docked drawer.
+  const askPilot = () => {
+    if (!conciergeChannelId) return;
+    const reason =
+      pr.mergeable === "CONFLICTING"
+        ? t(($) => $.chips.ask_pilot.reason_conflict)
+        : t(($) => $.chips.ask_pilot.reason_ci);
+    const content = t(($) => $.chips.ask_pilot.message, {
+      number: pr.number,
+      title: pr.title,
+      reason,
+      url: pr.html_url,
+    });
+    sendToConcierge.mutate({ content });
+    setConciergeOpen(true);
+    toast.success(t(($) => $.chips.ask_pilot.toast_success, { number: pr.number }));
+  };
 
   if (chips.length === 0) return null;
 
@@ -188,11 +236,13 @@ export function PrChipRow({ pr, stagingEnv, maxVisible = 2 }: PrChipRowProps) {
 
   const renderChip = (chip: PrChip) => {
     if (chip.custom) {
-      // Phase 6.5 — dispatch by action name. Today only submit_review
-      // qualifies; new custom chips would extend this switch.
+      // Phase 6.5 — dispatch by action name. submit_review opens the
+      // ReviewDialog; ask_pilot drops a message into the Concierge.
       const customClick = () => {
         if (chip.action === "submit_review") {
           setReviewDialogOpen(true);
+        } else if (chip.action === "ask_pilot") {
+          askPilot();
         }
       };
       return (
@@ -266,6 +316,8 @@ export function PrChipRow({ pr, stagingEnv, maxVisible = 2 }: PrChipRowProps) {
                     onSelect={() => {
                       if (chip.action === "submit_review") {
                         setReviewDialogOpen(true);
+                      } else if (chip.action === "ask_pilot") {
+                        askPilot();
                       }
                     }}
                   >

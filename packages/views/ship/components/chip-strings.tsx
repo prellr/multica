@@ -51,6 +51,8 @@ export function chipLabel(t: T, action: string): string {
       return t(($) => $.chips.pull_into_issue.label);
     case "submit_review":
       return t(($) => $.chips.review.label);
+    case "ask_pilot":
+      return t(($) => $.chips.ask_pilot.label);
     default:
       // Unknown enum drift — render the action name itself rather than a
       // blank chip. The user can still read the affordance and cancel out.

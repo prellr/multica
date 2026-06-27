@@ -136,9 +136,9 @@ vi.mock("@multica/core/ship", () => ({
   }),
 }));
 
-vi.mock("../components/ship-concierge-panel", () => ({
-  ShipConciergePanel: () => (
-    <div data-testid="ship-concierge-panel" />
+vi.mock("../components/ship-concierge-toggle", () => ({
+  ShipConciergeToggle: () => (
+    <div data-testid="ship-concierge-toggle" />
   ),
 }));
 
@@ -335,7 +335,7 @@ describe("ShipReleasePage", () => {
     );
     expect(screen.getByTestId("release-stage-progress")).toBeInTheDocument();
     expect(screen.getByTestId("release-cancel-button")).toBeInTheDocument();
-    expect(screen.getByTestId("ship-concierge-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("ship-concierge-toggle")).toBeInTheDocument();
     expect(screen.queryByTestId("ship-concierge-inline")).not.toBeInTheDocument();
   });
 

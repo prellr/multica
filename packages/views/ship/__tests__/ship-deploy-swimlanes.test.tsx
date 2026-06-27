@@ -7,9 +7,10 @@ import type { Deploy, DeployEnvironment } from "@multica/core/types";
 
 // Hoisted mock state — each test mutates these to drive the swimlane
 // scenarios (no envs / staging only / pills with various statuses).
-const { envsRef, deploysRef } = vi.hoisted(() => ({
+const { envsRef, deploysRef, promoteMutate } = vi.hoisted(() => ({
   envsRef: { current: [] as DeployEnvironment[] },
   deploysRef: { current: [] as Deploy[] },
+  promoteMutate: vi.fn(),
 }));
 
 vi.mock("@multica/core/ship", () => ({
@@ -29,7 +30,10 @@ vi.mock("@multica/core/ship", () => ({
   useConfigureDeployAdapter: () => ({ mutateAsync: vi.fn(), isPending: false }),
   usePollDeployEnvironment: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useRollbackDeployEnvironment: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  usePromoteDeployEnvironment: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  usePromoteDeployEnvironment: () => ({
+    mutateAsync: promoteMutate,
+    isPending: false,
+  }),
 }));
 
 vi.mock("@multica/core/hooks", () => ({
@@ -219,5 +223,32 @@ describe("ShipDeploySwimlanes", () => {
     expect(
       screen.queryByRole("button", { name: /Deploy to production/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("arms then fires the production deploy on a second click (no modal)", async () => {
+    promoteMutate.mockClear();
+    promoteMutate.mockResolvedValue(undefined);
+    envsRef.current = [
+      makeEnv({
+        id: "env-2",
+        kind: "production",
+        name: "Production",
+        deploy_workflow_filename: "deploy-prod.yml",
+      }),
+    ];
+    deploysRef.current = [];
+    render(<ShipDeploySwimlanes projectId="p-1" />, { wrapper: I18nWrapper });
+
+    // First click arms in place — no dispatch yet, and the label changes
+    // to the confirm copy (no modal/overlay is ever mounted).
+    fireEvent.click(
+      screen.getByRole("button", { name: /Deploy to production/i }),
+    );
+    expect(promoteMutate).not.toHaveBeenCalled();
+    const armed = screen.getByRole("button", { name: /ships all of main/i });
+
+    // Second click fires the promote mutation.
+    fireEvent.click(armed);
+    await waitFor(() => expect(promoteMutate).toHaveBeenCalledTimes(1));
   });
 });

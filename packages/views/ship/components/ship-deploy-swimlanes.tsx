@@ -1,20 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, Pencil, Plus, Rocket } from "lucide-react";
 import { toast } from "sonner";
 import { adapterIcon } from "./adapter-icons";
 import { Button } from "@multica/ui/components/ui/button";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@multica/ui/components/ui/alert-dialog";
 import {
   Popover,
   PopoverContent,
@@ -348,9 +338,43 @@ function Swimlane({ env, repoUrl }: SwimlaneProps) {
 
   const [configOpen, setConfigOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
-  const [promoteOpen, setPromoteOpen] = useState(false);
+  // Inline two-click confirm instead of a modal: the first click "arms"
+  // the Deploy button in place (no overlay, never leaves the board); the
+  // second click fires. Auto-reverts after a few seconds so an abandoned
+  // arm doesn't leave a hot prod-deploy button sitting around.
+  const [deployArmed, setDeployArmed] = useState(false);
+  const disarmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const promoteMutation = usePromoteDeployEnvironment(env.id, env.project_id);
+
+  const clearDisarmTimer = () => {
+    if (disarmTimer.current) {
+      clearTimeout(disarmTimer.current);
+      disarmTimer.current = null;
+    }
+  };
+  useEffect(() => clearDisarmTimer, []);
+
+  const armDeploy = () => {
+    setDeployArmed(true);
+    clearDisarmTimer();
+    disarmTimer.current = setTimeout(() => setDeployArmed(false), 4000);
+  };
+  const disarmDeploy = () => {
+    clearDisarmTimer();
+    setDeployArmed(false);
+  };
+  const fireDeploy = async () => {
+    disarmDeploy();
+    try {
+      await promoteMutation.mutateAsync();
+      toast.success(t(($) => $.swimlane.deploy_dispatched));
+    } catch (e) {
+      toast.error(
+        e instanceof Error ? e.message : t(($) => $.swimlane.deploy_failed),
+      );
+    }
+  };
 
   const isProduction = env.kind === "production";
   // Only surface the one-click deploy when the env has a workflow to
@@ -376,11 +400,24 @@ function Swimlane({ env, repoUrl }: SwimlaneProps) {
           {canDeploy && (
             <Button
               size="sm"
-              variant="default"
-              onClick={() => setPromoteOpen(true)}
+              variant={deployArmed ? "destructive" : "default"}
+              disabled={promoteMutation.isPending}
+              onClick={deployArmed ? fireDeploy : armDeploy}
+              onBlur={disarmDeploy}
+              title={
+                deployArmed
+                  ? undefined
+                  : t(($) => $.swimlane.deploy_confirm_hint, {
+                      branch: deployBranch,
+                    })
+              }
             >
               <Rocket className="size-3" />
-              {t(($) => $.swimlane.deploy_to_production)}
+              {promoteMutation.isPending
+                ? t(($) => $.swimlane.deploy_in_progress)
+                : deployArmed
+                  ? t(($) => $.swimlane.deploy_confirm_inline)
+                  : t(($) => $.swimlane.deploy_to_production)}
             </Button>
           )}
           <Button
@@ -500,44 +537,6 @@ function Swimlane({ env, repoUrl }: SwimlaneProps) {
         environment={env}
       />
 
-      <AlertDialog open={promoteOpen} onOpenChange={setPromoteOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {t(($) => $.swimlane.deploy_confirm_title)}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {t(($) => $.swimlane.deploy_confirm_body, {
-                workflow: env.deploy_workflow_filename ?? "",
-                branch: deployBranch,
-              })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>
-              {t(($) => $.swimlane.deploy_cancel)}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              disabled={promoteMutation.isPending}
-              onClick={async () => {
-                try {
-                  await promoteMutation.mutateAsync();
-                  toast.success(t(($) => $.swimlane.deploy_dispatched));
-                  setPromoteOpen(false);
-                } catch (e) {
-                  toast.error(
-                    e instanceof Error
-                      ? e.message
-                      : t(($) => $.swimlane.deploy_failed),
-                  );
-                }
-              }}
-            >
-              {t(($) => $.swimlane.deploy_confirm_action)}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

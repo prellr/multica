@@ -330,12 +330,11 @@
     "edit_environment": "Edit environment",
     "log_deploy": "Log deploy",
     "deploy_to_production": "Deploy to production",
-    "deploy_confirm_title": "Deploy to production?",
-    "deploy_confirm_body": "This dispatches {{workflow}} on {{branch}} and ships everything currently merged to main — not just one release.",
-    "deploy_confirm_action": "Deploy",
+    "deploy_confirm_inline": "Click again — ships all of main",
+    "deploy_confirm_hint": "Deploys {{branch}} to production — ships everything currently on main, not one release",
+    "deploy_in_progress": "Deploying…",
     "deploy_dispatched": "Production deploy dispatched",
-    "deploy_failed": "Failed to dispatch production deploy",
-    "deploy_cancel": "Cancel"
+    "deploy_failed": "Failed to dispatch production deploy"
   },
   "configure_dialog": {
     "title_create": "Configure deploy environment",

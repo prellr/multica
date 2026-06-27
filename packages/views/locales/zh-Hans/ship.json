@@ -327,12 +327,11 @@
     "edit_environment": "编辑环境",
     "log_deploy": "记录部署",
     "deploy_to_production": "部署到生产环境",
-    "deploy_confirm_title": "部署到生产环境？",
-    "deploy_confirm_body": "这将在 {{branch}} 上触发 {{workflow}}，并发布当前已合并到 main 的全部改动，而不仅仅是单个发布。",
-    "deploy_confirm_action": "部署",
+    "deploy_confirm_inline": "再次点击 — 发布 main 全部改动",
+    "deploy_confirm_hint": "将 {{branch}} 部署到生产环境 — 发布当前 main 上的全部改动，而不仅是单个发布",
+    "deploy_in_progress": "部署中…",
     "deploy_dispatched": "已触发生产部署",
-    "deploy_failed": "触发生产部署失败",
-    "deploy_cancel": "取消"
+    "deploy_failed": "触发生产部署失败"
   },
   "configure_dialog": {
     "title_create": "配置部署环境",

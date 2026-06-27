@@ -1,6 +1,12 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ContentEditor,
@@ -29,6 +35,15 @@ import { toast } from "sonner";
 interface ChannelComposerProps {
   channel: Channel;
   disabled?: boolean;
+}
+
+export interface ChannelComposerHandle {
+  /** Upload files through the composer's attachment pipeline (the same
+   *  path as the paperclip button and the composer's own drop zone).
+   *  Exposed so an ancestor that provides a wider drop target — e.g. the
+   *  Ship Concierge drawer — can forward files dropped over the whole
+   *  panel, not just the input box. */
+  attachFiles: (files: File[]) => void;
 }
 
 /**
@@ -84,7 +99,10 @@ function useComposerPlaceholder(channel: Channel): string {
  * Submit is wired to Enter (Shift+Enter for newline) via the editor's
  * submitOnEnter prop.
  */
-export function ChannelComposer({ channel, disabled }: ChannelComposerProps) {
+export const ChannelComposer = forwardRef<
+  ChannelComposerHandle,
+  ChannelComposerProps
+>(function ChannelComposer({ channel, disabled }, ref) {
   const editorRef = useRef<ContentEditorRef>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const inputDraft = useChannelsStore((s) => s.inputDrafts[channel.id] ?? "");
@@ -148,6 +166,12 @@ export function ChannelComposer({ channel, disabled }: ChannelComposerProps) {
     onDrop: (files) => void handleAttach(files),
     enabled: !disabled,
   });
+
+  // Let an ancestor (the Concierge drawer) forward files dropped outside
+  // the composer itself into the same upload pipeline.
+  useImperativeHandle(ref, () => ({
+    attachFiles: (files) => void handleAttach(files),
+  }));
 
   const handleSend = () => {
     const content = editorRef.current?.getMarkdown()?.replace(/(\n\s*)+$/, "").trim();
@@ -243,4 +267,4 @@ export function ChannelComposer({ channel, disabled }: ChannelComposerProps) {
       </div>
     </div>
   );
-}
+});

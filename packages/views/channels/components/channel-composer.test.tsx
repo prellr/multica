@@ -1,3 +1,4 @@
+import { createRef } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -64,7 +65,7 @@ vi.mock("@multica/core/workspace/queries", () => ({
   memberListOptions: () => inertOptions("members"),
 }));
 
-import { ChannelComposer } from "./channel-composer";
+import { ChannelComposer, type ChannelComposerHandle } from "./channel-composer";
 
 const channel = {
   id: "chan-1",
@@ -72,14 +73,21 @@ const channel = {
   kind: "channel",
 } as unknown as Channel;
 
-function renderComposer(props?: { disabled?: boolean }) {
+function renderComposer(props?: {
+  disabled?: boolean;
+  ref?: React.Ref<ChannelComposerHandle>;
+}) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={qc}>
-      <I18nProvider resources={TEST_RESOURCES} defaultNS="channels">
-        <ChannelComposer channel={channel} disabled={props?.disabled} />
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <ChannelComposer
+          channel={channel}
+          disabled={props?.disabled}
+          ref={props?.ref}
+        />
       </I18nProvider>
     </QueryClientProvider>,
   );
@@ -99,6 +107,17 @@ describe("ChannelComposer drag-and-drop", () => {
 
     const file = new File(["x"], "shot.png", { type: "image/png" });
     dropHandlers.onDrop?.([file]);
+
+    await waitFor(() => expect(uploadFile).toHaveBeenCalledWith(file));
+  });
+
+  it("uploads via the imperative attachFiles handle (Concierge drawer path)", async () => {
+    const ref = createRef<ChannelComposerHandle>();
+    renderComposer({ ref });
+    expect(ref.current).not.toBeNull();
+
+    const file = new File(["x"], "drawer-drop.png", { type: "image/png" });
+    ref.current?.attachFiles([file]);
 
     await waitFor(() => expect(uploadFile).toHaveBeenCalledWith(file));
   });

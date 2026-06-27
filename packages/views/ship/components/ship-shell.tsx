@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Bot, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { usePanelRef } from "react-resizable-panels";
@@ -14,7 +14,11 @@ import {
   ResizableHandle,
 } from "@multica/ui/components/ui/resizable";
 import { ChannelMessageList } from "../../channels/components/channel-message-list";
-import { ChannelComposer } from "../../channels/components/channel-composer";
+import {
+  ChannelComposer,
+  type ChannelComposerHandle,
+} from "../../channels/components/channel-composer";
+import { useFileDropZone, FileDropOverlay } from "../../editor";
 import { useT } from "../../i18n";
 import { ConciergeEmptyState } from "./ship-concierge-panel";
 
@@ -51,6 +55,17 @@ export function ShipShell({ children }: { children: React.ReactNode }) {
   );
 
   const panelRef = usePanelRef();
+
+  // Drag-and-drop over the whole drawer (conversation + composer), not just
+  // the input box — in a tall narrow panel you naturally drop onto the
+  // transcript. Forwarded into the composer's upload pipeline via ref. The
+  // composer keeps its own inner drop zone; the shared hook's
+  // defaultPrevented guard stops a drop on the input from double-firing.
+  const composerRef = useRef<ChannelComposerHandle>(null);
+  const { isDragOver, dropZoneProps } = useFileDropZone({
+    onDrop: (files) => composerRef.current?.attachFiles(files),
+    enabled: !!concierge && open,
+  });
 
   // Store → panel sync. The store is the source of truth (it drives the
   // header toggle and the "Ask Pilot" chip); reflect its changes onto the
@@ -111,9 +126,13 @@ export function ShipShell({ children }: { children: React.ReactNode }) {
             // mounted while the panel was collapsed (0-width) it'd land at the
             // top and never re-correct. Gating the mount on `open` guarantees a
             // real viewport, so openAtBottom lands on the latest reply.
-            <div className="flex min-h-0 flex-1 flex-col">
+            <div
+              className="relative flex min-h-0 flex-1 flex-col"
+              {...dropZoneProps}
+            >
+              {isDragOver && <FileDropOverlay />}
               <ChannelMessageList channelId={concierge.id} enabled openAtBottom />
-              <ChannelComposer channel={concierge} />
+              <ChannelComposer channel={concierge} ref={composerRef} />
             </div>
           ) : null}
         </div>

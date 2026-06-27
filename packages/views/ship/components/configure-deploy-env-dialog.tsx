@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -47,6 +48,31 @@ interface ConfigureDeployEnvDialogProps {
   existing?: DeployEnvironment;
 }
 
+/** Expand a stored inputs map into ordered editor rows. Returns an empty
+ *  array when the map is null/undefined/empty so the editor renders no
+ *  rows (the "no inputs" state). */
+function recordToRows(
+  record: Record<string, string> | null | undefined,
+): Array<{ name: string; value: string }> {
+  if (!record) return [];
+  return Object.entries(record).map(([name, value]) => ({ name, value }));
+}
+
+/** Collapse editor rows into the request map. Blank-name rows are dropped;
+ *  duplicate names are last-write-wins. Returns null when no usable rows
+ *  remain so the server stores SQL NULL (no inputs) rather than `{}`. */
+function rowsToRecord(
+  rows: Array<{ name: string; value: string }>,
+): Record<string, string> | null {
+  const out: Record<string, string> = {};
+  for (const row of rows) {
+    const name = row.name.trim();
+    if (!name) continue;
+    out[name] = row.value;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 export function ConfigureDeployEnvDialog({
   open,
   onOpenChange,
@@ -87,6 +113,15 @@ export function ConfigureDeployEnvDialog({
   const [workflowFilename, setWorkflowFilename] = useState(
     existing?.deploy_workflow_filename ?? "",
   );
+  // Per-env workflow_dispatch inputs, edited as ordered name/value rows.
+  // Serialized to a Record<string,string> on save (last write wins on
+  // duplicate names; blank-name rows are dropped). Pre-populated from the
+  // env's existing map. A real deploy-prod workflow often declares
+  // `inputs.confirm` as required — without these, GitHub 422s the
+  // inputless dispatch.
+  const [inputRows, setInputRows] = useState<
+    Array<{ name: string; value: string }>
+  >(() => recordToRows(existing?.deploy_workflow_inputs));
   const [error, setError] = useState<string | null>(null);
 
   // Phase 6 — adapter config state. Defaults to whatever the env was
@@ -117,6 +152,7 @@ export function ConfigureDeployEnvDialog({
     setAutoPromote(existing?.auto_promote ?? false);
     setAutoDeploy(existing?.auto_deploy ?? false);
     setWorkflowFilename(existing?.deploy_workflow_filename ?? "");
+    setInputRows(recordToRows(existing?.deploy_workflow_inputs));
     setError(null);
     setAdapterKind(existing?.adapter_kind ?? "github_actions");
     setAdapterConfig("");
@@ -141,6 +177,7 @@ export function ConfigureDeployEnvDialog({
       auto_promote: autoPromote,
       deploy_workflow_filename: workflowFilename.trim() || null,
       auto_deploy: autoDeploy,
+      deploy_workflow_inputs: rowsToRecord(inputRows),
     };
     try {
       await upsert.mutateAsync(payload);
@@ -344,6 +381,76 @@ export function ConfigureDeployEnvDialog({
             />
             <p className="text-[11px] text-muted-foreground">
               {t(($) => $.configure_dialog.workflow_filename_hint)}
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">
+              {t(($) => $.configure_dialog.workflow_inputs_label)}
+            </Label>
+            {inputRows.length > 0 && (
+              <div className="space-y-2">
+                {inputRows.map((row, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <Input
+                      value={row.name}
+                      onChange={(e) =>
+                        setInputRows((rows) =>
+                          rows.map((r, i) =>
+                            i === idx ? { ...r, name: e.target.value } : r,
+                          ),
+                        )
+                      }
+                      placeholder={t(
+                        ($) =>
+                          $.configure_dialog.workflow_inputs_name_placeholder,
+                      )}
+                      className="font-mono text-[11px]"
+                    />
+                    <Input
+                      value={row.value}
+                      onChange={(e) =>
+                        setInputRows((rows) =>
+                          rows.map((r, i) =>
+                            i === idx ? { ...r, value: e.target.value } : r,
+                          ),
+                        )
+                      }
+                      placeholder={t(
+                        ($) =>
+                          $.configure_dialog.workflow_inputs_value_placeholder,
+                      )}
+                      className="font-mono text-[11px]"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setInputRows((rows) => rows.filter((_, i) => i !== idx))
+                      }
+                      aria-label={t(
+                        ($) => $.configure_dialog.workflow_inputs_remove,
+                      )}
+                    >
+                      <X className="size-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                setInputRows((rows) => [...rows, { name: "", value: "" }])
+              }
+            >
+              {t(($) => $.configure_dialog.workflow_inputs_add)}
+            </Button>
+            <p className="text-[11px] text-muted-foreground">
+              {t(($) => $.configure_dialog.workflow_inputs_hint)}
             </p>
           </div>
 

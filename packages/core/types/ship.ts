@@ -132,6 +132,13 @@ export interface DeployEnvironment {
    *  to actually fire; otherwise the dispatch is logged as skipped.
    *  Defaults to false; opt-in via the Configure deploy env dialog. */
   auto_deploy?: boolean;
+  /** Flat string→string workflow_dispatch inputs this env's deploy
+   *  workflow requires (e.g. `{ confirm: "deploy-prod" }`). Passed to
+   *  GitHub's workflow_dispatch when the deploy fires — satisfies
+   *  `required: true` inputs that would otherwise 422 an inputless
+   *  dispatch. Null/omitted when the workflow needs no inputs; older
+   *  backends (pre-migration 121) won't return this field. */
+  deploy_workflow_inputs?: Record<string, string> | null;
 }
 
 /** Phase 6 — entry returned by GET /api/deploy/adapters. */
@@ -219,6 +226,9 @@ export interface CreateDeployEnvironmentRequest {
   auto_promote?: boolean;
   deploy_workflow_filename?: string | null;
   auto_deploy?: boolean;
+  /** Flat string→string workflow_dispatch inputs the deploy workflow
+   *  requires. Omitted/empty means "no inputs". */
+  deploy_workflow_inputs?: Record<string, string> | null;
 }
 
 export interface UpdateDeployEnvironmentRequest {
@@ -228,6 +238,10 @@ export interface UpdateDeployEnvironmentRequest {
   auto_promote?: boolean;
   deploy_workflow_filename?: string | null;
   auto_deploy?: boolean;
+  /** Flat string→string workflow_dispatch inputs. Omitting the field
+   *  leaves the stored inputs unchanged (PATCH semantics); sending a
+   *  map replaces them. */
+  deploy_workflow_inputs?: Record<string, string> | null;
 }
 
 export interface LogDeployRequest {

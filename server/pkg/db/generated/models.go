@@ -762,6 +762,7 @@ type DeployEnvironment struct {
 	AdapterKind            string                `json:"adapter_kind"`
 	DeployWorkflowFilename pgtype.Text           `json:"deploy_workflow_filename"`
 	AutoDeploy             bool                  `json:"auto_deploy"`
+	DeployWorkflowInputs   []byte                `json:"deploy_workflow_inputs"`
 }
 
 type DeployHealthSnapshot struct {

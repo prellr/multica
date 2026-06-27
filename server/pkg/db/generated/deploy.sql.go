@@ -138,7 +138,7 @@ func (q *Queries) GetDeployByEnvAndSHA(ctx context.Context, arg GetDeployByEnvAn
 }
 
 const getDeployEnvironment = `-- name: GetDeployEnvironment :one
-SELECT id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy FROM deploy_environment WHERE id = $1
+SELECT id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy, deploy_workflow_inputs FROM deploy_environment WHERE id = $1
 `
 
 func (q *Queries) GetDeployEnvironment(ctx context.Context, id pgtype.UUID) (DeployEnvironment, error) {
@@ -160,12 +160,13 @@ func (q *Queries) GetDeployEnvironment(ctx context.Context, id pgtype.UUID) (Dep
 		&i.AdapterKind,
 		&i.DeployWorkflowFilename,
 		&i.AutoDeploy,
+		&i.DeployWorkflowInputs,
 	)
 	return i, err
 }
 
 const getDeployEnvironmentByRepoAndName = `-- name: GetDeployEnvironmentByRepoAndName :one
-SELECT de.id, de.workspace_id, de.project_id, de.kind, de.name, de.target_branch, de.target_url, de.current_sha, de.current_deployed_at, de.auto_promote, de.created_at, de.updated_at, de.adapter_kind, de.deploy_workflow_filename, de.auto_deploy FROM deploy_environment de
+SELECT de.id, de.workspace_id, de.project_id, de.kind, de.name, de.target_branch, de.target_url, de.current_sha, de.current_deployed_at, de.auto_promote, de.created_at, de.updated_at, de.adapter_kind, de.deploy_workflow_filename, de.auto_deploy, de.deploy_workflow_inputs FROM deploy_environment de
 JOIN project_resource pr ON pr.project_id = de.project_id
 WHERE de.workspace_id = $1
   AND pr.resource_type = 'github_repo'
@@ -205,12 +206,13 @@ func (q *Queries) GetDeployEnvironmentByRepoAndName(ctx context.Context, arg Get
 		&i.AdapterKind,
 		&i.DeployWorkflowFilename,
 		&i.AutoDeploy,
+		&i.DeployWorkflowInputs,
 	)
 	return i, err
 }
 
 const getDeployEnvironmentInWorkspace = `-- name: GetDeployEnvironmentInWorkspace :one
-SELECT id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy FROM deploy_environment
+SELECT id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy, deploy_workflow_inputs FROM deploy_environment
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -238,6 +240,7 @@ func (q *Queries) GetDeployEnvironmentInWorkspace(ctx context.Context, arg GetDe
 		&i.AdapterKind,
 		&i.DeployWorkflowFilename,
 		&i.AutoDeploy,
+		&i.DeployWorkflowInputs,
 	)
 	return i, err
 }
@@ -304,7 +307,7 @@ func (q *Queries) InsertDeploy(ctx context.Context, arg InsertDeployParams) (Dep
 }
 
 const listDeployEnvironmentsByProject = `-- name: ListDeployEnvironmentsByProject :many
-SELECT id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy FROM deploy_environment
+SELECT id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy, deploy_workflow_inputs FROM deploy_environment
 WHERE project_id = $1
 ORDER BY kind ASC, created_at ASC
 `
@@ -336,6 +339,7 @@ func (q *Queries) ListDeployEnvironmentsByProject(ctx context.Context, projectID
 			&i.AdapterKind,
 			&i.DeployWorkflowFilename,
 			&i.AutoDeploy,
+			&i.DeployWorkflowInputs,
 		); err != nil {
 			return nil, err
 		}
@@ -348,7 +352,7 @@ func (q *Queries) ListDeployEnvironmentsByProject(ctx context.Context, projectID
 }
 
 const listDeployEnvironmentsByWorkspace = `-- name: ListDeployEnvironmentsByWorkspace :many
-SELECT id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy FROM deploy_environment
+SELECT id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy, deploy_workflow_inputs FROM deploy_environment
 WHERE workspace_id = $1
 ORDER BY project_id, kind ASC
 `
@@ -378,6 +382,7 @@ func (q *Queries) ListDeployEnvironmentsByWorkspace(ctx context.Context, workspa
 			&i.AdapterKind,
 			&i.DeployWorkflowFilename,
 			&i.AutoDeploy,
+			&i.DeployWorkflowInputs,
 		); err != nil {
 			return nil, err
 		}
@@ -524,7 +529,7 @@ UPDATE deploy_environment de SET
     ),
     updated_at = now()
 WHERE de.id = $1
-RETURNING id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy
+RETURNING id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy, deploy_workflow_inputs
 `
 
 // Single-writer view of env.current_sha + current_deployed_at.
@@ -562,6 +567,7 @@ func (q *Queries) RecomputeEnvCurrentFromDeploys(ctx context.Context, id pgtype.
 		&i.AdapterKind,
 		&i.DeployWorkflowFilename,
 		&i.AutoDeploy,
+		&i.DeployWorkflowInputs,
 	)
 	return i, err
 }
@@ -574,9 +580,10 @@ UPDATE deploy_environment SET
     auto_promote             = COALESCE($5, auto_promote),
     deploy_workflow_filename = COALESCE($6, deploy_workflow_filename),
     auto_deploy              = COALESCE($7, auto_deploy),
+    deploy_workflow_inputs   = COALESCE($8, deploy_workflow_inputs),
     updated_at               = now()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy
+RETURNING id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy, deploy_workflow_inputs
 `
 
 type UpdateDeployEnvironmentParams struct {
@@ -587,6 +594,7 @@ type UpdateDeployEnvironmentParams struct {
 	AutoPromote            pgtype.Bool `json:"auto_promote"`
 	DeployWorkflowFilename pgtype.Text `json:"deploy_workflow_filename"`
 	AutoDeploy             pgtype.Bool `json:"auto_deploy"`
+	DeployWorkflowInputs   []byte      `json:"deploy_workflow_inputs"`
 }
 
 // PATCH path. narg fields are nullable for "leave alone" semantics. Every
@@ -595,6 +603,10 @@ type UpdateDeployEnvironmentParams struct {
 // `deploy_workflow_filename` uses sqlc.narg (not COALESCE) so passing
 // an explicit empty string clears the override (poller falls back to
 // workspace setting); passing NULL leaves the current value alone.
+//
+// `deploy_workflow_inputs` uses COALESCE so passing NULL leaves the
+// stored inputs unchanged (PATCH-omit semantics). The handler sends
+// an explicit empty JSON object `{}` to clear the inputs.
 func (q *Queries) UpdateDeployEnvironment(ctx context.Context, arg UpdateDeployEnvironmentParams) (DeployEnvironment, error) {
 	row := q.db.QueryRow(ctx, updateDeployEnvironment,
 		arg.ID,
@@ -604,6 +616,7 @@ func (q *Queries) UpdateDeployEnvironment(ctx context.Context, arg UpdateDeployE
 		arg.AutoPromote,
 		arg.DeployWorkflowFilename,
 		arg.AutoDeploy,
+		arg.DeployWorkflowInputs,
 	)
 	var i DeployEnvironment
 	err := row.Scan(
@@ -622,6 +635,7 @@ func (q *Queries) UpdateDeployEnvironment(ctx context.Context, arg UpdateDeployE
 		&i.AdapterKind,
 		&i.DeployWorkflowFilename,
 		&i.AutoDeploy,
+		&i.DeployWorkflowInputs,
 	)
 	return i, err
 }
@@ -632,7 +646,7 @@ UPDATE deploy_environment SET
     current_deployed_at = $3,
     updated_at          = now()
 WHERE id = $1
-RETURNING id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy
+RETURNING id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy, deploy_workflow_inputs
 `
 
 type UpdateDeployEnvironmentCurrentParams struct {
@@ -662,6 +676,7 @@ func (q *Queries) UpdateDeployEnvironmentCurrent(ctx context.Context, arg Update
 		&i.AdapterKind,
 		&i.DeployWorkflowFilename,
 		&i.AutoDeploy,
+		&i.DeployWorkflowInputs,
 	)
 	return i, err
 }
@@ -722,9 +737,9 @@ func (q *Queries) UpdateDeployStatus(ctx context.Context, arg UpdateDeployStatus
 const upsertDeployEnvironment = `-- name: UpsertDeployEnvironment :one
 INSERT INTO deploy_environment (
     workspace_id, project_id, kind, name, target_branch, target_url,
-    auto_promote, deploy_workflow_filename, auto_deploy
+    auto_promote, deploy_workflow_filename, auto_deploy, deploy_workflow_inputs
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 )
 ON CONFLICT (project_id, kind) DO UPDATE SET
     name                     = EXCLUDED.name,
@@ -733,8 +748,9 @@ ON CONFLICT (project_id, kind) DO UPDATE SET
     auto_promote             = EXCLUDED.auto_promote,
     deploy_workflow_filename = EXCLUDED.deploy_workflow_filename,
     auto_deploy              = EXCLUDED.auto_deploy,
+    deploy_workflow_inputs   = EXCLUDED.deploy_workflow_inputs,
     updated_at               = now()
-RETURNING id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy
+RETURNING id, workspace_id, project_id, kind, name, target_branch, target_url, current_sha, current_deployed_at, auto_promote, created_at, updated_at, adapter_kind, deploy_workflow_filename, auto_deploy, deploy_workflow_inputs
 `
 
 type UpsertDeployEnvironmentParams struct {
@@ -747,6 +763,7 @@ type UpsertDeployEnvironmentParams struct {
 	AutoPromote            bool                  `json:"auto_promote"`
 	DeployWorkflowFilename pgtype.Text           `json:"deploy_workflow_filename"`
 	AutoDeploy             bool                  `json:"auto_deploy"`
+	DeployWorkflowInputs   []byte                `json:"deploy_workflow_inputs"`
 }
 
 // Setup endpoint: creating or reconfiguring (project, kind). The unique
@@ -758,6 +775,11 @@ type UpsertDeployEnvironmentParams struct {
 // (`workspace.ship_hub_deploy_workflow_<kind>`). When the workspace
 // has multiple projects, each project's env can override the default
 // with its own repo's workflow filename.
+//
+// `deploy_workflow_inputs` is the flat string→string workflow_dispatch
+// inputs map this env's deploy workflow requires (e.g.
+// {"confirm":"deploy-prod"}). Nullable — null means "no inputs",
+// preserving inputless-dispatch behavior.
 func (q *Queries) UpsertDeployEnvironment(ctx context.Context, arg UpsertDeployEnvironmentParams) (DeployEnvironment, error) {
 	row := q.db.QueryRow(ctx, upsertDeployEnvironment,
 		arg.WorkspaceID,
@@ -769,6 +791,7 @@ func (q *Queries) UpsertDeployEnvironment(ctx context.Context, arg UpsertDeployE
 		arg.AutoPromote,
 		arg.DeployWorkflowFilename,
 		arg.AutoDeploy,
+		arg.DeployWorkflowInputs,
 	)
 	var i DeployEnvironment
 	err := row.Scan(
@@ -787,6 +810,7 @@ func (q *Queries) UpsertDeployEnvironment(ctx context.Context, arg UpsertDeployE
 		&i.AdapterKind,
 		&i.DeployWorkflowFilename,
 		&i.AutoDeploy,
+		&i.DeployWorkflowInputs,
 	)
 	return i, err
 }

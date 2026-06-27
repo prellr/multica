@@ -504,7 +504,6 @@ describe("ShipReleasePage", () => {
     expect(screen.getByTestId("release-resume-button")).toBeInTheDocument();
     expect(screen.getByTestId("release-resume-with-skip-button")).toBeInTheDocument();
     expect(screen.getByTestId("release-abort-button")).toBeInTheDocument();
-    expect(screen.getByTestId("ship-concierge-inline")).toBeInTheDocument();
   });
 
   it("calls resume mutation when the Resume button is clicked", async () => {

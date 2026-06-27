@@ -113,7 +113,14 @@ export function ShipShell({ children }: { children: React.ReactNode }) {
 
           {concierge ? (
             <div className="flex min-h-0 flex-1 flex-col">
-              <ChannelMessageList channelId={concierge.id} enabled={open} />
+              {/* openAtBottom: the Concierge is a chat assistant — land on the
+                  latest reply, not scrolled up into history at the unread
+                  divider (which also kept the load-older sentinel firing). */}
+              <ChannelMessageList
+                channelId={concierge.id}
+                enabled={open}
+                openAtBottom
+              />
               <ChannelComposer channel={concierge} />
             </div>
           ) : (

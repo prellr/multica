@@ -74,6 +74,11 @@ vi.mock("@multica/core/ship", () => ({
   useShipPrDetailStore: (selector: (s: { close: () => void }) => unknown) =>
     selector({ close: vi.fn() }),
   usePullRequestDetails: () => ({ data: null, isLoading: false, isError: false }),
+  // Persistent Concierge drawer — the header toggle (rendered in the
+  // no-token / empty-state branches) reads `toggle` from this store.
+  useShipConciergeDrawer: (
+    selector: (s: { open: boolean; setOpen: () => void; toggle: () => void }) => unknown,
+  ) => selector({ open: false, setOpen: vi.fn(), toggle: vi.fn() }),
 }));
 
 vi.mock("@multica/core/projects/queries", () => ({

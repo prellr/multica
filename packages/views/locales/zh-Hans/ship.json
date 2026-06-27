@@ -46,7 +46,8 @@
     "empty_title": "尚未配置 Concierge 频道",
     "empty_description": "Ship Concierge 是一个频道，你可以在其中自然地与 Claude 讨论，无需 @ 提及；Claude 会使用 Ship Hub 工具回答（发布状态、部署诊断、合并队列控制等）。",
     "setup_button": "设置 Concierge",
-    "setup_hint": "一次性选择工作区智能体、创建频道并配置环境监听者。"
+    "setup_hint": "一次性选择工作区智能体、创建频道并配置环境监听者。",
+    "collapse": "收起 Concierge"
   },
   "errors": {
     "token_expired_title": "GitHub 令牌已失效",
@@ -214,6 +215,13 @@
       "body_required_for_changes": "提交前请说明需要修改的内容。",
       "error_banner_title": "评审提交失败",
       "close_dialog": "关闭"
+    },
+    "ask_pilot": {
+      "label": "让 Pilot 处理",
+      "message": "Pilot —— 请看一下 PR #{{number}}（{{title}}）。它被阻塞了：{{reason}}。{{url}}",
+      "reason_conflict": "合并冲突 / 需要 rebase",
+      "reason_ci": "CI 失败",
+      "toast_success": "已请 Pilot 查看 #{{number}}"
     }
   },
   "linkage": {

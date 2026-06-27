@@ -93,7 +93,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { PageHeader } from "../../layout/page-header";
 import { useT } from "../../i18n";
 import { AppLink, useNavigation } from "../../navigation";
-import { ShipConciergePanel } from "./ship-concierge-panel";
+import { ShipConciergeToggle } from "./ship-concierge-toggle";
 import { ShipConciergeInline } from "./ship-concierge-inline";
 
 // Stage order for the progress bar. Mirrors the Postgres release_stage
@@ -386,7 +386,7 @@ export function ShipReleasePage({ releaseId }: ShipReleasePageProps) {
           {release.title}
         </h1>
         <div className="ml-auto">
-          <ShipConciergePanel />
+          <ShipConciergeToggle />
         </div>
       </PageHeader>
 

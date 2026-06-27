@@ -46,7 +46,8 @@
     "empty_title": "No Concierge channel configured yet",
     "empty_description": "The Ship Concierge is a channel where you can talk to Claude naturally — no @-mention required — and Claude answers using the Ship Hub tools (release state, deploy diagnostics, merge-train control, etc.).",
     "setup_button": "Set up Concierge",
-    "setup_hint": "Picks a workspace agent + creates the channel + wires the ambient-listener designation in one go."
+    "setup_hint": "Picks a workspace agent + creates the channel + wires the ambient-listener designation in one go.",
+    "collapse": "Collapse Concierge"
   },
   "errors": {
     "token_expired_title": "GitHub token expired",
@@ -215,6 +216,13 @@
       "body_required_for_changes": "Explain what needs to change before submitting.",
       "error_banner_title": "Review couldn't be submitted",
       "close_dialog": "Close"
+    },
+    "ask_pilot": {
+      "label": "Ask Pilot to fix",
+      "message": "Pilot — please take a look at PR #{{number}} ({{title}}). It's blocked: {{reason}}. {{url}}",
+      "reason_conflict": "merge conflict / needs rebase",
+      "reason_ci": "CI failing",
+      "toast_success": "Asked Pilot to look at #{{number}}"
     }
   },
   "linkage": {

@@ -43,3 +43,8 @@ export { ShipReleasePage } from "./components/ship-release-page";
 export { ShipSelectionBar } from "./components/ship-selection-bar";
 export { CreateReleaseDialog } from "./components/create-release-dialog";
 export { ShipActiveReleasesRail } from "./components/ship-active-releases-rail";
+
+// Persistent Concierge drawer — the shell wraps every Ship view; the
+// toggle lives in each page header.
+export { ShipShell } from "./components/ship-shell";
+export { ShipConciergeToggle } from "./components/ship-concierge-toggle";

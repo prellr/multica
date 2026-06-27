@@ -10,6 +10,7 @@ import {
   ListPlus,
   Eye,
   XCircle,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import type { PullRequest } from "@multica/core/types";
@@ -108,6 +109,21 @@ const REVIEW_CHIP: PrChip = {
   custom: true,
 };
 
+/** "Ask Pilot to fix" — contextual chip surfaced on a blocked PR (merge
+ *  conflict or red CI) when the workspace has a Concierge channel
+ *  configured. Like the Review chip it's `custom: true`: the click doesn't
+ *  fire a backend mutation, it drops a PR-referencing message into the
+ *  Concierge conversation and opens the docked drawer. Hidden entirely when
+ *  no Concierge is configured — there'd be nowhere to send the message. */
+const ASK_PILOT_CHIP: PrChip = {
+  id: "ask_pilot",
+  action: "ask_pilot",
+  labelKey: "ask_pilot",
+  icon: Sparkles,
+  variant: "secondary",
+  custom: true,
+};
+
 /** "Merge" — only shows for an approved + green PR. Destructive because it
  *  irreversibly publishes the change. */
 const MERGE_CHIP: PrChip = {
@@ -197,6 +213,11 @@ function makeRunSmokeTestsChip(stagingEnvId: string): PrChip {
 export interface PrChipInputs {
   stagingEnv?: { id: string; current_sha: string | null } | null;
   now?: Date;
+  /** True when the workspace has a Concierge channel configured (a channel
+   *  with a non-null `ambient_listener_agent_id`). Gates the "Ask Pilot to
+   *  fix" chip — without a Concierge there's nowhere to drop the message,
+   *  so the chip is hidden rather than no-op'd. */
+  conciergeConfigured?: boolean;
 }
 
 /**
@@ -239,6 +260,19 @@ export function derivePrChips(
     // author wants to know before they request review.
     if (pr.mergeable === "CONFLICTING") {
       chips.push(REBASE_ON_MAIN_CHIP);
+    }
+
+    // Rule 2.4 — "Ask Pilot to fix". A blocked PR (merge conflict or red
+    // CI) is exactly the kind of thing the Concierge can pick up. Surfaces
+    // alongside the rebase / diagnose chips (it doesn't replace them — those
+    // run the deterministic backend action; this hands the problem to the
+    // agent). Gated on `conciergeConfigured` so the chip never appears with
+    // nowhere to send the message.
+    if (
+      inputs.conciergeConfigured === true &&
+      (pr.mergeable === "CONFLICTING" || pr.ci_status === "failure")
+    ) {
+      chips.push(ASK_PILOT_CHIP);
     }
 
     // Rule 2.5 — Phase 6.5. Open + non-draft PRs get a Review chip so a
@@ -346,5 +380,6 @@ export const __testing__ = {
   TALK_TO_AGENT_CHIP,
   PULL_INTO_ISSUE_CHIP,
   REVIEW_CHIP,
+  ASK_PILOT_CHIP,
   AlertTriangleIcon: AlertTriangle,
 };

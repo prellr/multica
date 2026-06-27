@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import { channelKeys } from "./queries";
@@ -7,6 +8,7 @@ import type {
   Channel,
   ChannelMembership,
   ChannelMessage,
+  ChannelMessagesPage,
   CreateChannelRequest,
   UpdateChannelRequest,
   AddChannelMemberRequest,
@@ -17,6 +19,54 @@ import type {
 // Note: useToggleChannelReaction below also imports ChannelMessage. The
 // import above already has it. ChannelReaction is referenced inline in
 // the optimistic synthetic record so no separate import is needed.
+
+// The channel timeline cache is an infinite query (ROA-1139): pages of
+// newest-first messages, page 0 newest. Optimistic mutations MUST patch that
+// shape — a flat-array write (the pre-pagination shape) corrupts the cache,
+// and a flat-array PREPEND (`[msg, ...old]`) throws on the non-iterable page
+// object inside onMutate, which aborts the whole mutation so the message
+// never sends. These helpers patch the pages without caring about pagination.
+type ChannelMessagesCache = InfiniteData<ChannelMessagesPage>;
+
+/** Map `update` over every loaded page's messages (edit / delete / react —
+ *  the target row may be in any page once older history is loaded).
+ *  Exported for regression tests. */
+export function patchChannelMessages(
+  qc: QueryClient,
+  channelId: string,
+  update: (messages: ChannelMessage[]) => ChannelMessage[],
+): void {
+  qc.setQueryData<ChannelMessagesCache>(channelKeys.messages(channelId), (old) => {
+    if (!old) return old;
+    return {
+      ...old,
+      pages: old.pages.map((p) => ({ ...p, messages: update(p.messages) })),
+    };
+  });
+}
+
+/** Prepend a new message to the newest page (page 0, newest-first), seeding a
+ *  single page if the cache is empty. Used by the optimistic send.
+ *  Exported for regression tests. */
+export function prependChannelMessage(
+  qc: QueryClient,
+  channelId: string,
+  message: ChannelMessage,
+): void {
+  qc.setQueryData<ChannelMessagesCache>(channelKeys.messages(channelId), (old) => {
+    if (!old || old.pages.length === 0) {
+      return {
+        pages: [{ messages: [message], has_more: false, next_cursor: null }],
+        pageParams: [null],
+      };
+    }
+    const [first, ...rest] = old.pages;
+    return {
+      ...old,
+      pages: [{ ...first!, messages: [message, ...first!.messages] }, ...rest],
+    };
+  });
+}
 
 const logger = createLogger("channels.mut");
 
@@ -87,7 +137,7 @@ export function useSendChannelMessage(channelId: string) {
     mutationFn: (data: CreateChannelMessageRequest) => api.sendChannelMessage(channelId, data),
     onMutate: async (data) => {
       await qc.cancelQueries({ queryKey: channelKeys.messages(channelId) });
-      const prev = qc.getQueryData<ChannelMessage[]>(channelKeys.messages(channelId));
+      const prev = qc.getQueryData<ChannelMessagesCache>(channelKeys.messages(channelId));
       const optimistic: ChannelMessage = {
         id: `optimistic-${Date.now()}`,
         channel_id: channelId,
@@ -102,10 +152,7 @@ export function useSendChannelMessage(channelId: string) {
         thread_reply_count: 0,
         attachments: [],
       };
-      // Newest-first ordering matches the list query.
-      qc.setQueryData<ChannelMessage[]>(channelKeys.messages(channelId), (old) =>
-        old ? [optimistic, ...old] : [optimistic],
-      );
+      prependChannelMessage(qc, channelId, optimistic);
       return { prev };
     },
     onError: (_err, _vars, ctx) => {
@@ -176,9 +223,9 @@ export function useUpdateChannelMessage(channelId: string) {
       api.updateChannelMessage(channelId, params.messageId, params.content),
     onMutate: async (params) => {
       await qc.cancelQueries({ queryKey: channelKeys.messages(channelId) });
-      const prev = qc.getQueryData<ChannelMessage[]>(channelKeys.messages(channelId));
-      qc.setQueryData<ChannelMessage[]>(channelKeys.messages(channelId), (old) =>
-        old?.map((m) =>
+      const prev = qc.getQueryData<ChannelMessagesCache>(channelKeys.messages(channelId));
+      patchChannelMessages(qc, channelId, (msgs) =>
+        msgs.map((m) =>
           m.id === params.messageId ? { ...m, content: params.content } : m,
         ),
       );
@@ -218,15 +265,12 @@ export function useDeleteChannelMessage(channelId: string) {
       const parentMessageId =
         typeof vars === "string" ? undefined : vars.parentMessageId;
       await qc.cancelQueries({ queryKey: channelKeys.messages(channelId) });
-      const prev = qc.getQueryData<ChannelMessage[]>(channelKeys.messages(channelId));
+      const prev = qc.getQueryData<ChannelMessagesCache>(channelKeys.messages(channelId));
       const stamp = new Date().toISOString();
-      // Optimistic patch on the timeline cache (top-level rows).
-      qc.setQueryData<ChannelMessage[]>(channelKeys.messages(channelId), (old) =>
-        old?.filter((m) => m.id !== messageId).concat(
-          (old ?? [])
-            .filter((m) => m.id === messageId)
-            .map((m) => ({ ...m, deleted_at: stamp })),
-        ),
+      // Optimistic patch on the timeline cache: flip deleted_at in place so
+      // the row renders the "[message deleted]" placeholder without reordering.
+      patchChannelMessages(qc, channelId, (msgs) =>
+        msgs.map((m) => (m.id === messageId ? { ...m, deleted_at: stamp } : m)),
       );
       // Optimistic patch on the parent's thread cache when this is a
       // reply — flip deleted_at on the matching row so the panel shows
@@ -291,13 +335,13 @@ export function useToggleChannelReaction(channelId: string) {
     },
     onMutate: async (params) => {
       await qc.cancelQueries({ queryKey: channelKeys.messages(channelId) });
-      const prevMessages = qc.getQueryData<ChannelMessage[]>(channelKeys.messages(channelId));
+      const prevMessages = qc.getQueryData<ChannelMessagesCache>(channelKeys.messages(channelId));
       // Optimistic patch in the message list. We don't have the actor's
       // full reaction record handy until the server returns; for the
       // optimistic add we synthesize a minimal one with id="optimistic-…"
       // that the WS event will replace.
-      qc.setQueryData<ChannelMessage[]>(channelKeys.messages(channelId), (old) =>
-        old?.map((m) => {
+      patchChannelMessages(qc, channelId, (msgs) =>
+        msgs.map((m) => {
           if (m.id !== params.messageId) return m;
           if (params.currentlyReacted) {
             return {

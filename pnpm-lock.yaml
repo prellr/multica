@@ -9,6 +9,9 @@ catalogs:
     '@formatjs/intl-localematcher':
       specifier: ^0.8.4
       version: 0.8.4
+    '@shadcn/react':
+      specifier: ^0.1.0
+      version: 0.1.0
     '@tailwindcss/postcss':
       specifier: ^4
       version: 4.2.2
@@ -577,7 +580,7 @@ importers:
         specifier: ^1.2.1
         version: 1.2.1
       '@shadcn/react':
-        specifier: ^0.1.0
+        specifier: 'catalog:'
         version: 0.1.0(@types/react@19.2.14)(react@19.2.3)
       '@tanstack/react-table':
         specifier: 'catalog:'

@@ -173,6 +173,12 @@ export interface RollbackDeployRequest {
   target_sha: string;
 }
 
+/** Board-level "Deploy to production" — response from
+ *  POST /api/deploy_environments/:id/promote. */
+export interface PromoteDeployEnvironmentResponse {
+  dispatched: boolean;
+}
+
 /** Single deploy attempt logged against an environment. */
 export interface Deploy {
   id: string;

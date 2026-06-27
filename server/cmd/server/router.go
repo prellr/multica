@@ -597,6 +597,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Put("/api/deploy_environments/{id}/adapter", h.ConfigureDeployAdapter)
 			r.Post("/api/deploy_environments/{id}/poll_now", h.PollDeployEnvironment)
 			r.Post("/api/deploy_environments/{id}/rollback", h.RollbackDeployEnvironment)
+			// Ship Hub Phase 7d-env — board-level "Deploy to
+			// production" (dispatches the env's deploy workflow,
+			// shipping all of main) + reconcile (heals releases
+			// stranded by the old exact-SHA-only linkage). Workspace-
+			// member gated; promote additionally needs a GitHub token.
+			r.Post("/api/deploy_environments/{id}/promote", h.PromoteDeployEnvironment)
+			r.Post("/api/deploy_environments/{id}/reconcile", h.ReconcileDeployEnvironmentReleases)
 
 			// Ship Hub Phase 7a — Releases. Same ship_hub_enabled gate; no
 			// GitHub token required for create/list/cancel because the

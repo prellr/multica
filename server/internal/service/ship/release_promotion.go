@@ -149,6 +149,108 @@ func (s *Service) PromoteRelease(
 	return updated, nil
 }
 
+// Sentinel error returned when an env-level promote is requested but
+// the env has no deploy_workflow_filename to dispatch.
+var ErrEnvNoDeployWorkflow = errors.New("deploy environment has no deploy_workflow_filename configured")
+
+// dispatchEnvDeployWorkflow is the reusable dispatch core shared by
+// maybeAutoDispatchProductionDeploy (release-driven, opt-in) and
+// PromoteEnvironment (board-level, explicit). It resolves the project's
+// github_repo resource, parses owner/repo, and fires the env's
+// deploy_workflow_filename via workflow_dispatch on the env's
+// target_branch (default "main").
+//
+// Returns:
+//   - ErrEnvNoDeployWorkflow when the env has no workflow filename.
+//   - a descriptive error when the repo can't be resolved/parsed or the
+//     dispatch call fails.
+//
+// Callers decide whether the error is fatal (PromoteEnvironment surfaces
+// it to the user) or best-effort (maybeAutoDispatchProductionDeploy logs
+// and moves on).
+func (s *Service) dispatchEnvDeployWorkflow(
+	ctx context.Context,
+	projectID pgtype.UUID,
+	env db.DeployEnvironment,
+) error {
+	if s.Github == nil {
+		return errors.New("github client unset")
+	}
+	filename := strings.TrimSpace(textValue(env.DeployWorkflowFilename))
+	if filename == "" {
+		return ErrEnvNoDeployWorkflow
+	}
+	// Resolve repo URL from the project's github_repo resource.
+	resources, err := s.Q.ListProjectResources(ctx, projectID)
+	if err != nil {
+		return fmt.Errorf("list project resources: %w", err)
+	}
+	var repoURL string
+	for _, r := range resources {
+		if r.ResourceType != "github_repo" {
+			continue
+		}
+		if u, err := repoURLFromResource(r.ResourceRef); err == nil {
+			repoURL = u
+			break
+		}
+	}
+	if repoURL == "" {
+		return errors.New("project has no github_repo resource")
+	}
+	owner, repo, err := gh.ParseRepoURL(repoURL)
+	if err != nil {
+		return fmt.Errorf("parse repo url %q: %w", repoURL, err)
+	}
+	branch := strings.TrimSpace(env.TargetBranch)
+	if branch == "" {
+		branch = "main"
+	}
+	if err := s.Github.DispatchWorkflow(ctx, owner, repo, filename, branch, nil); err != nil {
+		return fmt.Errorf("dispatch workflow %s on %s: %w", filename, branch, err)
+	}
+	return nil
+}
+
+// PromoteEnvironment dispatches the env's deploy workflow on demand —
+// the board-level "Deploy to production" action. Unlike
+// maybeAutoDispatchProductionDeploy (which is release-scoped and gated
+// on auto_deploy), this is an explicit operator request: it ALWAYS
+// dispatches (no auto_deploy gate) and a missing workflow filename is a
+// hard error rather than a silent no-op.
+//
+// Works for any env kind; the UI exposes it on production. One prod
+// deploy ships all of main, and the Phase B ancestry resolver advances
+// every release that deploy provably shipped — so this single action
+// replaces N per-release promotes.
+//
+// Returns ErrEnvNoDeployWorkflow when no workflow is configured so the
+// handler can surface a clean 400.
+func (s *Service) PromoteEnvironment(
+	ctx context.Context,
+	env db.DeployEnvironment,
+	actor pgtype.UUID,
+	deps *StagingDeps,
+) error {
+	if strings.TrimSpace(textValue(env.DeployWorkflowFilename)) == "" {
+		return ErrEnvNoDeployWorkflow
+	}
+	if err := s.dispatchEnvDeployWorkflow(ctx, env.ProjectID, env); err != nil {
+		slog.Warn("ship: env promote dispatch failed",
+			"env_id", uuidString(env.ID), "project_id", uuidString(env.ProjectID), "error", err)
+		return err
+	}
+	branch := strings.TrimSpace(env.TargetBranch)
+	if branch == "" {
+		branch = "main"
+	}
+	filename := strings.TrimSpace(textValue(env.DeployWorkflowFilename))
+	slog.Info("ship: env promote dispatched",
+		"env_id", uuidString(env.ID), "project_id", uuidString(env.ProjectID),
+		"workflow", filename, "ref", branch)
+	return nil
+}
+
 // maybeAutoDispatchProductionDeploy fires the production env's
 // workflow_dispatch when auto_deploy is set. No-op (with a debug log)
 // when prerequisites aren't met. Errors don't fail the surrounding
@@ -187,43 +289,20 @@ func (s *Service) maybeAutoDispatchProductionDeploy(
 			"release_id", uuidString(release.ID), "env_id", uuidString(prodEnv.ID))
 		return
 	}
-	// Resolve repo URL from the project's github_repo resource.
-	resources, err := s.Q.ListProjectResources(ctx, release.ProjectID)
-	if err != nil {
-		slog.Warn("ship: auto-deploy list resources failed",
-			"release_id", uuidString(release.ID), "error", err)
-		return
-	}
-	var repoURL string
-	for _, r := range resources {
-		if r.ResourceType != "github_repo" {
-			continue
-		}
-		if u, err := repoURLFromResource(r.ResourceRef); err == nil {
-			repoURL = u
-			break
-		}
-	}
-	if repoURL == "" {
-		slog.Info("ship: auto-deploy skipped, project has no github_repo resource",
-			"release_id", uuidString(release.ID))
-		return
-	}
-	owner, repo, err := gh.ParseRepoURL(repoURL)
-	if err != nil {
-		slog.Warn("ship: auto-deploy unparseable repo url",
-			"release_id", uuidString(release.ID), "url", repoURL, "error", err)
-		return
-	}
 	branch := strings.TrimSpace(prodEnv.TargetBranch)
 	if branch == "" {
 		branch = "main"
 	}
-	if err := s.Github.DispatchWorkflow(ctx, owner, repo, filename, branch, nil); err != nil {
+	// Delegate to the shared dispatch core so the release-driven and the
+	// board-level promote paths fire identical workflow_dispatch calls.
+	if err := s.dispatchEnvDeployWorkflow(ctx, release.ProjectID, *prodEnv); err != nil {
+		if errors.Is(err, ErrEnvNoDeployWorkflow) {
+			// Already logged above by the empty-filename guard; defensive.
+			return
+		}
 		slog.Warn("ship: auto-deploy workflow_dispatch failed",
 			"release_id", uuidString(release.ID),
-			"owner", owner, "repo", repo, "workflow", filename, "ref", branch,
-			"error", err)
+			"workflow", filename, "ref", branch, "error", err)
 		_, _ = s.insertReleaseEvent(ctx, release.ID, "release_auto_dispatch_failed", actor, map[string]any{
 			"workflow": filename, "ref": branch, "error": err.Error(),
 		})
@@ -231,7 +310,7 @@ func (s *Service) maybeAutoDispatchProductionDeploy(
 	}
 	slog.Info("ship: auto-deploy dispatched",
 		"release_id", uuidString(release.ID),
-		"owner", owner, "repo", repo, "workflow", filename, "ref", branch)
+		"workflow", filename, "ref", branch)
 	_, _ = s.insertReleaseEvent(ctx, release.ID, "release_auto_dispatched", actor, map[string]any{
 		"workflow": filename, "ref": branch,
 	})
@@ -247,10 +326,15 @@ func (s *Service) maybeAutoDispatchProductionDeploy(
 // record production_deploy_id / production_main_sha and advance to
 // in_production.
 //
-// Tolerant of stage being either "verifying" or "promoting" — the
-// deploy can land before the user clicks Promote (a fast pipeline that
-// auto-promotes from staging), and we don't want to drop the linkage
-// in that case. When stage is verifying, we treat the deploy as a
+// Tolerant of stage being "in_staging", "verifying", or "promoting" —
+// the deploy can land before the user clicks Promote (a fast pipeline
+// that auto-promotes from staging), and we don't want to drop the
+// linkage in that case. in_staging is included for the Phase B
+// environment-level resolver: when a production deploy provably ships a
+// release's code (it merged before the deploy ran), the release IS in
+// production even if Ship Hub's state machine still shows it parked in
+// staging — that's exactly the stranded-release condition Phase C heals.
+// When stage is in_staging/verifying we treat the deploy as a
 // promote-and-link in a single step.
 func (s *Service) LinkProductionDeploy(
 	ctx context.Context,
@@ -274,11 +358,15 @@ func (s *Service) LinkProductionDeploy(
 		return db.ShipRelease{}, fmt.Errorf("set production deploy: %w", err)
 	}
 
-	// Stage flip to in_production. We allow the transition from either
-	// promoting or verifying — the second case happens when the user's
-	// pipeline auto-promotes (no explicit click) and the webhook fires
-	// while the release is still in verifying.
-	if updated.Stage == db.ReleaseStagePromoting || updated.Stage == db.ReleaseStageVerifying {
+	// Stage flip to in_production. We allow the transition from
+	// promoting, verifying, or in_staging. The latter two happen when
+	// the user's pipeline auto-promotes (no explicit click) and the
+	// webhook fires while the release is still upstream, and — for the
+	// Phase B resolver — when a prod deploy provably shipped a release
+	// still parked in staging.
+	if updated.Stage == db.ReleaseStagePromoting ||
+		updated.Stage == db.ReleaseStageVerifying ||
+		updated.Stage == db.ReleaseStageInStaging {
 		flipped, err := s.Q.UpdateReleaseStage(ctx, db.UpdateReleaseStageParams{
 			ID:         releaseID,
 			Stage:      db.ReleaseStageInProduction,
@@ -316,6 +404,74 @@ func (s *Service) LinkProductionDeploy(
 		shortSHA(deploySHA),
 	))
 	return updated, nil
+}
+
+// ResolveReleasesForProdSHA is the ancestry/ordering resolver shared by
+// the prod-deploy-landed webhook path (Phase B) and the manual
+// reconcile endpoint (Phase C). It advances EVERY non-terminal release
+// for `projectID` that the production deploy at `sha` provably shipped —
+// not just the one release whose merged_main_sha matches exactly.
+//
+// Ordering heuristic (NOT git ancestry):
+//
+//	A production deploy ships "main at SHA X", which contains every PR
+//	merged to main BEFORE that deploy ran. We approximate git ancestry
+//	with merge time: a release whose merged_at <= the deploy's cutoff is
+//	contained in the deploy. This is correct for the common case
+//	(releases merge, then a prod deploy ships all of main) and is the
+//	same heuristic FindStuckPromotingReleaseForProject already relies on.
+//
+// Why it's safe:
+//   - Only NON-terminal releases (in_staging / verifying / promoting)
+//     are touched — never a done / rolled_back / cancelled release.
+//   - Only releases whose merged_at <= cutoff are advanced. A release
+//     merged AFTER the deploy ran is provably NOT in it and is skipped.
+//   - Each release is advanced via LinkProductionDeploy, which already
+//     enforces its own stage guard and finalizes to done only when all
+//     PRs are merged.
+//
+// Known limitation (future refinement): out-of-order merges. If release
+// B merged before release A but A's deploy landed first, merge-time
+// ordering can mis-attribute. The exact fix is the GitHub compare API
+// (does the deployed commit contain each release's merge_commit_sha?);
+// that's deferred. Merge time is a strict, monotonic, locally-available
+// signal that handles the overwhelmingly common in-order case.
+//
+// `cutoff` is the deploy's effective time (the anchor release's
+// merged_at when an exact SHA match exists, else the deploy row's
+// completed_at/triggered_at). Best-effort: a per-release failure logs
+// and continues; the function never panics. Returns the count of
+// releases it advanced.
+func (s *Service) ResolveReleasesForProdSHA(
+	ctx context.Context,
+	projectID, deployID pgtype.UUID,
+	sha string,
+	cutoff time.Time,
+	deps *StagingDeps,
+) int {
+	if !projectID.Valid || sha == "" {
+		return 0
+	}
+	releases, err := s.Q.ListNonTerminalReleasesForProjectMergedAtOrBefore(ctx,
+		db.ListNonTerminalReleasesForProjectMergedAtOrBeforeParams{
+			ProjectID: projectID,
+			Cutoff:    pgtype.Timestamptz{Time: cutoff, Valid: true},
+		})
+	if err != nil {
+		slog.Warn("ship: resolve releases for prod sha — list failed",
+			"project_id", uuidString(projectID), "sha", sha, "error", err)
+		return 0
+	}
+	advanced := 0
+	for _, rel := range releases {
+		if _, err := s.LinkProductionDeploy(ctx, rel.ID, deployID, sha, deps); err != nil {
+			slog.Warn("ship: resolve releases for prod sha — link failed",
+				"release_id", uuidString(rel.ID), "sha", sha, "error", err)
+			continue
+		}
+		advanced++
+	}
+	return advanced
 }
 
 // MarkReleaseRollback records the user's decision to roll back. Sets

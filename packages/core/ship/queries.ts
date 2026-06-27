@@ -706,6 +706,31 @@ export function useRollbackDeployEnvironment(environmentId: string, projectId: s
   });
 }
 
+/** Board-level "Deploy to production" — dispatches the env's deploy
+ *  workflow, shipping everything currently merged to main (not just one
+ *  release). The Phase B ancestry resolver, on the resulting deploy
+ *  webhook, advances every release that deploy provably shipped, so we
+ *  invalidate the env's deploys + the whole release cache on settle. */
+export function usePromoteDeployEnvironment(environmentId: string, projectId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: () => api.promoteDeployEnvironment(environmentId),
+    onSettled: () => {
+      qc.invalidateQueries({
+        queryKey: shipKeys.environments(wsId, projectId),
+      });
+      qc.invalidateQueries({
+        queryKey: shipKeys.deploys(wsId, environmentId),
+      });
+      // The resolver can advance several releases at once; wipe the
+      // whole release cache (detail + active rail + per-project lists).
+      qc.invalidateQueries({ queryKey: shipKeys.releases(wsId) });
+      qc.invalidateQueries({ queryKey: shipKeys.summary(wsId) });
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Phase 7a — Releases.
 //

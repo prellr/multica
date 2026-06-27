@@ -518,6 +518,31 @@ WHERE workspace_id = $1
 ORDER BY updated_at DESC
 LIMIT 1;
 
+-- name: ListNonTerminalReleasesForProjectMergedAtOrBefore :many
+-- Phase B ancestry/ordering resolver. Given a production deploy that
+-- landed at a cutoff time, return EVERY non-terminal release for the
+-- project whose merge predates (or equals) the deploy — i.e. every
+-- release the deploy provably shipped, ordered oldest-merge-first so
+-- the caller advances them in merge order.
+--
+-- Scope:
+--   * project_id = $1 — the deploy's project (workspace scope flows
+--     through the project, which is workspace-owned).
+--   * stage IN ('in_staging','verifying','promoting') — non-terminal,
+--     production-eligible stages. 'merging' is excluded (the train
+--     hasn't finished) and the three terminal stages are excluded.
+--   * merged_at IS NOT NULL AND merged_at <= cutoff — only releases
+--     whose merge commit is contained in the deployed main tip by
+--     merge time. A release merged AFTER the deploy is NOT in it.
+--   * ORDER BY merged_at ASC — advance oldest-merged first; the
+--     exact-SHA anchor (if any) is naturally included in the set.
+SELECT * FROM ship_release
+WHERE project_id = $1
+  AND stage IN ('in_staging', 'verifying', 'promoting')
+  AND merged_at IS NOT NULL
+  AND merged_at <= sqlc.arg('cutoff')::timestamptz
+ORDER BY merged_at ASC;
+
 -- name: FindStuckPromotingReleaseForProject :one
 -- Time-based fallback for the deploy poller: when a successful
 -- production workflow run doesn't have an exact SHA match against

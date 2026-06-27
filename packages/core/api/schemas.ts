@@ -513,6 +513,18 @@ export const PollDeployEnvironmentResponseSchema = z.object({
 
 export const EMPTY_POLL_DEPLOY_ENVIRONMENT_RESPONSE = {};
 
+// Board-level "Deploy to production" — dispatches the env's deploy
+// workflow, shipping all of main. The backend returns { dispatched: true }
+// on success. `.default(false)` so a drifted/empty body downgrades to
+// "not dispatched" rather than throwing into the UI.
+export const PromoteDeployEnvironmentResponseSchema = z.object({
+  dispatched: z.boolean().default(false),
+}).loose();
+
+export const EMPTY_PROMOTE_DEPLOY_ENVIRONMENT_RESPONSE = {
+  dispatched: false,
+};
+
 export const DeploySchema = z.object({
   id: z.string(),
   workspace_id: z.string().default(""),

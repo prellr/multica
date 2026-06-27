@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DashboardUsageDailyListSchema,
   ListIssuesResponseSchema,
+  PromoteDeployEnvironmentResponseSchema,
 } from "./schemas";
 
 const baseIssue = {
@@ -81,5 +82,31 @@ describe("dashboard + runtime usage schema drift", () => {
 
   it("rejects a non-array body so parseWithFallback can return its fallback", () => {
     expect(DashboardUsageDailyListSchema.safeParse(null).success).toBe(false);
+  });
+});
+
+describe("PromoteDeployEnvironmentResponseSchema (deploy-to-production)", () => {
+  it("parses the happy { dispatched: true } body", () => {
+    const parsed = PromoteDeployEnvironmentResponseSchema.parse({
+      dispatched: true,
+    });
+    expect(parsed.dispatched).toBe(true);
+  });
+
+  it("downgrades a missing 'dispatched' field to false instead of throwing", () => {
+    // Backend drift: an older/newer server omits the field. The UI must
+    // read 'not dispatched' rather than white-screen.
+    const parsed = PromoteDeployEnvironmentResponseSchema.parse({});
+    expect(parsed.dispatched).toBe(false);
+  });
+
+  it("coerces a wrong-typed 'dispatched' so safeParse can fall back", () => {
+    // A wrong type (string instead of boolean) fails closed; the client's
+    // parseWithFallback then returns EMPTY_PROMOTE_DEPLOY_ENVIRONMENT_RESPONSE.
+    expect(
+      PromoteDeployEnvironmentResponseSchema.safeParse({
+        dispatched: "yes",
+      }).success,
+    ).toBe(false);
   });
 });

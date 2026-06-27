@@ -185,6 +185,7 @@ export type {
   ConfigureDeployAdapterRequest,
   ConfigureDeployAdapterResponse,
   PollDeployEnvironmentResponse,
+  PromoteDeployEnvironmentResponse,
   RollbackDeployRequest,
   ListDeploysResponse,
   WebhookSecretResponse,

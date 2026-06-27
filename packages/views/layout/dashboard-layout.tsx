@@ -33,7 +33,7 @@ export function DashboardLayout({
     >
       <SidebarProvider className="h-svh">
         <WorkspacePresencePrefetch />
-        <AppSidebar searchSlot={searchSlot} />
+        <AppSidebar searchSlot={searchSlot} collapsible="icon" />
         <SidebarInset className="relative overflow-hidden">
           {children}
           <ModalRegistry />

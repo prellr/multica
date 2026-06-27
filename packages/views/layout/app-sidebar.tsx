@@ -372,6 +372,12 @@ interface AppSidebarProps {
   headerClassName?: string;
   /** Extra style for SidebarHeader */
   headerStyle?: React.CSSProperties;
+  /**
+   * Collapse behavior. "icon" collapses to a slim icon rail (web default);
+   * "offcanvas" fully hides it. Desktop stays on "offcanvas" until its
+   * macOS traffic-light top bar handles an always-visible rail.
+   */
+  collapsible?: "offcanvas" | "icon";
 }
 
 // Phase 5 — ambient sidebar segment strip for the Ship Hub.
@@ -449,7 +455,7 @@ function ShipSidebarSegmentStrip({
   );
 }
 
-export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }: AppSidebarProps = {}) {
+export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle, collapsible = "offcanvas" }: AppSidebarProps = {}) {
   const { t } = useT("layout");
   const { pathname, push } = useNavigation();
   const user = useAuthStore((s) => s.user);
@@ -605,7 +611,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   }, [pathname]);
 
   return (
-      <Sidebar variant="inset">
+      <Sidebar variant="inset" collapsible={collapsible}>
         {topSlot}
         {/* Workspace Switcher */}
         <SidebarHeader className={cn("py-3", headerClassName)} style={headerStyle}>
@@ -729,7 +735,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
           </SidebarMenu>
           <SidebarMenu>
             {searchSlot && (
-              <SidebarMenuItem>
+              <SidebarMenuItem className="group-data-[collapsible=icon]:hidden">
                 {searchSlot}
               </SidebarMenuItem>
             )}

@@ -34,6 +34,7 @@ const SIDEBAR_WIDTH_MAX = 360
 const SIDEBAR_WIDTH_STORAGE_KEY = "sidebar_width"
 const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
+const SIDEBAR_KEYBOARD_SHORTCUT = "b"
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
@@ -112,6 +113,24 @@ function SidebarProvider({
     return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open)
   }, [isMobile, setOpen, setOpenMobile])
 
+  // Cmd/Ctrl-B toggles the sidebar (the stock shadcn shortcut, dropped from
+  // this vendored copy). Lives in the provider so every app gets it inside
+  // the context. AppSidebar's own "c" shortcut early-returns on modifiers,
+  // so there's no conflict.
+  React.useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key === SIDEBAR_KEYBOARD_SHORTCUT &&
+        (event.metaKey || event.ctrlKey)
+      ) {
+        event.preventDefault()
+        toggleSidebar()
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [toggleSidebar])
+
   // We add a state so that we can do data-state="expanded" or "collapsed".
   // This makes it easier to style the sidebar with Tailwind classes.
   const state = open ? "expanded" : "collapsed"
@@ -169,7 +188,30 @@ function Sidebar({
   variant?: "sidebar" | "floating" | "inset"
   collapsible?: "offcanvas" | "icon" | "none"
 }) {
-  const { isMobile, state, openMobile, setOpenMobile, isResizing } = useSidebar()
+  const { isMobile, state, openMobile, setOpenMobile, isResizing, toggleSidebar } =
+    useSidebar()
+
+  // Click on the sidebar's empty "black space" toggles it. A closest() guard
+  // ignores clicks that land on any interactive control (nav links, buttons,
+  // inputs, menu items, the resize rail, drag handles) so only background
+  // clicks toggle. Applied to the desktop panel only — mobile is a Sheet with
+  // its own overlay-to-close.
+  const handleBackgroundClick = React.useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const target = event.target as HTMLElement
+      if (
+        target.closest(
+          "a, button, input, textarea, select, label, [role='button'], [role='menuitem'], [role='tab'], [role='switch'], [data-slot='sidebar-rail'], [data-sidebar='trigger'], [draggable='true']",
+        )
+      ) {
+        return
+      }
+      // Ignore background clicks that are really the tail of a text selection.
+      if ((window.getSelection()?.toString().length ?? 0) > 0) return
+      toggleSidebar()
+    },
+    [toggleSidebar],
+  )
 
   if (collapsible === "none") {
     return (
@@ -251,6 +293,7 @@ function Sidebar({
         <div
           data-sidebar="sidebar"
           data-slot="sidebar-inner"
+          onClick={handleBackgroundClick}
           className="flex size-full flex-col bg-sidebar group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:shadow-sm group-data-[variant=floating]:ring-1 group-data-[variant=floating]:ring-sidebar-border"
         >
           {children}

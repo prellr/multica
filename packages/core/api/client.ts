@@ -135,6 +135,7 @@ import type {
   ConfigureDeployAdapterRequest,
   ConfigureDeployAdapterResponse,
   PollDeployEnvironmentResponse,
+  PromoteDeployEnvironmentResponse,
   RollbackDeployRequest,
   ListShipProjectsResponse,
   ListPullRequestsResponse,
@@ -246,6 +247,8 @@ import {
   EMPTY_CONFIGURE_DEPLOY_ADAPTER_RESPONSE,
   PollDeployEnvironmentResponseSchema,
   EMPTY_POLL_DEPLOY_ENVIRONMENT_RESPONSE,
+  PromoteDeployEnvironmentResponseSchema,
+  EMPTY_PROMOTE_DEPLOY_ENVIRONMENT_RESPONSE,
   WebhookSecretResponseSchema,
   EMPTY_WEBHOOK_SECRET_RESPONSE,
   ActionResultSchema,
@@ -2539,6 +2542,25 @@ export class ApiClient {
       PollDeployEnvironmentResponseSchema,
       EMPTY_POLL_DEPLOY_ENVIRONMENT_RESPONSE,
       { endpoint: "POST /api/deploy_environments/:id/poll_now" },
+    );
+  }
+
+  // Board-level "Deploy to production" — dispatches the env's deploy
+  // workflow on its target branch, shipping everything currently merged
+  // to main. The Phase B ancestry resolver advances every release the
+  // resulting deploy provably ships.
+  async promoteDeployEnvironment(
+    environmentId: string,
+  ): Promise<PromoteDeployEnvironmentResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/deploy_environments/${environmentId}/promote`,
+      { method: "POST" },
+    );
+    return parseWithFallback(
+      raw,
+      PromoteDeployEnvironmentResponseSchema,
+      EMPTY_PROMOTE_DEPLOY_ENVIRONMENT_RESPONSE,
+      { endpoint: "POST /api/deploy_environments/:id/promote" },
     );
   }
 

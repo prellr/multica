@@ -325,7 +325,14 @@
     "popover_no_log": "无日志地址",
     "empty_lane": "暂无部署记录",
     "edit_environment": "编辑环境",
-    "log_deploy": "记录部署"
+    "log_deploy": "记录部署",
+    "deploy_to_production": "部署到生产环境",
+    "deploy_confirm_title": "部署到生产环境？",
+    "deploy_confirm_body": "这将在 {{branch}} 上触发 {{workflow}}，并发布当前已合并到 main 的全部改动，而不仅仅是单个发布。",
+    "deploy_confirm_action": "部署",
+    "deploy_dispatched": "已触发生产部署",
+    "deploy_failed": "触发生产部署失败",
+    "deploy_cancel": "取消"
   },
   "configure_dialog": {
     "title_create": "配置部署环境",

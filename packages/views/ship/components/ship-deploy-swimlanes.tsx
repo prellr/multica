@@ -2,8 +2,19 @@
 
 import { useMemo, useState } from "react";
 import { ExternalLink, Pencil, Plus, Rocket } from "lucide-react";
+import { toast } from "sonner";
 import { adapterIcon } from "./adapter-icons";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@multica/ui/components/ui/alert-dialog";
 import {
   Popover,
   PopoverContent,
@@ -15,6 +26,7 @@ import {
 import { cn } from "@multica/ui/lib/utils";
 import {
   useDeployEnvironments,
+  usePromoteDeployEnvironment,
   useRecentDeploys,
 } from "@multica/core/ship";
 import type { Deploy, DeployEnvironment } from "@multica/core/types";
@@ -336,11 +348,21 @@ function Swimlane({ env, repoUrl }: SwimlaneProps) {
 
   const [configOpen, setConfigOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [promoteOpen, setPromoteOpen] = useState(false);
 
-  const laneLabel =
-    env.kind === "production"
-      ? t(($) => $.swimlane.lane_production)
-      : t(($) => $.swimlane.lane_staging);
+  const promoteMutation = usePromoteDeployEnvironment(env.id, env.project_id);
+
+  const isProduction = env.kind === "production";
+  // Only surface the one-click deploy when the env has a workflow to
+  // dispatch — otherwise the endpoint 400s. We still combine signals
+  // defensively: a drifted response that drops the field shows the
+  // button (the server-side guard still protects us with a clear toast).
+  const canDeploy = isProduction && !!env.deploy_workflow_filename;
+  const deployBranch = env.target_branch || "main";
+
+  const laneLabel = isProduction
+    ? t(($) => $.swimlane.lane_production)
+    : t(($) => $.swimlane.lane_staging);
 
   return (
     <div className="rounded-md border bg-card p-3 text-card-foreground">
@@ -351,6 +373,16 @@ function Swimlane({ env, repoUrl }: SwimlaneProps) {
           <span className="truncate text-xs text-muted-foreground">{env.name}</span>
         </div>
         <div className="flex items-center gap-2">
+          {canDeploy && (
+            <Button
+              size="sm"
+              variant="default"
+              onClick={() => setPromoteOpen(true)}
+            >
+              <Rocket className="size-3" />
+              {t(($) => $.swimlane.deploy_to_production)}
+            </Button>
+          )}
           <Button
             size="sm"
             variant="outline"
@@ -467,6 +499,45 @@ function Swimlane({ env, repoUrl }: SwimlaneProps) {
         onOpenChange={setLogOpen}
         environment={env}
       />
+
+      <AlertDialog open={promoteOpen} onOpenChange={setPromoteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t(($) => $.swimlane.deploy_confirm_title)}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(($) => $.swimlane.deploy_confirm_body, {
+                workflow: env.deploy_workflow_filename ?? "",
+                branch: deployBranch,
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>
+              {t(($) => $.swimlane.deploy_cancel)}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={promoteMutation.isPending}
+              onClick={async () => {
+                try {
+                  await promoteMutation.mutateAsync();
+                  toast.success(t(($) => $.swimlane.deploy_dispatched));
+                  setPromoteOpen(false);
+                } catch (e) {
+                  toast.error(
+                    e instanceof Error
+                      ? e.message
+                      : t(($) => $.swimlane.deploy_failed),
+                  );
+                }
+              }}
+            >
+              {t(($) => $.swimlane.deploy_confirm_action)}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -799,6 +799,116 @@ func (h *Handler) LogDeploy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, deployToResponse(deploy))
 }
 
+// PromoteDeployEnvironment — POST /api/deploy_environments/{id}/promote.
+//
+// The board-level "Deploy to production" action. Dispatches the env's
+// deploy_workflow_filename via workflow_dispatch on its target_branch,
+// shipping everything currently merged to main. The Phase B ancestry
+// resolver (on the resulting deployment_status webhook) advances every
+// release the deploy provably contains — so this single action replaces
+// N per-release promotes.
+//
+// Works for any env kind; the UI exposes it on production. Requires a
+// GitHub token (the dispatch call) and workspace membership. A missing
+// deploy_workflow_filename is a 400 with a helpful message.
+func (h *Handler) PromoteDeployEnvironment(w http.ResponseWriter, r *http.Request) {
+	env, wsID, ok := h.loadDeployEnvironment(w, r)
+	if !ok {
+		return
+	}
+	ws, err := h.Queries.GetWorkspace(r.Context(), wsID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(wsID), "workspace not found"); !ok {
+		return
+	}
+	// requireToken=true: dispatching the workflow needs a GitHub token
+	// (or the App installation path).
+	svc, ok := h.shipServiceFromWorkspace(w, r, ws, true)
+	if !ok {
+		return
+	}
+	userID := requestUserID(r)
+	actor, _ := h.parseUserUUIDOrZero(userID)
+	deps := h.stagingDepsFor(wsID)
+	if err := svc.PromoteEnvironment(r.Context(), env, actor, deps); err != nil {
+		if errors.Is(err, ship.ErrEnvNoDeployWorkflow) {
+			writeError(w, http.StatusBadRequest,
+				"this environment has no deploy workflow configured. Set a deploy_workflow_filename in the environment settings to enable one-click deploys.")
+			return
+		}
+		if errors.Is(err, gh.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized, "github: invalid or revoked token")
+			return
+		}
+		if errors.Is(err, gh.ErrRateLimited) {
+			writeError(w, http.StatusTooManyRequests, "github: rate limit hit, retry shortly")
+			return
+		}
+		writeError(w, http.StatusBadGateway, "failed to dispatch deploy workflow: "+err.Error())
+		return
+	}
+	h.publish(protocol.EventDeployStarted, uuidToString(wsID), "member", userID, map[string]any{
+		"environment_id": uuidToString(env.ID),
+		"promote":        true,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"dispatched": true})
+}
+
+// ReconcileDeployEnvironmentReleases — POST
+// /api/deploy_environments/{id}/reconcile.
+//
+// Phase C — heals releases stranded by the old exact-SHA-only linkage.
+// Production already has the env's current_sha running, but releases
+// whose code shipped under an earlier deploy may still sit in
+// in_staging / verifying / promoting. This runs the SAME Phase B
+// resolver, driven off the env's last-known prod state (current_sha +
+// current_deployed_at), advancing every non-terminal release for the
+// project merged at-or-before current_deployed_at to in_production / done.
+//
+// Workspace membership; no GitHub token needed (pure DB reconciliation).
+// Returns { "reconciled": <n> } — the number of releases advanced.
+func (h *Handler) ReconcileDeployEnvironmentReleases(w http.ResponseWriter, r *http.Request) {
+	env, wsID, ok := h.loadDeployEnvironment(w, r)
+	if !ok {
+		return
+	}
+	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(wsID), "workspace not found"); !ok {
+		return
+	}
+	// Reconciliation needs a known prod SHA + deploy time to anchor the
+	// resolver. Without them there's nothing to reconcile against.
+	if !env.CurrentSha.Valid || env.CurrentSha.String == "" {
+		writeError(w, http.StatusUnprocessableEntity,
+			"environment has no current_sha — nothing to reconcile against yet")
+		return
+	}
+	cutoff := time.Now()
+	if env.CurrentDeployedAt.Valid {
+		cutoff = env.CurrentDeployedAt.Time
+	}
+	// Find the deploy that produced current_sha so the advanced releases
+	// link a real production_deploy_id. Fall back to the zero UUID when
+	// no matching deploy row exists (the resolver tolerates it).
+	var deployID pgtype.UUID
+	if d, err := h.Queries.GetDeployByEnvAndSHA(r.Context(), db.GetDeployByEnvAndSHAParams{
+		EnvironmentID: env.ID,
+		Sha:           env.CurrentSha.String,
+	}); err == nil {
+		deployID = d.ID
+	} else if !isNotFound(err) {
+		slog.Warn("ship: reconcile — get deploy by env+sha failed",
+			"env_id", uuidToString(env.ID), "error", err)
+	}
+
+	svc := &ship.Service{Q: h.Queries}
+	deps := h.stagingDepsFor(wsID)
+	reconciled := svc.ResolveReleasesForProdSHA(r.Context(), env.ProjectID, deployID, env.CurrentSha.String, cutoff, deps)
+	writeJSON(w, http.StatusOK, map[string]any{"reconciled": reconciled})
+}
+
 // ListDeploys returns the most recent deploy attempts for an environment,
 // newest first. Default limit 20.
 func (h *Handler) ListDeploys(w http.ResponseWriter, r *http.Request) {

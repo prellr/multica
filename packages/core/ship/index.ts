@@ -44,6 +44,7 @@ export {
   useConfigureDeployAdapter,
   usePollDeployEnvironment,
   useRollbackDeployEnvironment,
+  usePromoteDeployEnvironment,
   // Phase 7a — Releases
   workspaceActiveReleasesOptions,
   useActiveReleases,

@@ -29,6 +29,7 @@ vi.mock("@multica/core/ship", () => ({
   useConfigureDeployAdapter: () => ({ mutateAsync: vi.fn(), isPending: false }),
   usePollDeployEnvironment: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useRollbackDeployEnvironment: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  usePromoteDeployEnvironment: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 
 vi.mock("@multica/core/hooks", () => ({
@@ -179,5 +180,44 @@ describe("ShipDeploySwimlanes", () => {
     // exact "Staging" text nodes rendered.
     const laneHeaders = screen.queryAllByText(/^Staging$/);
     expect(laneHeaders).toHaveLength(0);
+  });
+
+  it("shows 'Deploy to production' only on a production env with a deploy workflow", () => {
+    envsRef.current = [
+      // Staging env with a workflow — must NOT get the prod-deploy button.
+      makeEnv({
+        kind: "staging",
+        name: "Staging",
+        deploy_workflow_filename: "deploy.yml",
+      }),
+      // Production env WITH a workflow — gets the button.
+      makeEnv({
+        id: "env-2",
+        kind: "production",
+        name: "Production",
+        deploy_workflow_filename: "deploy-prod.yml",
+      }),
+    ];
+    deploysRef.current = [];
+    render(<ShipDeploySwimlanes projectId="p-1" />, { wrapper: I18nWrapper });
+    expect(
+      screen.getByRole("button", { name: /Deploy to production/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides 'Deploy to production' on a production env without a deploy workflow", () => {
+    envsRef.current = [
+      makeEnv({
+        id: "env-2",
+        kind: "production",
+        name: "Production",
+        deploy_workflow_filename: null,
+      }),
+    ];
+    deploysRef.current = [];
+    render(<ShipDeploySwimlanes projectId="p-1" />, { wrapper: I18nWrapper });
+    expect(
+      screen.queryByRole("button", { name: /Deploy to production/i }),
+    ).not.toBeInTheDocument();
   });
 });

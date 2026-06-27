@@ -328,7 +328,14 @@
     "popover_no_log": "No log URL",
     "empty_lane": "No deploys logged yet",
     "edit_environment": "Edit environment",
-    "log_deploy": "Log deploy"
+    "log_deploy": "Log deploy",
+    "deploy_to_production": "Deploy to production",
+    "deploy_confirm_title": "Deploy to production?",
+    "deploy_confirm_body": "This dispatches {{workflow}} on {{branch}} and ships everything currently merged to main — not just one release.",
+    "deploy_confirm_action": "Deploy",
+    "deploy_dispatched": "Production deploy dispatched",
+    "deploy_failed": "Failed to dispatch production deploy",
+    "deploy_cancel": "Cancel"
   },
   "configure_dialog": {
     "title_create": "Configure deploy environment",

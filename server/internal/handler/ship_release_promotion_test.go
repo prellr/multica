@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service/ship"
@@ -713,6 +714,128 @@ func TestReleaseResponseShape_Phase7d(t *testing.T) {
 		if !strings.Contains(body, field) {
 			t.Fatalf("response missing %s; got %s", field, body)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase B — environment-level ancestry/ordering resolver
+// ---------------------------------------------------------------------------
+
+// seedReleaseInStageMergedAt inserts a release in a given non-terminal
+// stage with an explicit merged_at + merged_main_sha. Used to model
+// several releases merged at distinct times on the same project so the
+// resolver's merge-time ordering can be asserted.
+func seedReleaseInStageMergedAt(t *testing.T, projectID, stage, mergedSHA string, mergedAt time.Time) string {
+	t.Helper()
+	var releaseID string
+	err := testPool.QueryRow(context.Background(),
+		`INSERT INTO ship_release
+			(workspace_id, project_id, title, risk_level, stage, merged_at, merged_main_sha)
+		 VALUES ($1, $2, 'ancestry release', 'low', $3::release_stage, $4, $5)
+		 RETURNING id`,
+		testWorkspaceID, projectID, stage, mergedAt, mergedSHA).Scan(&releaseID)
+	if err != nil {
+		t.Fatalf("seed release in stage %s: %v", stage, err)
+	}
+	return releaseID
+}
+
+// seedProductionDeployAt inserts a production env (idempotent per
+// project) + a succeeded prod deploy whose completed_at is pinned to
+// `completedAt` so the resolver's cutoff is deterministic.
+func seedProductionDeployAt(t *testing.T, projectID, sha string, completedAt time.Time) string {
+	t.Helper()
+	if err := testPool.QueryRow(context.Background(),
+		`INSERT INTO deploy_environment (workspace_id, project_id, kind, name, target_branch)
+		 VALUES ($1, $2, 'production', 'production', 'main')
+		 ON CONFLICT (project_id, kind) DO UPDATE SET name = EXCLUDED.name
+		 RETURNING id`,
+		testWorkspaceID, projectID).Scan(new(string)); err != nil {
+		t.Fatalf("seed prod env: %v", err)
+	}
+	var deployID string
+	if err := testPool.QueryRow(context.Background(),
+		`INSERT INTO deploy (workspace_id, environment_id, ref, sha, status, triggered_at, started_at, completed_at)
+		 SELECT $1, id, 'main', $3, 'succeeded', $4, $4, $4
+		 FROM deploy_environment WHERE workspace_id = $1 AND project_id = $2 AND kind = 'production'
+		 RETURNING id`,
+		testWorkspaceID, projectID, sha, completedAt).Scan(&deployID); err != nil {
+		t.Fatalf("seed prod deploy: %v", err)
+	}
+	return deployID
+}
+
+// TestProdDeploy_ResolvesAllReleasesMergedBefore — a single production
+// deploy that lands after three releases merged advances ALL three to
+// in_production, not just the one whose merged_main_sha matches the
+// deploy SHA. This is the core Phase B contract: prod = "main at X" so
+// one deploy ships every release merged before it.
+func TestProdDeploy_ResolvesAllReleasesMergedBefore(t *testing.T) {
+	enablePromotionTest(t)
+	projectID := createShipProject(t, "https://github.com/multica-ai/ancestry-all-before")
+
+	base := time.Now().Add(-1 * time.Hour)
+	t1 := base
+	t2 := base.Add(10 * time.Minute)
+	t3 := base.Add(20 * time.Minute)
+	// Three non-terminal releases, distinct merge times, distinct SHAs.
+	relA := seedReleaseInStageMergedAt(t, projectID, "in_staging", "sha-anc-a", t1)
+	relB := seedReleaseInStageMergedAt(t, projectID, "verifying", "sha-anc-b", t2)
+	relC := seedReleaseInStageMergedAt(t, projectID, "promoting", "sha-anc-c", t3)
+
+	// Prod deploy lands at t3 + 5m for sha-anc-c (the latest release's
+	// SHA — so it has an exact anchor whose merged_at = t3 ≥ all three).
+	deployTime := t3.Add(5 * time.Minute)
+	deployID := seedProductionDeployAt(t, projectID, "sha-anc-c", deployTime)
+
+	testHandler.linkProductionDeployForRelease(
+		context.Background(),
+		parseUUID(testWorkspaceID),
+		parseUUID(deployID),
+		"sha-anc-c",
+	)
+
+	for _, rel := range []string{relA, relB, relC} {
+		if got := readReleaseStage(t, rel); got != "in_production" {
+			t.Fatalf("expected release %s in_production, got %q", rel, got)
+		}
+	}
+}
+
+// TestProdDeploy_SkipsReleasesMergedAfterDeploy — a release merged AFTER
+// the production deploy ran is NOT advanced: that deploy provably does
+// not contain it. Only the release merged before the cutoff advances.
+func TestProdDeploy_SkipsReleasesMergedAfterDeploy(t *testing.T) {
+	enablePromotionTest(t)
+	projectID := createShipProject(t, "https://github.com/multica-ai/ancestry-skip-after")
+
+	base := time.Now().Add(-1 * time.Hour)
+	beforeDeploy := base
+	deployTime := base.Add(10 * time.Minute)
+	afterDeploy := base.Add(20 * time.Minute)
+
+	// One release merged before the deploy — should advance.
+	relEarly := seedReleaseInStageMergedAt(t, projectID, "verifying", "sha-skip-early", beforeDeploy)
+	// One release merged AFTER the deploy — must be skipped. Its SHA is
+	// NOT the deploy SHA, so there's no exact anchor pulling it in.
+	relLate := seedReleaseInStageMergedAt(t, projectID, "verifying", "sha-skip-late", afterDeploy)
+
+	// Deploy SHA is the early release's SHA → anchor merged_at =
+	// beforeDeploy is the cutoff. relLate merged after, so it's excluded.
+	deployID := seedProductionDeployAt(t, projectID, "sha-skip-early", deployTime)
+
+	testHandler.linkProductionDeployForRelease(
+		context.Background(),
+		parseUUID(testWorkspaceID),
+		parseUUID(deployID),
+		"sha-skip-early",
+	)
+
+	if got := readReleaseStage(t, relEarly); got != "in_production" {
+		t.Fatalf("expected early release in_production, got %q", got)
+	}
+	if got := readReleaseStage(t, relLate); got != "verifying" {
+		t.Fatalf("expected late release to stay verifying (merged after deploy), got %q", got)
 	}
 }
 

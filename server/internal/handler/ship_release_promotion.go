@@ -484,14 +484,31 @@ func (h *Handler) GetReleaseHealth(w http.ResponseWriter, r *http.Request) {
 
 // ----- webhook integration --------------------------------------------------
 
-// linkProductionDeployForRelease is the production-side counterpart
-// to linkStagingDeployForRelease. Called from the deployment_status
-// webhook handler after a successful production deploy lands. Looks
-// up a release whose merged_main_sha (or already-set production_main_sha)
-// matches the deploy's sha; on hit, advances the release.
+// linkProductionDeployForRelease is the production-side counterpart to
+// linkStagingDeployForRelease. Called from the deployment_status webhook
+// handler (and the manual mark_production_deployed escape hatch) after a
+// successful production deploy lands.
 //
-// Best-effort — every error path logs and returns. A missed linkage
-// is recoverable via the manual mark_production_deployed endpoint.
+// Phase B — environment-level ancestry resolution. Production is "main
+// at SHA X", so ONE prod deploy ships every PR merged to main before it
+// ran. This advances EVERY non-terminal release for the deploy's project
+// that the deploy provably shipped (by merge time), not just the single
+// release whose merged_main_sha matches the deploy's SHA exactly.
+//
+// Resolution:
+//  1. Resolve the project from the deploy (deploy → env_id →
+//     GetDeployEnvironment → project_id). If the project can't be
+//     resolved, fall back to the legacy exact-SHA single-release path so
+//     we never regress.
+//  2. Compute the cutoff. If a release matches the deploy SHA exactly
+//     (FindReleaseByProductionMainSHA), use that anchor release's
+//     merged_at. Otherwise use the deploy row's effective time
+//     (completed_at when set, else triggered_at).
+//  3. Hand off to svc.ResolveReleasesForProdSHA, which advances every
+//     non-terminal release merged at-or-before the cutoff.
+//
+// Best-effort — every error path logs and returns. A missed linkage is
+// recoverable via the manual mark_production_deployed endpoint.
 func (h *Handler) linkProductionDeployForRelease(
 	ctx context.Context,
 	workspaceID pgtype.UUID,
@@ -501,24 +518,85 @@ func (h *Handler) linkProductionDeployForRelease(
 	if !workspaceID.Valid || !deployID.Valid || deploySHA == "" {
 		return
 	}
-	release, err := h.Queries.FindReleaseByProductionMainSHA(ctx, db.FindReleaseByProductionMainSHAParams{
+
+	svc := &ship.Service{Q: h.Queries}
+	deps := h.stagingDepsFor(workspaceID)
+
+	// Step 1 — resolve the deploy's project. The deploy carries an
+	// environment_id; the env carries the project_id.
+	projectID, deployTime, projectOK := h.resolveDeployProjectAndTime(ctx, deployID)
+
+	// Step 2 — locate the exact-SHA anchor (if any) so we can prefer its
+	// merged_at as the cutoff and so the single-release fallback has a
+	// release to advance.
+	anchor, anchorErr := h.Queries.FindReleaseByProductionMainSHA(ctx, db.FindReleaseByProductionMainSHAParams{
 		WorkspaceID:       workspaceID,
 		ProductionMainSha: pgtype.Text{String: deploySHA, Valid: true},
 	})
-	if err != nil {
-		if !isNotFound(err) {
-			slog.Warn("ship: find release by prod sha failed",
-				"sha", deploySHA, "error", err)
+	hasAnchor := anchorErr == nil
+	if anchorErr != nil && !isNotFound(anchorErr) {
+		slog.Warn("ship: find release by prod sha failed",
+			"sha", deploySHA, "error", anchorErr)
+	}
+
+	// Fallback: if we can't resolve the project, we can't run the
+	// ancestry resolver — advance only the exact-SHA match (legacy
+	// behavior) so a deploy with a known anchor still links.
+	if !projectOK {
+		if hasAnchor {
+			if _, err := svc.LinkProductionDeploy(ctx, anchor.ID, deployID, deploySHA, deps); err != nil {
+				slog.Warn("ship: link production deploy failed (no project)",
+					"release_id", uuidToString(anchor.ID), "error", err)
+			}
 		}
 		return
 	}
 
-	svc := &ship.Service{Q: h.Queries}
-	deps := h.stagingDepsFor(workspaceID)
-	if _, err := svc.LinkProductionDeploy(ctx, release.ID, deployID, deploySHA, deps); err != nil {
-		slog.Warn("ship: link production deploy failed",
-			"release_id", uuidToString(release.ID), "error", err)
+	// Cutoff: anchor's merged_at when we have one (most precise), else
+	// the deploy's effective time.
+	cutoff := deployTime
+	if hasAnchor && anchor.MergedAt.Valid {
+		cutoff = anchor.MergedAt.Time
 	}
+
+	svc.ResolveReleasesForProdSHA(ctx, projectID, deployID, deploySHA, cutoff, deps)
+}
+
+// resolveDeployProjectAndTime loads a deploy row and its environment to
+// return the owning project ID and the deploy's effective timestamp
+// (completed_at when set, else triggered_at). Returns ok=false when the
+// deploy or its environment can't be loaded — the caller then falls
+// back to the exact-SHA single-release path.
+func (h *Handler) resolveDeployProjectAndTime(
+	ctx context.Context,
+	deployID pgtype.UUID,
+) (projectID pgtype.UUID, deployTime time.Time, ok bool) {
+	deploy, err := h.Queries.GetDeploy(ctx, deployID)
+	if err != nil {
+		if !isNotFound(err) {
+			slog.Warn("ship: resolve deploy project — get deploy failed",
+				"deploy_id", uuidToString(deployID), "error", err)
+		}
+		return pgtype.UUID{}, time.Time{}, false
+	}
+	env, err := h.Queries.GetDeployEnvironment(ctx, deploy.EnvironmentID)
+	if err != nil {
+		if !isNotFound(err) {
+			slog.Warn("ship: resolve deploy project — get env failed",
+				"deploy_id", uuidToString(deployID), "error", err)
+		}
+		return pgtype.UUID{}, time.Time{}, false
+	}
+	// Effective time: prefer the completion stamp; fall back to the
+	// trigger time so a not-yet-stamped-completed deploy still resolves.
+	t := time.Now()
+	switch {
+	case deploy.CompletedAt.Valid:
+		t = deploy.CompletedAt.Time
+	case deploy.TriggeredAt.Valid:
+		t = deploy.TriggeredAt.Time
+	}
+	return env.ProjectID, t, true
 }
 
 // ----- helpers --------------------------------------------------------------

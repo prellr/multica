@@ -1344,6 +1344,93 @@ func (q *Queries) ListInProductionReleases(ctx context.Context) ([]ShipRelease, 
 	return items, nil
 }
 
+const listNonTerminalReleasesForProjectMergedAtOrBefore = `-- name: ListNonTerminalReleasesForProjectMergedAtOrBefore :many
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
+WHERE project_id = $1
+  AND stage IN ('in_staging', 'verifying', 'promoting')
+  AND merged_at IS NOT NULL
+  AND merged_at <= $2::timestamptz
+ORDER BY merged_at ASC
+`
+
+type ListNonTerminalReleasesForProjectMergedAtOrBeforeParams struct {
+	ProjectID pgtype.UUID        `json:"project_id"`
+	Cutoff    pgtype.Timestamptz `json:"cutoff"`
+}
+
+// Phase B ancestry/ordering resolver. Given a production deploy that
+// landed at a cutoff time, return EVERY non-terminal release for the
+// project whose merge predates (or equals) the deploy — i.e. every
+// release the deploy provably shipped, ordered oldest-merge-first so
+// the caller advances them in merge order.
+//
+// Scope:
+//   - project_id = $1 — the deploy's project (workspace scope flows
+//     through the project, which is workspace-owned).
+//   - stage IN ('in_staging','verifying','promoting') — non-terminal,
+//     production-eligible stages. 'merging' is excluded (the train
+//     hasn't finished) and the three terminal stages are excluded.
+//   - merged_at IS NOT NULL AND merged_at <= cutoff — only releases
+//     whose merge commit is contained in the deployed main tip by
+//     merge time. A release merged AFTER the deploy is NOT in it.
+//   - ORDER BY merged_at ASC — advance oldest-merged first; the
+//     exact-SHA anchor (if any) is naturally included in the set.
+func (q *Queries) ListNonTerminalReleasesForProjectMergedAtOrBefore(ctx context.Context, arg ListNonTerminalReleasesForProjectMergedAtOrBeforeParams) ([]ShipRelease, error) {
+	rows, err := q.db.Query(ctx, listNonTerminalReleasesForProjectMergedAtOrBefore, arg.ProjectID, arg.Cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ShipRelease{}
+	for rows.Next() {
+		var i ShipRelease
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ProjectID,
+			&i.Title,
+			&i.Description,
+			&i.Stage,
+			&i.RiskLevel,
+			&i.ChannelID,
+			&i.IssueID,
+			&i.ApproverID,
+			&i.SecondApproverID,
+			&i.StagingDeployID,
+			&i.ProductionDeployID,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.MergedAt,
+			&i.StagedAt,
+			&i.PromotedAt,
+			&i.DoneAt,
+			&i.RollbackReason,
+			&i.MergePaused,
+			&i.MergeMethod,
+			&i.SmokeRunID,
+			&i.SmokeRunUrl,
+			&i.SmokeStatus,
+			&i.SmokeCompletedAt,
+			&i.QaVerifiedAt,
+			&i.QaVerifiedBy,
+			&i.MergedMainSha,
+			&i.PromotedBy,
+			&i.ProductionMainSha,
+			&i.RolledBackBy,
+			&i.RolledBackCompletedAt,
+			&i.IsDirectMerge,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecentReleasesByProject = `-- name: ListRecentReleasesByProject :many
 SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE project_id = $1

@@ -644,6 +644,60 @@ func (h *Handler) CreateRelease(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetRelease handles GET /api/releases/{id}.
+// releaseMergeabilityIsStale reports whether an OPEN member PR's stored
+// mergeability is worth re-fetching from GitHub: CONFLICTING (which sticks
+// after a rebase) or UNKNOWN/null (which the release page never re-polls).
+// Closed/merged PRs and already-MERGEABLE ones are left alone.
+func releaseMergeabilityIsStale(row db.ListReleasePullRequestsRow) bool {
+	if row.State != db.PullRequestStateOpen {
+		return false
+	}
+	if !row.Mergeable.Valid {
+		return true
+	}
+	return row.Mergeable.String == "CONFLICTING" || row.Mergeable.String == "UNKNOWN"
+}
+
+// refreshStaleReleaseMergeability re-fetches GitHub mergeability for the
+// release's stale open member PRs and mutates the rows in place. Best-effort:
+// a missing GitHub token or a failed fetch leaves the cached value. Each
+// RefreshPullRequest is bounded by the service's 30s prRefreshCache, so a
+// release page that's reloaded repeatedly costs at most one GitHub call per
+// non-clean PR per 30s. Service is constructed directly (not via
+// shipServiceFromWorkspace) to skip the require-token gate — we want a
+// silent no-op, not a 400, when a workspace has no token.
+func (h *Handler) refreshStaleReleaseMergeability(r *http.Request, wsID pgtype.UUID, rows []db.ListReleasePullRequestsRow) {
+	hasStale := false
+	for i := range rows {
+		if releaseMergeabilityIsStale(rows[i]) {
+			hasStale = true
+			break
+		}
+	}
+	if !hasStale {
+		return
+	}
+	ws, err := h.Queries.GetWorkspace(r.Context(), wsID)
+	if err != nil {
+		return
+	}
+	token := h.loadShipHubGitHubToken(r.Context(), ws)
+	svc := &ship.Service{
+		Q:      h.Queries,
+		Github: shipHubGitHubClient(r.Context(), h.Queries, ws.ID, token),
+	}
+	for i := range rows {
+		if !releaseMergeabilityIsStale(rows[i]) {
+			continue
+		}
+		updated, err := svc.RefreshPullRequest(r.Context(), rows[i].ID)
+		if err != nil {
+			continue
+		}
+		rows[i].Mergeable = updated.Mergeable
+	}
+}
+
 func (h *Handler) GetRelease(w http.ResponseWriter, r *http.Request) {
 	rel, wsID, ok := h.loadRelease(w, r)
 	if !ok {
@@ -658,6 +712,17 @@ func (h *Handler) GetRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list release PRs")
 		return
 	}
+
+	// Best-effort: refresh stale mergeability for open member PRs so the
+	// release's CONFLICTING warning reflects GitHub after a force-push /
+	// rebase — not the value cached when the PR was added to the release.
+	// Previously a PR that was rebased clean kept showing CONFLICTING until
+	// it was removed and re-added, because the only mergeability poller runs
+	// on the Kanban board (and only for UNKNOWN). Bounded by the service's
+	// 30s prRefreshCache so this can't storm GitHub; a missing token or a
+	// GitHub error just leaves the cached value untouched.
+	h.refreshStaleReleaseMergeability(r, wsID, prRows)
+
 	prs := make([]releasePullRequestResponse, len(prRows))
 	prStates := make([]db.PullRequestState, len(prRows))
 	for i, row := range prRows {

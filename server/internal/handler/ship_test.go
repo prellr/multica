@@ -290,6 +290,120 @@ func TestShip_DeployEnvironment_CRUD(t *testing.T) {
 	}
 }
 
+// TestShip_DeployEnvironment_WorkflowInputs covers the create-with-inputs
+// path and the PATCH-sets-then-GET-returns round trip for
+// deploy_workflow_inputs — the flat string→string workflow_dispatch map a
+// required-input deploy workflow needs.
+func TestShip_DeployEnvironment_WorkflowInputs(t *testing.T) {
+	enableShipHub(t, false)
+	projectID := createShipProject(t, "https://github.com/multica-ai/multica")
+
+	// Create with inputs.
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/projects/"+projectID+"/deploy_environments", map[string]any{
+		"kind":                   "production",
+		"name":                   "Production",
+		"target_branch":          "main",
+		"deploy_workflow_inputs": map[string]string{"confirm": "deploy-prod"},
+	})
+	req = withURLParam(req, "id", projectID)
+	testHandler.CreateProjectDeployEnvironment(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create env: %d %s", w.Code, w.Body.String())
+	}
+	var env deployEnvironmentResponse
+	if err := json.NewDecoder(w.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := env.DeployWorkflowInputs["confirm"]; got != "deploy-prod" {
+		t.Fatalf("create: expected confirm=deploy-prod, got %#v", env.DeployWorkflowInputs)
+	}
+
+	// PATCH replaces the inputs map.
+	w = httptest.NewRecorder()
+	req = newRequest("PATCH", "/api/deploy_environments/"+env.ID, map[string]any{
+		"deploy_workflow_inputs": map[string]string{"confirm": "yes", "env": "prod"},
+	})
+	req = withURLParam(req, "id", env.ID)
+	testHandler.UpdateDeployEnvironment(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("patch env: %d %s", w.Code, w.Body.String())
+	}
+	var patched deployEnvironmentResponse
+	if err := json.NewDecoder(w.Body).Decode(&patched); err != nil {
+		t.Fatalf("decode patched: %v", err)
+	}
+	if patched.DeployWorkflowInputs["confirm"] != "yes" || patched.DeployWorkflowInputs["env"] != "prod" {
+		t.Fatalf("patch: unexpected inputs %#v", patched.DeployWorkflowInputs)
+	}
+
+	// GET (via list) must return the patched inputs.
+	w = httptest.NewRecorder()
+	req = newRequest("GET", "/api/projects/"+projectID+"/deploy_environments", nil)
+	req = withURLParam(req, "id", projectID)
+	testHandler.ListProjectDeployEnvironments(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list envs: %d", w.Code)
+	}
+	var listed struct {
+		Environments []deployEnvironmentResponse `json:"environments"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	var found *deployEnvironmentResponse
+	for i := range listed.Environments {
+		if listed.Environments[i].ID == env.ID {
+			found = &listed.Environments[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("env %s not in list", env.ID)
+	}
+	if found.DeployWorkflowInputs["confirm"] != "yes" || found.DeployWorkflowInputs["env"] != "prod" {
+		t.Fatalf("GET: inputs did not round-trip, got %#v", found.DeployWorkflowInputs)
+	}
+
+	// PATCH that omits deploy_workflow_inputs must leave it unchanged.
+	w = httptest.NewRecorder()
+	req = newRequest("PATCH", "/api/deploy_environments/"+env.ID, map[string]any{
+		"name": "Production (renamed)",
+	})
+	req = withURLParam(req, "id", env.ID)
+	testHandler.UpdateDeployEnvironment(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("patch name: %d %s", w.Code, w.Body.String())
+	}
+	var renamed deployEnvironmentResponse
+	if err := json.NewDecoder(w.Body).Decode(&renamed); err != nil {
+		t.Fatalf("decode renamed: %v", err)
+	}
+	if renamed.DeployWorkflowInputs["confirm"] != "yes" {
+		t.Fatalf("omitting inputs should preserve them, got %#v", renamed.DeployWorkflowInputs)
+	}
+}
+
+// TestShip_DeployEnvironment_RejectsNonFlatInputs — a nested-object /
+// non-string value in deploy_workflow_inputs must 400 rather than store a
+// broken value.
+func TestShip_DeployEnvironment_RejectsNonFlatInputs(t *testing.T) {
+	enableShipHub(t, false)
+	projectID := createShipProject(t, "https://github.com/multica-ai/multica")
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/projects/"+projectID+"/deploy_environments", map[string]any{
+		"kind":                   "production",
+		"name":                   "Production",
+		"deploy_workflow_inputs": map[string]any{"confirm": map[string]any{"nested": true}},
+	})
+	req = withURLParam(req, "id", projectID)
+	testHandler.CreateProjectDeployEnvironment(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for non-flat inputs, got %d %s", w.Code, w.Body.String())
+	}
+}
+
 // TestShip_LogDeploy_BumpsCurrentSHA — logging a 'succeeded' deploy must
 // update the parent environment's current_sha so the "what's running" read
 // is a single column lookup.

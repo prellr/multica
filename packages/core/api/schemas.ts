@@ -465,6 +465,14 @@ export const DeployEnvironmentSchema = z.object({
   // this env's deploy stage". Older backends (pre-migration 093) omit
   // this; default to false so older servers behave like tracking-only.
   auto_deploy: z.boolean().optional().default(false),
+  // Per-env workflow_dispatch inputs map (e.g. { confirm: "deploy-prod" }).
+  // Nullish — older backends (pre-migration 121) omit it, and the server
+  // returns null when no inputs are configured. A malformed value (wrong
+  // type / non-string member) fails this field's parse; because the field
+  // is `.nullish()` the WHOLE object would fail validation, at which point
+  // `parseWithFallback` returns the caller's fallback rather than throwing
+  // — see the malformed-value test in schemas.test.ts.
+  deploy_workflow_inputs: z.record(z.string(), z.string()).nullish(),
 }).loose();
 
 export const ListDeployEnvironmentsResponseSchema = z.object({

@@ -48,11 +48,16 @@ GROUP BY project_id;
 -- (`workspace.ship_hub_deploy_workflow_<kind>`). When the workspace
 -- has multiple projects, each project's env can override the default
 -- with its own repo's workflow filename.
+--
+-- `deploy_workflow_inputs` is the flat string→string workflow_dispatch
+-- inputs map this env's deploy workflow requires (e.g.
+-- {"confirm":"deploy-prod"}). Nullable — null means "no inputs",
+-- preserving inputless-dispatch behavior.
 INSERT INTO deploy_environment (
     workspace_id, project_id, kind, name, target_branch, target_url,
-    auto_promote, deploy_workflow_filename, auto_deploy
+    auto_promote, deploy_workflow_filename, auto_deploy, deploy_workflow_inputs
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 )
 ON CONFLICT (project_id, kind) DO UPDATE SET
     name                     = EXCLUDED.name,
@@ -61,6 +66,7 @@ ON CONFLICT (project_id, kind) DO UPDATE SET
     auto_promote             = EXCLUDED.auto_promote,
     deploy_workflow_filename = EXCLUDED.deploy_workflow_filename,
     auto_deploy              = EXCLUDED.auto_deploy,
+    deploy_workflow_inputs   = EXCLUDED.deploy_workflow_inputs,
     updated_at               = now()
 RETURNING *;
 
@@ -71,6 +77,10 @@ RETURNING *;
 -- `deploy_workflow_filename` uses sqlc.narg (not COALESCE) so passing
 -- an explicit empty string clears the override (poller falls back to
 -- workspace setting); passing NULL leaves the current value alone.
+--
+-- `deploy_workflow_inputs` uses COALESCE so passing NULL leaves the
+-- stored inputs unchanged (PATCH-omit semantics). The handler sends
+-- an explicit empty JSON object `{}` to clear the inputs.
 UPDATE deploy_environment SET
     name                     = COALESCE(sqlc.narg('name'), name),
     target_branch            = COALESCE(sqlc.narg('target_branch'), target_branch),
@@ -78,6 +88,7 @@ UPDATE deploy_environment SET
     auto_promote             = COALESCE(sqlc.narg('auto_promote'), auto_promote),
     deploy_workflow_filename = COALESCE(sqlc.narg('deploy_workflow_filename'), deploy_workflow_filename),
     auto_deploy              = COALESCE(sqlc.narg('auto_deploy'), auto_deploy),
+    deploy_workflow_inputs   = COALESCE(sqlc.narg('deploy_workflow_inputs'), deploy_workflow_inputs),
     updated_at               = now()
 WHERE id = $1
 RETURNING *;

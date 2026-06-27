@@ -30,6 +30,7 @@ package ship
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -206,10 +207,33 @@ func (s *Service) dispatchEnvDeployWorkflow(
 	if branch == "" {
 		branch = "main"
 	}
-	if err := s.Github.DispatchWorkflow(ctx, owner, repo, filename, branch, nil); err != nil {
+	inputs := parseDeployWorkflowInputs(env)
+	if err := s.Github.DispatchWorkflow(ctx, owner, repo, filename, branch, inputs); err != nil {
 		return fmt.Errorf("dispatch workflow %s on %s: %w", filename, branch, err)
 	}
 	return nil
+}
+
+// parseDeployWorkflowInputs unmarshals the env's stored deploy_workflow_inputs
+// JSONB into the flat string→string map GitHub's workflow_dispatch API
+// expects. A null/empty column yields nil (no inputs — the legacy
+// behavior). Malformed stored JSON must NOT panic the promote path: we log
+// a warning and treat it as no inputs, so a corrupt value degrades to the
+// inputless dispatch rather than crashing.
+func parseDeployWorkflowInputs(env db.DeployEnvironment) map[string]string {
+	if len(env.DeployWorkflowInputs) == 0 {
+		return nil
+	}
+	var inputs map[string]string
+	if err := json.Unmarshal(env.DeployWorkflowInputs, &inputs); err != nil {
+		slog.Warn("ship: ignoring malformed deploy_workflow_inputs",
+			"env_id", uuidString(env.ID), "error", err)
+		return nil
+	}
+	if len(inputs) == 0 {
+		return nil
+	}
+	return inputs
 }
 
 // PromoteEnvironment dispatches the env's deploy workflow on demand —

@@ -172,33 +172,33 @@ func pullRequestToResponse(pr db.PullRequest) pullRequestResponse {
 		labels = []any{}
 	}
 	return pullRequestResponse{
-		ID:              uuidToString(pr.ID),
-		WorkspaceID:     uuidToString(pr.WorkspaceID),
-		ProjectID:       uuidToPtr(pr.ProjectID),
-		RepoURL:         pr.RepoUrl,
-		Number:          pr.PrNumber,
-		Title:           pr.Title,
-		State:           string(pr.State),
-		IsDraft:         pr.IsDraft,
-		AuthorLogin:     pr.AuthorLogin,
-		AuthorAvatarURL: textToPtr(pr.AuthorAvatarUrl),
-		BaseRef:         pr.BaseRef,
-		HeadRef:         pr.HeadRef,
-		HeadSHA:         pr.HeadSha,
-		HTMLURL:         pr.HtmlUrl,
-		Body:            textToPtr(pr.Body),
-		CIStatus:        textToPtr(pr.CiStatus),
-		ReviewDecision:  textToPtr(pr.ReviewDecision),
-		Mergeable:       textToPtr(pr.Mergeable),
-		Additions:       pr.Additions,
-		Deletions:       pr.Deletions,
-		ChangedFiles:    pr.ChangedFiles,
-		Labels:          labels,
-		PRCreatedAt:     timestampToString(pr.PrCreatedAt),
-		PRUpdatedAt:     timestampToString(pr.PrUpdatedAt),
-		PRMergedAt:      timestampToPtr(pr.PrMergedAt),
-		PRClosedAt:      timestampToPtr(pr.PrClosedAt),
-		FetchedAt:       timestampToString(pr.FetchedAt),
+		ID:                     uuidToString(pr.ID),
+		WorkspaceID:            uuidToString(pr.WorkspaceID),
+		ProjectID:              uuidToPtr(pr.ProjectID),
+		RepoURL:                pr.RepoUrl,
+		Number:                 pr.PrNumber,
+		Title:                  pr.Title,
+		State:                  string(pr.State),
+		IsDraft:                pr.IsDraft,
+		AuthorLogin:            pr.AuthorLogin,
+		AuthorAvatarURL:        textToPtr(pr.AuthorAvatarUrl),
+		BaseRef:                pr.BaseRef,
+		HeadRef:                pr.HeadRef,
+		HeadSHA:                pr.HeadSha,
+		HTMLURL:                pr.HtmlUrl,
+		Body:                   textToPtr(pr.Body),
+		CIStatus:               textToPtr(pr.CiStatus),
+		ReviewDecision:         textToPtr(pr.ReviewDecision),
+		Mergeable:              textToPtr(pr.Mergeable),
+		Additions:              pr.Additions,
+		Deletions:              pr.Deletions,
+		ChangedFiles:           pr.ChangedFiles,
+		Labels:                 labels,
+		PRCreatedAt:            timestampToString(pr.PrCreatedAt),
+		PRUpdatedAt:            timestampToString(pr.PrUpdatedAt),
+		PRMergedAt:             timestampToPtr(pr.PrMergedAt),
+		PRClosedAt:             timestampToPtr(pr.PrClosedAt),
+		FetchedAt:              timestampToString(pr.FetchedAt),
 		OriginatingIssueID:     uuidToPtr(pr.OriginatingIssueID),
 		OriginatingAgentTaskID: uuidToPtr(pr.OriginatingAgentTaskID),
 		AutoCloseIssueOnMerge:  pr.AutoCloseIssueOnMerge,
@@ -226,9 +226,15 @@ type deployEnvironmentResponse struct {
 	// staging, promoting for production). Hides Ship Hub's
 	// tracking-only legacy and turns Promote into a real one-click
 	// production deploy.
-	AutoDeploy bool   `json:"auto_deploy"`
-	CreatedAt  string `json:"created_at"`
-	UpdatedAt  string `json:"updated_at"`
+	AutoDeploy bool `json:"auto_deploy"`
+	// DeployWorkflowInputs is the flat string→string workflow_dispatch
+	// inputs map this env's deploy workflow requires (e.g.
+	// {"confirm":"deploy-prod"}). Null/omitted when the workflow needs
+	// no inputs — the dispatch then fires with no inputs (legacy
+	// behavior).
+	DeployWorkflowInputs map[string]string `json:"deploy_workflow_inputs"`
+	CreatedAt            string            `json:"created_at"`
+	UpdatedAt            string            `json:"updated_at"`
 }
 
 func deployEnvironmentToResponse(e db.DeployEnvironment) deployEnvironmentResponse {
@@ -245,9 +251,50 @@ func deployEnvironmentToResponse(e db.DeployEnvironment) deployEnvironmentRespon
 		AutoPromote:            e.AutoPromote,
 		DeployWorkflowFilename: textToPtr(e.DeployWorkflowFilename),
 		AutoDeploy:             e.AutoDeploy,
+		DeployWorkflowInputs:   deployWorkflowInputsToMap(e.DeployWorkflowInputs),
 		CreatedAt:              timestampToString(e.CreatedAt),
 		UpdatedAt:              timestampToString(e.UpdatedAt),
 	}
+}
+
+// marshalDeployWorkflowInputs validates + serializes the request's
+// workflow_dispatch inputs map for storage. A nil/empty map yields a nil
+// []byte so the column stores SQL NULL ("no inputs"). A non-empty map is
+// JSON-marshaled. The flat string→string shape is already guaranteed by
+// json decoding into map[string]string (a nested object / non-string
+// value fails the decode with a 400 upstream); the only failure here is
+// a pathological marshal error, which we surface as a 400.
+//
+// Returns ok=false (after writing a 400) on marshal failure so the
+// handler returns immediately.
+func marshalDeployWorkflowInputs(w http.ResponseWriter, inputs map[string]string) ([]byte, bool) {
+	if len(inputs) == 0 {
+		return nil, true
+	}
+	b, err := json.Marshal(inputs)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "deploy_workflow_inputs must be a flat string-to-string object")
+		return nil, false
+	}
+	return b, true
+}
+
+// deployWorkflowInputsToMap unmarshals the stored JSONB inputs blob into
+// a flat string→string map for the response. A null/empty blob or a
+// malformed value yields nil so the response omits the field rather than
+// surfacing a broken value to the UI.
+func deployWorkflowInputsToMap(raw []byte) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 type deployResponse struct {
@@ -340,11 +387,11 @@ func (h *Handler) ListShipProjects(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		out = append(out, map[string]any{
-			"id":             id,
-			"title":          p.Title,
-			"icon":           textToPtr(p.Icon),
-			"open_pr_count":  prCounts[id],
-			"env_count":      envCounts[id],
+			"id":            id,
+			"title":         p.Title,
+			"icon":          textToPtr(p.Icon),
+			"open_pr_count": prCounts[id],
+			"env_count":     envCounts[id],
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": out})
@@ -469,15 +516,15 @@ func (h *Handler) SyncProjectPullRequests(w http.ResponseWriter, r *http.Request
 //
 // Designed as an operator action rather than an auto-running migration
 // because:
-//   1. The workspace's GitHub token is the auth boundary. Background
-//      auto-introspection on every deploy would hit rate limits on
-//      large workspaces; on-demand keeps it predictable.
-//   2. The kanban-shape change is visible — the operator might
-//      legitimately want to wait or batch this with other config
-//      edits.
-//   3. PR8 will add scheduled + webhook-driven refreshes on top of
-//      this same service method; PR8's diff/approve flow is the
-//      auto-pilot. This endpoint is the manual seed.
+//  1. The workspace's GitHub token is the auth boundary. Background
+//     auto-introspection on every deploy would hit rate limits on
+//     large workspaces; on-demand keeps it predictable.
+//  2. The kanban-shape change is visible — the operator might
+//     legitimately want to wait or batch this with other config
+//     edits.
+//  3. PR8 will add scheduled + webhook-driven refreshes on top of
+//     this same service method; PR8's diff/approve flow is the
+//     auto-pilot. This endpoint is the manual seed.
 func (h *Handler) IntrospectWorkspacePipelines(w http.ResponseWriter, r *http.Request) {
 	wsID, ws, ok := h.requireShipHubEnabled(w, r)
 	if !ok {
@@ -510,10 +557,10 @@ func (h *Handler) IntrospectWorkspacePipelines(w http.ResponseWriter, r *http.Re
 	// Summary counters so the operator gets a quick "20 introspected,
 	// 3 skipped, 1 error" headline without having to read every entry.
 	summary := map[string]int{
-		"introspected":              0,
-		"skipped_no_repo":           0,
-		"skipped_no_github_client":  0,
-		"error":                     0,
+		"introspected":             0,
+		"skipped_no_repo":          0,
+		"skipped_no_github_client": 0,
+		"error":                    0,
 	}
 	for _, res := range results {
 		summary[res.Status]++
@@ -565,6 +612,11 @@ type CreateDeployEnvironmentRequest struct {
 	// workflow_dispatch on the project's repo. See migration 093 and
 	// the PromoteRelease service hook for the dispatch trigger.
 	AutoDeploy *bool `json:"auto_deploy"`
+	// DeployWorkflowInputs — flat string→string workflow_dispatch inputs
+	// the env's deploy workflow requires (e.g. {"confirm":"deploy-prod"}).
+	// Optional; nil/omitted means "no inputs". A non-flat value (nested
+	// object, array, number, etc.) is rejected with a 400 by the handler.
+	DeployWorkflowInputs map[string]string `json:"deploy_workflow_inputs"`
 }
 
 func (h *Handler) CreateProjectDeployEnvironment(w http.ResponseWriter, r *http.Request) {
@@ -599,6 +651,10 @@ func (h *Handler) CreateProjectDeployEnvironment(w http.ResponseWriter, r *http.
 	if req.AutoDeploy != nil {
 		autoDeploy = *req.AutoDeploy
 	}
+	inputsJSON, ok := marshalDeployWorkflowInputs(w, req.DeployWorkflowInputs)
+	if !ok {
+		return
+	}
 	env, err := h.Queries.UpsertDeployEnvironment(r.Context(), db.UpsertDeployEnvironmentParams{
 		WorkspaceID:            wsID,
 		ProjectID:              project.ID,
@@ -609,6 +665,7 @@ func (h *Handler) CreateProjectDeployEnvironment(w http.ResponseWriter, r *http.
 		AutoPromote:            autoPromote,
 		DeployWorkflowFilename: ptrToText(req.DeployWorkflowFilename),
 		AutoDeploy:             autoDeploy,
+		DeployWorkflowInputs:   inputsJSON,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create deploy environment")
@@ -627,6 +684,11 @@ type UpdateDeployEnvironmentRequest struct {
 	AutoPromote            *bool   `json:"auto_promote"`
 	DeployWorkflowFilename *string `json:"deploy_workflow_filename"`
 	AutoDeploy             *bool   `json:"auto_deploy"`
+	// DeployWorkflowInputs — pointer so "absent" (nil) leaves the stored
+	// inputs unchanged, while an explicit value (including `{}`) replaces
+	// them. The COALESCE in UpdateDeployEnvironment honors the nil-leaves-
+	// alone semantics. A non-flat value is rejected with a 400.
+	DeployWorkflowInputs *map[string]string `json:"deploy_workflow_inputs"`
 }
 
 // loadDeployEnvironment resolves the environment ID URL param and verifies
@@ -660,6 +722,16 @@ func (h *Handler) UpdateDeployEnvironment(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// nil pointer → leave the stored inputs alone (COALESCE keeps the
+	// current value). A present map (incl. empty) → replace.
+	var inputsJSON []byte
+	if req.DeployWorkflowInputs != nil {
+		var ok bool
+		inputsJSON, ok = marshalDeployWorkflowInputs(w, *req.DeployWorkflowInputs)
+		if !ok {
+			return
+		}
+	}
 	updated, err := h.Queries.UpdateDeployEnvironment(r.Context(), db.UpdateDeployEnvironmentParams{
 		ID:                     env.ID,
 		Name:                   ptrToText(req.Name),
@@ -668,6 +740,7 @@ func (h *Handler) UpdateDeployEnvironment(w http.ResponseWriter, r *http.Request
 		AutoPromote:            pgBoolPtr(req.AutoPromote),
 		DeployWorkflowFilename: ptrToText(req.DeployWorkflowFilename),
 		AutoDeploy:             pgBoolPtr(req.AutoDeploy),
+		DeployWorkflowInputs:   inputsJSON,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update deploy environment")

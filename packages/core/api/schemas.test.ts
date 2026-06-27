@@ -1,9 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
   DashboardUsageDailyListSchema,
+  DeployEnvironmentSchema,
+  EMPTY_LIST_DEPLOY_ENVIRONMENTS_RESPONSE,
+  ListDeployEnvironmentsResponseSchema,
   ListIssuesResponseSchema,
   PromoteDeployEnvironmentResponseSchema,
 } from "./schemas";
+import { parseWithFallback } from "./schema";
+
+const baseDeployEnv = {
+  id: "env-1",
+  workspace_id: "ws-1",
+  project_id: "proj-1",
+  kind: "production",
+  name: "Production",
+  target_branch: "main",
+  target_url: null,
+  current_sha: null,
+  current_deployed_at: null,
+  auto_promote: false,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+};
 
 const baseIssue = {
   id: "11111111-1111-1111-1111-111111111111",
@@ -108,5 +127,71 @@ describe("PromoteDeployEnvironmentResponseSchema (deploy-to-production)", () => 
         dispatched: "yes",
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("DeployEnvironmentSchema (deploy_workflow_inputs)", () => {
+  it("parses a flat string→string inputs map", () => {
+    const parsed = DeployEnvironmentSchema.parse({
+      ...baseDeployEnv,
+      deploy_workflow_inputs: { confirm: "deploy-prod", tier: "all" },
+    });
+    expect(parsed.deploy_workflow_inputs).toEqual({
+      confirm: "deploy-prod",
+      tier: "all",
+    });
+  });
+
+  it("accepts null / omitted inputs from older backends without throwing", () => {
+    const withNull = DeployEnvironmentSchema.parse({
+      ...baseDeployEnv,
+      deploy_workflow_inputs: null,
+    });
+    expect(withNull.deploy_workflow_inputs).toBeNull();
+
+    const { deploy_workflow_inputs: _omit, ...withoutField } = {
+      ...baseDeployEnv,
+      deploy_workflow_inputs: null,
+    };
+    // Older backend omits the field entirely — must still parse.
+    expect(() => DeployEnvironmentSchema.parse(withoutField)).not.toThrow();
+  });
+
+  it("fails validation on a malformed inputs value (non-string member)", () => {
+    // A nested object / number where a string is required is exactly the
+    // backend-drift shape CLAUDE.md's API compat rules guard against. The
+    // field's parse fails, so the whole object fails — which is the trigger
+    // for parseWithFallback to return its fallback (asserted below).
+    expect(
+      DeployEnvironmentSchema.safeParse({
+        ...baseDeployEnv,
+        deploy_workflow_inputs: { confirm: { nested: true } },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      DeployEnvironmentSchema.safeParse({
+        ...baseDeployEnv,
+        deploy_workflow_inputs: ["not", "an", "object"],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("falls back gracefully (no throw) when a row's inputs are malformed", () => {
+    // End-to-end with the real client wrapper: a malformed
+    // deploy_workflow_inputs in the list response must NOT white-screen.
+    // parseWithFallback returns the empty fallback instead of throwing.
+    const malformed = {
+      environments: [
+        { ...baseDeployEnv, deploy_workflow_inputs: { confirm: 42 } },
+      ],
+    };
+    const result = parseWithFallback(
+      malformed,
+      ListDeployEnvironmentsResponseSchema,
+      EMPTY_LIST_DEPLOY_ENVIRONMENTS_RESPONSE,
+      { endpoint: "GET /api/projects/:id/deploy_environments" },
+    );
+    expect(result).toEqual(EMPTY_LIST_DEPLOY_ENVIRONMENTS_RESPONSE);
   });
 });

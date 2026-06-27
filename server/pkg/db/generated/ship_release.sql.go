@@ -552,6 +552,92 @@ func (q *Queries) FindReleaseBySmokeRunID(ctx context.Context, arg FindReleaseBy
 	return i, err
 }
 
+const findStuckInStagingReleaseForProject = `-- name: FindStuckInStagingReleaseForProject :one
+SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
+WHERE workspace_id = $1
+  AND project_id = $2
+  AND stage = 'in_staging'
+  AND staging_deploy_id IS NULL
+  AND merged_at IS NOT NULL
+  AND merged_at < $3
+ORDER BY merged_at DESC
+LIMIT 1
+`
+
+type FindStuckInStagingReleaseForProjectParams struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	MergedAt    pgtype.Timestamptz `json:"merged_at"`
+}
+
+// Staging-side analog of FindStuckPromotingReleaseForProject. When a
+// successful staging deploy's sha doesn't match any release's
+// merged_main_sha exactly (squash/rebase merge rewrote the commit, or
+// CI fired on a later main commit), find the release stuck waiting in
+// staging for the same project so the deploy can still link it.
+//
+// Without this fallback the strict-SHA lookup in
+// FindReleaseByMergedMainSHA misses, the release sits in_staging
+// "waiting for the staging deploy of <sha>" forever, and the operator
+// has to click "Mark deploy as landed" by hand. This unsticks it the
+// same way that click would.
+//
+// Constraints (mirror the promoting fallback):
+//   - Same workspace + same project as the deploy.
+//   - stage = 'in_staging' — the release has merged and is waiting for
+//     its staging deploy to be detected. verifying has already cleared
+//     this fence; merging hasn't reached it yet.
+//   - staging_deploy_id IS NULL — never overwrite a real link.
+//   - merged_at < $3 — never link a deploy that finished BEFORE the
+//     release merged. Prevents a stale deploy from re-linking a fresh
+//     release.
+//   - ORDER BY merged_at DESC — the most recent stranded release wins.
+//     Only one release per project should be waiting in staging at a
+//     time; if two are, the latest merge is the one this deploy most
+//     likely corresponds to.
+func (q *Queries) FindStuckInStagingReleaseForProject(ctx context.Context, arg FindStuckInStagingReleaseForProjectParams) (ShipRelease, error) {
+	row := q.db.QueryRow(ctx, findStuckInStagingReleaseForProject, arg.WorkspaceID, arg.ProjectID, arg.MergedAt)
+	var i ShipRelease
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Title,
+		&i.Description,
+		&i.Stage,
+		&i.RiskLevel,
+		&i.ChannelID,
+		&i.IssueID,
+		&i.ApproverID,
+		&i.SecondApproverID,
+		&i.StagingDeployID,
+		&i.ProductionDeployID,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.MergedAt,
+		&i.StagedAt,
+		&i.PromotedAt,
+		&i.DoneAt,
+		&i.RollbackReason,
+		&i.MergePaused,
+		&i.MergeMethod,
+		&i.SmokeRunID,
+		&i.SmokeRunUrl,
+		&i.SmokeStatus,
+		&i.SmokeCompletedAt,
+		&i.QaVerifiedAt,
+		&i.QaVerifiedBy,
+		&i.MergedMainSha,
+		&i.PromotedBy,
+		&i.ProductionMainSha,
+		&i.RolledBackBy,
+		&i.RolledBackCompletedAt,
+		&i.IsDirectMerge,
+	)
+	return i, err
+}
+
 const findStuckPromotingReleaseForProject = `-- name: FindStuckPromotingReleaseForProject :one
 SELECT id, workspace_id, project_id, title, description, stage, risk_level, channel_id, issue_id, approver_id, second_approver_id, staging_deploy_id, production_deploy_id, created_by, created_at, updated_at, merged_at, staged_at, promoted_at, done_at, rollback_reason, merge_paused, merge_method, smoke_run_id, smoke_run_url, smoke_status, smoke_completed_at, qa_verified_at, qa_verified_by, merged_main_sha, promoted_by, production_main_sha, rolled_back_by, rolled_back_completed_at, is_direct_merge FROM ship_release
 WHERE workspace_id = $1

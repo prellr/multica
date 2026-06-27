@@ -559,6 +559,42 @@ WHERE workspace_id = $1
 ORDER BY merged_at ASC
 LIMIT 1;
 
+-- name: FindStuckInStagingReleaseForProject :one
+-- Staging-side analog of FindStuckPromotingReleaseForProject. When a
+-- successful staging deploy's sha doesn't match any release's
+-- merged_main_sha exactly (squash/rebase merge rewrote the commit, or
+-- CI fired on a later main commit), find the release stuck waiting in
+-- staging for the same project so the deploy can still link it.
+--
+-- Without this fallback the strict-SHA lookup in
+-- FindReleaseByMergedMainSHA misses, the release sits in_staging
+-- "waiting for the staging deploy of <sha>" forever, and the operator
+-- has to click "Mark deploy as landed" by hand. This unsticks it the
+-- same way that click would.
+--
+-- Constraints (mirror the promoting fallback):
+--   * Same workspace + same project as the deploy.
+--   * stage = 'in_staging' — the release has merged and is waiting for
+--     its staging deploy to be detected. verifying has already cleared
+--     this fence; merging hasn't reached it yet.
+--   * staging_deploy_id IS NULL — never overwrite a real link.
+--   * merged_at < $3 — never link a deploy that finished BEFORE the
+--     release merged. Prevents a stale deploy from re-linking a fresh
+--     release.
+--   * ORDER BY merged_at DESC — the most recent stranded release wins.
+--     Only one release per project should be waiting in staging at a
+--     time; if two are, the latest merge is the one this deploy most
+--     likely corresponds to.
+SELECT * FROM ship_release
+WHERE workspace_id = $1
+  AND project_id = $2
+  AND stage = 'in_staging'
+  AND staging_deploy_id IS NULL
+  AND merged_at IS NOT NULL
+  AND merged_at < $3
+ORDER BY merged_at DESC
+LIMIT 1;
+
 -- name: FindOrphanMergedPRsByMergeCommitSHA :many
 -- PR6 — direct-merge release synthesis. Given a project and the merge
 -- commit SHA pushed to its default branch, return the merged PR(s) that

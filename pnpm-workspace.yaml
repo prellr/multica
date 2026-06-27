@@ -9,6 +9,9 @@ catalog:
   "@types/react": "^19.2.0"
   "@types/react-dom": "^19.2.0"
 
+  # shadcn headless chat primitives (MessageScroller behavior, ROA-1160)
+  "@shadcn/react": "^0.1.0"
+
   # TypeScript & Node
   typescript: "^5.9.3"
   "@types/node": "^25.0.10"

@@ -8,9 +8,16 @@ import {
   memberListOptions,
 } from "@multica/core/workspace/queries";
 import { channelMessagesInfiniteOptions } from "@multica/core/channels";
-import { useTranscriptScroll } from "@multica/ui/hooks/use-transcript-scroll";
-import { Loader2 } from "lucide-react";
-import { ChevronDown } from "lucide-react";
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+  useMessageScroller,
+} from "@multica/ui/components/ui/message-scroller";
+import { ArrowDown, Loader2 } from "lucide-react";
 import { MessageRow } from "./message-row";
 import { useT } from "../../i18n";
 
@@ -117,73 +124,46 @@ export function ChannelMessageList({
     return idx + 1;
   }, [messages, initialUnreadCursor]);
 
-  // Scroll behavior is owned by the shared transcript engine (ROA-1135):
-  // intent-aware FOLLOWING/READING (text-selection, keyboard, wheel — not
-  // just scrollTop), a live-edge sentinel, and jump-to-latest. Open policy
-  // (#11): anchor to the first unread message when there's an unread divider,
-  // else open at the live edge. resetKey=channelId re-anchors + resets state
-  // on every channel switch.
+  // Scroll behavior is owned by shadcn's MessageScroller (ROA-1160). Open
+  // policy (#11): the first unread message is scrolled to the top via
+  // OpenAtUnread below; with no unread we open at the live edge
+  // (defaultScrollPosition="end"). Place-keeping on older-history prepend
+  // (#12) is the Viewport's preserveScrollOnPrepend — no manual capture /
+  // restore. The Provider is keyed on channelId so switching channels fully
+  // resets scroll state.
   const anchorMessageId =
     dividerBeforeIndex !== null && messages[dividerBeforeIndex]
       ? messages[dividerBeforeIndex].id
       : null;
-  const {
-    containerRef,
-    sentinelRef,
-    hasNewBelow,
-    jumpToLatest,
-    prepareForPrepend,
-    restorePrepend,
-  } = useTranscriptScroll({
-    initialAnchor: anchorMessageId ? { messageId: anchorMessageId } : "bottom",
-    resetKey: channelId,
-  });
 
-  // ─── Load older history (#10/#12) ───────────────────────────────────────
+  // ─── Load older history (#10) ───────────────────────────────────────────
   // A top sentinel + IntersectionObserver fetches the next OLDER page as the
-  // reader nears the top. prepareForPrepend() captures the place before the
-  // fetch; restorePrepend() (below) puts it back once the older rows render,
-  // so loading history never moves the reader. Live values are read through a
-  // ref so the observer is set up once per channel, not re-subscribed on
-  // every fetch-state flip.
+  // reader nears the top; preserveScrollOnPrepend keeps their place when the
+  // rows render above. Live fetch flags are read through a ref so the observer
+  // is set up once per channel, not re-subscribed on every fetch-state flip.
+  const viewportRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const loadStateRef = useRef({ hasNextPage, isFetchingNextPage });
   loadStateRef.current = { hasNextPage, isFetchingNextPage };
-  // The scroll container only mounts once the list renders (the loading/empty
-  // states return earlier), so re-run when it becomes available.
+  // The viewport only mounts once the list renders (the loading/empty states
+  // return earlier), so re-run when it becomes available.
   const listMounted = !isLoading && messages.length > 0;
   useEffect(() => {
-    const root = containerRef.current;
+    const root = viewportRef.current;
     const sentinel = topSentinelRef.current;
     if (!root || !sentinel || typeof IntersectionObserver === "undefined") return;
     const io = new IntersectionObserver(
       (entries) => {
         if (!entries.some((e) => e.isIntersecting)) return;
         const { hasNextPage: more, isFetchingNextPage: busy } = loadStateRef.current;
-        if (more && !busy) {
-          prepareForPrepend();
-          void fetchNextPage();
-        }
+        if (more && !busy) void fetchNextPage();
       },
       // Preload ~1 viewport before the absolute top so the join is seamless.
       { root, rootMargin: "400px 0px 0px 0px", threshold: 0 },
     );
     io.observe(sentinel);
     return () => io.disconnect();
-  }, [containerRef, channelId, listMounted, fetchNextPage, prepareForPrepend]);
-
-  // Restore the reader's place once an older fetch settles. Keying on the
-  // false-edge of isFetchingNextPage (not the page count) guarantees we also
-  // release prepend suppression when a fetch returns nothing — otherwise the
-  // engine would stay pinned. Layout effect = runs after the older rows are
-  // in the DOM but before paint, so there's no visible jump.
-  const wasFetchingOlderRef = useRef(false);
-  useLayoutEffect(() => {
-    if (wasFetchingOlderRef.current && !isFetchingNextPage) {
-      restorePrepend();
-    }
-    wasFetchingOlderRef.current = isFetchingNextPage;
-  }, [isFetchingNextPage, restorePrepend]);
+  }, [channelId, listMounted, fetchNextPage]);
 
   if (isLoading && messages.length === 0) {
     return (
@@ -200,78 +180,101 @@ export function ChannelMessageList({
     );
   }
   return (
-    <div className="relative min-h-0 flex-1">
-      <div ref={containerRef} className="h-full overflow-y-auto py-1">
-        {/* Top sentinel: nearing it loads the older page (#10). */}
-        <div ref={topSentinelRef} aria-hidden className="h-px w-full" />
-        {hasNextPage ? (
-          <div className="flex items-center justify-center py-2 text-xs text-muted-foreground">
-            {isFetchingNextPage ? (
-              <span className="flex items-center gap-1.5">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                {t(($) => $.messages.loading_older)}
-              </span>
+    // Keyed on channelId so switching channels remounts the scroller with a
+    // clean state (replaces the engine's resetKey).
+    <MessageScrollerProvider key={channelId} autoScroll defaultScrollPosition="end">
+      <MessageScroller className="min-h-0 flex-1">
+        <MessageScrollerViewport ref={viewportRef} className="py-1">
+          {/* gap-0: channel rows are contiguous (MessageRow owns its padding). */}
+          <MessageScrollerContent className="gap-0">
+            <OpenAtUnread anchorMessageId={anchorMessageId} />
+            {/* Top sentinel: nearing it loads the older page (#10). */}
+            <div ref={topSentinelRef} aria-hidden className="h-px w-full" />
+            {hasNextPage ? (
+              <div className="flex items-center justify-center py-2 text-xs text-muted-foreground">
+                {isFetchingNextPage ? (
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    {t(($) => $.messages.loading_older)}
+                  </span>
+                ) : null}
+              </div>
             ) : null}
-          </div>
-        ) : null}
-        {messages.map((m, i) => {
-          const prev = i > 0 ? messages[i - 1] : null;
-          // The unread divider visually breaks a group, so a continuation
-          // immediately after the divider should re-introduce the avatar
-          // header — feels weird otherwise. Hence the `dividerBeforeIndex`
-          // check inside the predicate.
-          const isContinuation =
-            !!prev &&
-            dividerBeforeIndex !== i &&
-            prev.author_type === m.author_type &&
-            prev.author_id === m.author_id &&
-            new Date(m.created_at).getTime() - new Date(prev.created_at).getTime() <
-              GROUP_CONTINUATION_MS;
+            {messages.map((m, i) => {
+              const prev = i > 0 ? messages[i - 1] : null;
+              // The unread divider visually breaks a group, so a continuation
+              // immediately after the divider should re-introduce the avatar
+              // header — feels weird otherwise. Hence the `dividerBeforeIndex`
+              // check inside the predicate.
+              const isContinuation =
+                !!prev &&
+                dividerBeforeIndex !== i &&
+                prev.author_type === m.author_type &&
+                prev.author_id === m.author_id &&
+                new Date(m.created_at).getTime() - new Date(prev.created_at).getTime() <
+                  GROUP_CONTINUATION_MS;
 
-          // Show a date divider when the calendar day changes between messages.
-          const showDateDivider =
-            !prev ||
-            new Date(m.created_at).toDateString() !== new Date(prev.created_at).toDateString();
+              // Show a date divider when the calendar day changes.
+              const showDateDivider =
+                !prev ||
+                new Date(m.created_at).toDateString() !==
+                  new Date(prev.created_at).toDateString();
 
-          return (
-            <Fragment key={m.id}>
-              {showDateDivider ? (
-                <DateDivider label={formatDateLabel(m.created_at, todayLabel, yesterdayLabel)} />
-              ) : null}
-              {dividerBeforeIndex === i ? (
-                <UnreadDivider
-                  ariaLabel={t(($) => $.messages.new_messages_aria)}
-                  label={t(($) => $.messages.new_messages)}
-                />
-              ) : null}
-              <MessageRow
-                message={m}
-                channelId={channelId}
-                member={m.author_type === "member" ? memberById.get(m.author_id) : undefined}
-                agent={m.author_type === "agent" ? agentById.get(m.author_id) : undefined}
-                onOpenThread={onOpenThread}
-                isGroupContinuation={isContinuation}
-              />
-            </Fragment>
-          );
-        })}
-        {/* Live-edge sentinel for the engine's IntersectionObserver. */}
-        <div ref={sentinelRef} aria-hidden className="h-px w-full" />
-      </div>
-      {hasNewBelow && (
-        <div className="pointer-events-none absolute bottom-2 left-0 right-0 flex justify-center">
-          <button
-            type="button"
-            onClick={jumpToLatest}
-            className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-md hover:bg-primary/90"
-          >
-            <ChevronDown className="h-3.5 w-3.5" />
-            {t(($) => $.messages.new_messages_below)}
-          </button>
-        </div>
-      )}
-    </div>
+              return (
+                <Fragment key={m.id}>
+                  {showDateDivider ? (
+                    <MessageScrollerItem>
+                      <DateDivider
+                        label={formatDateLabel(m.created_at, todayLabel, yesterdayLabel)}
+                      />
+                    </MessageScrollerItem>
+                  ) : null}
+                  {dividerBeforeIndex === i ? (
+                    <MessageScrollerItem>
+                      <UnreadDivider
+                        ariaLabel={t(($) => $.messages.new_messages_aria)}
+                        label={t(($) => $.messages.new_messages)}
+                      />
+                    </MessageScrollerItem>
+                  ) : null}
+                  <MessageScrollerItem messageId={m.id}>
+                    <MessageRow
+                      message={m}
+                      channelId={channelId}
+                      member={
+                        m.author_type === "member" ? memberById.get(m.author_id) : undefined
+                      }
+                      agent={m.author_type === "agent" ? agentById.get(m.author_id) : undefined}
+                      onOpenThread={onOpenThread}
+                      isGroupContinuation={isContinuation}
+                    />
+                  </MessageScrollerItem>
+                </Fragment>
+              );
+            })}
+          </MessageScrollerContent>
+        </MessageScrollerViewport>
+        <MessageScrollerButton direction="end">
+          <ArrowDown />
+          <span className="sr-only">{t(($) => $.messages.new_messages_below)}</span>
+        </MessageScrollerButton>
+      </MessageScroller>
+    </MessageScrollerProvider>
   );
+}
+
+/**
+ * Open policy (#11): scroll the first unread message to the top of the
+ * viewport. Lives inside the Provider so it can use the scroll context; a
+ * layout effect runs before paint to avoid a flash from the default
+ * "end" position. No-op when there's nothing unread.
+ */
+function OpenAtUnread({ anchorMessageId }: { anchorMessageId: string | null }) {
+  const { scrollToMessage } = useMessageScroller();
+  useLayoutEffect(() => {
+    if (anchorMessageId) scrollToMessage(anchorMessageId, { align: "start" });
+  }, [anchorMessageId, scrollToMessage]);
+  return null;
 }
 
 const DateDivider = ({ label }: { label: string }) => (

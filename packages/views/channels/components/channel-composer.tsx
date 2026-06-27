@@ -1,8 +1,19 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ContentEditor, type ContentEditorRef } from "../../editor";
+import {
+  ContentEditor,
+  type ContentEditorRef,
+  useFileDropZone,
+  FileDropOverlay,
+} from "../../editor";
 import { Button } from "@multica/ui/components/ui/button";
 import { useChannelsStore, useSendChannelMessage, channelMembersOptions } from "@multica/core/channels";
 import { api } from "@multica/core/api";
@@ -24,6 +35,15 @@ import { toast } from "sonner";
 interface ChannelComposerProps {
   channel: Channel;
   disabled?: boolean;
+}
+
+export interface ChannelComposerHandle {
+  /** Upload files through the composer's attachment pipeline (the same
+   *  path as the paperclip button and the composer's own drop zone).
+   *  Exposed so an ancestor that provides a wider drop target — e.g. the
+   *  Ship Concierge drawer — can forward files dropped over the whole
+   *  panel, not just the input box. */
+  attachFiles: (files: File[]) => void;
 }
 
 /**
@@ -79,7 +99,10 @@ function useComposerPlaceholder(channel: Channel): string {
  * Submit is wired to Enter (Shift+Enter for newline) via the editor's
  * submitOnEnter prop.
  */
-export function ChannelComposer({ channel, disabled }: ChannelComposerProps) {
+export const ChannelComposer = forwardRef<
+  ChannelComposerHandle,
+  ChannelComposerProps
+>(function ChannelComposer({ channel, disabled }, ref) {
   const editorRef = useRef<ContentEditorRef>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const inputDraft = useChannelsStore((s) => s.inputDrafts[channel.id] ?? "");
@@ -99,7 +122,7 @@ export function ChannelComposer({ channel, disabled }: ChannelComposerProps) {
   const hasUploading = pending.some((p) => p.status === "uploading");
   const hasError = pending.some((p) => p.status === "error");
 
-  const handleAttach = async (files: FileList | null) => {
+  const handleAttach = async (files: FileList | File[] | null) => {
     if (!files || files.length === 0) return;
     // Each file gets a stable client key + an "uploading" placeholder so
     // the chip row appears immediately. Uploads run in parallel.
@@ -134,6 +157,21 @@ export function ChannelComposer({ channel, disabled }: ChannelComposerProps) {
 
   const removePending = (key: string) =>
     setPending((prev) => prev.filter((x) => x.key !== key));
+
+  // Drag-and-drop: dropping files anywhere over the composer routes them
+  // through the same upload path as the paperclip button. Disabled while
+  // the composer is (e.g. archived channel) so drops can't sneak past the
+  // pointer-events lock on the editor.
+  const { isDragOver, dropZoneProps } = useFileDropZone({
+    onDrop: (files) => void handleAttach(files),
+    enabled: !disabled,
+  });
+
+  // Let an ancestor (the Concierge drawer) forward files dropped outside
+  // the composer itself into the same upload pipeline.
+  useImperativeHandle(ref, () => ({
+    attachFiles: (files) => void handleAttach(files),
+  }));
 
   const handleSend = () => {
     const content = editorRef.current?.getMarkdown()?.replace(/(\n\s*)+$/, "").trim();
@@ -170,7 +208,11 @@ export function ChannelComposer({ channel, disabled }: ChannelComposerProps) {
     (isEmpty && pending.filter((p) => p.status === "ready").length === 0);
 
   return (
-    <div className="border-t border-border bg-background px-4 py-3 md:pr-14">
+    <div
+      className="relative border-t border-border bg-background px-4 py-3 md:pr-14"
+      {...(disabled ? {} : dropZoneProps)}
+    >
+      {isDragOver && <FileDropOverlay />}
       <PendingAttachmentsRow pending={pending} onRemove={removePending} />
       <div className="flex items-end gap-2">
         <input
@@ -225,4 +267,4 @@ export function ChannelComposer({ channel, disabled }: ChannelComposerProps) {
       </div>
     </div>
   );
-}
+});

@@ -3,7 +3,7 @@
 import { useEffect, useMemo } from "react";
 import { Bot, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
+import { usePanelRef } from "react-resizable-panels";
 import { channelsListOptions } from "@multica/core/channels";
 import { useShipConciergeDrawer } from "@multica/core/ship";
 import { useWorkspaceId } from "@multica/core/hooks";
@@ -50,9 +50,6 @@ export function ShipShell({ children }: { children: React.ReactNode }) {
     [channels],
   );
 
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-    id: "multica_ship_concierge_layout",
-  });
   const panelRef = usePanelRef();
 
   // Store → panel sync. The store is the source of truth (it drives the
@@ -70,12 +67,7 @@ export function ShipShell({ children }: { children: React.ReactNode }) {
   }, [open, panelRef]);
 
   return (
-    <ResizablePanelGroup
-      orientation="horizontal"
-      className="h-full min-h-0"
-      defaultLayout={defaultLayout}
-      onLayoutChanged={onLayoutChanged}
-    >
+    <ResizablePanelGroup orientation="horizontal" className="h-full min-h-0">
       <ResizablePanel id="content" minSize="45%">
         {children}
       </ResizablePanel>
@@ -111,21 +103,19 @@ export function ShipShell({ children }: { children: React.ReactNode }) {
             </Button>
           </div>
 
-          {concierge ? (
+          {!concierge ? (
+            <ConciergeEmptyState />
+          ) : open ? (
+            // Mount the chat ONLY while the drawer is expanded. The shadcn
+            // MessageScroller applies its scroll-to-end exactly once; if it
+            // mounted while the panel was collapsed (0-width) it'd land at the
+            // top and never re-correct. Gating the mount on `open` guarantees a
+            // real viewport, so openAtBottom lands on the latest reply.
             <div className="flex min-h-0 flex-1 flex-col">
-              {/* openAtBottom: the Concierge is a chat assistant — land on the
-                  latest reply, not scrolled up into history at the unread
-                  divider (which also kept the load-older sentinel firing). */}
-              <ChannelMessageList
-                channelId={concierge.id}
-                enabled={open}
-                openAtBottom
-              />
+              <ChannelMessageList channelId={concierge.id} enabled openAtBottom />
               <ChannelComposer channel={concierge} />
             </div>
-          ) : (
-            <ConciergeEmptyState />
-          )}
+          ) : null}
         </div>
       </ResizablePanel>
     </ResizablePanelGroup>

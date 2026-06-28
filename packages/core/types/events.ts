@@ -36,6 +36,10 @@ export type WSEventType =
   | "task:updated"
   | "task:deleted"
   | "task:promoted"
+  // Draft lifecycle (standalone draft table). CRUD on a user's drafts.
+  | "draft:created"
+  | "draft:updated"
+  | "draft:deleted"
   | "inbox:new"
   | "inbox:read"
   | "inbox:archived"

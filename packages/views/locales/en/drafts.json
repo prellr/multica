@@ -1,0 +1,23 @@
+{
+  "page": {
+    "title": "Drafts",
+    "new_draft": "New draft",
+    "empty_title": "No drafts yet",
+    "empty_description": "Drafts are living documents you write and shape over time. Create one to start writing."
+  },
+  "detail": {
+    "untitled": "Untitled draft",
+    "title_placeholder": "Untitled draft",
+    "body_placeholder": "Start writing… (Markdown supported)",
+    "select_prompt": "Select a draft to open it, or create a new one.",
+    "delete_button": "Delete",
+    "delete_confirm": "Delete this draft? This can't be undone.",
+    "delete_success": "Draft deleted"
+  },
+  "errors": {
+    "load_failed": "Failed to load draft.",
+    "create_failed": "Couldn't create draft. Please try again.",
+    "save_failed": "Couldn't save draft. Please try again.",
+    "delete_failed": "Couldn't delete draft. Please try again."
+  }
+}

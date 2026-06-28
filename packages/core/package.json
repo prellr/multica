@@ -35,6 +35,7 @@
     "./issues/stores/*": "./issues/stores/*.ts",
     "./tasks": "./tasks/index.ts",
     "./tasks/queries": "./tasks/queries.ts",
+    "./drafts": "./drafts/index.ts",
     "./tasks/mutations": "./tasks/mutations.ts",
     "./tasks/cache-helpers": "./tasks/cache-helpers.ts",
     "./tasks/ws-updaters": "./tasks/ws-updaters.ts",

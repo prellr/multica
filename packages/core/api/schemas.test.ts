@@ -3,6 +3,8 @@ import {
   DashboardUsageDailyListSchema,
   ListIssuesResponseSchema,
   PromoteDeployEnvironmentResponseSchema,
+  DraftSchema,
+  ListDraftsResponseSchema,
 } from "./schemas";
 
 const baseIssue = {
@@ -107,6 +109,53 @@ describe("PromoteDeployEnvironmentResponseSchema (deploy-to-production)", () => 
       PromoteDeployEnvironmentResponseSchema.safeParse({
         dispatched: "yes",
       }).success,
+    ).toBe(false);
+  });
+});
+
+// Drafts is a standalone entity behind parseWithFallback on every read. These
+// tests pin the contract the schema must hold (API Response Compatibility):
+// a malformed row fails closed so the client returns its fallback, an unknown
+// status value parses (open enum / enum-drift), and a missing field is caught.
+const baseDraft = {
+  id: "33333333-3333-3333-3333-333333333333",
+  workspace_id: "ws-1",
+  owner_user_id: "user-1",
+  title: "Draft title",
+  body: "# body",
+  status: "draft",
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+};
+
+describe("DraftSchema / ListDraftsResponseSchema drift", () => {
+  it("accepts a well-formed draft and an unknown status value (open enum)", () => {
+    // A future server value like "accepted" — or anything the frontend has
+    // never seen — must parse, not crash, so the UI can render a generic
+    // fallback for it.
+    const parsed = DraftSchema.parse({ ...baseDraft, status: "some_future_status" });
+    expect(parsed.status).toBe("some_future_status");
+  });
+
+  it("rejects a draft missing a required field so parseWithFallback falls back", () => {
+    const { title: _omit, ...draftMissingTitle } = baseDraft;
+    expect(DraftSchema.safeParse(draftMissingTitle).success).toBe(false);
+  });
+
+  it("rejects a wrong-typed body (number) so the client returns EMPTY_DRAFT", () => {
+    expect(DraftSchema.safeParse({ ...baseDraft, body: 123 }).success).toBe(false);
+  });
+
+  it("defaults a null/missing drafts array to [] instead of throwing", () => {
+    // An older/newer backend that omits the wrapper array must degrade to an
+    // empty list, never a non-iterable that crashes the list page.
+    const parsed = ListDraftsResponseSchema.parse({ total: 0 });
+    expect(parsed.drafts).toEqual([]);
+  });
+
+  it("rejects a non-array 'drafts' so parseWithFallback can return its fallback", () => {
+    expect(
+      ListDraftsResponseSchema.safeParse({ drafts: "nope", total: 0 }).success,
     ).toBe(false);
   });
 });

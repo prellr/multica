@@ -1,0 +1,23 @@
+{
+  "page": {
+    "title": "draft",
+    "new_draft": "新建 draft",
+    "empty_title": "还没有 draft",
+    "empty_description": "draft 是可以持续撰写和打磨的活文档。创建一个开始写作。"
+  },
+  "detail": {
+    "untitled": "未命名 draft",
+    "title_placeholder": "未命名 draft",
+    "body_placeholder": "开始写作…（支持 Markdown）",
+    "select_prompt": "选中一个 draft 打开，或新建一个。",
+    "delete_button": "删除",
+    "delete_confirm": "确定要删除这个 draft 吗？此操作不可撤销。",
+    "delete_success": "draft 已删除"
+  },
+  "errors": {
+    "load_failed": "加载 draft 失败。",
+    "create_failed": "创建 draft 失败，请重试。",
+    "save_failed": "保存 draft 失败，请重试。",
+    "delete_failed": "删除 draft 失败，请重试。"
+  }
+}

@@ -29,6 +29,7 @@ import {
   onIssueMetadataChanged,
 } from "../issues/ws-updaters";
 import { onUserTaskCreated, onUserTaskUpdated, onUserTaskDeleted, onUserTaskPromoted } from "../tasks/ws-updaters";
+import { onDraftCreated, onDraftUpdated, onDraftDeleted } from "../drafts/ws-updaters";
 import { onInboxNew, onInboxInvalidate, onInboxIssueStatusChanged, onInboxIssueDeleted } from "../inbox/ws-updaters";
 import { inboxKeys } from "../inbox/queries";
 import { notificationPreferenceOptions } from "../notification-preferences/queries";
@@ -367,6 +368,9 @@ export function useRealtimeSync(
       // Routing is by exact event name in ws-client subscriptions, so prefix
       // collisions are notional only.
       "task:created", "task:updated", "task:deleted", "task:promoted",
+      // Draft lifecycle (standalone draft table). Handled by explicit handlers
+      // below; skip the generic prefix refresh.
+      "draft:created", "draft:updated", "draft:deleted",
       "comment:created", "comment:updated", "comment:deleted",
       "comment:resolved", "comment:unresolved",
       "activity:created",
@@ -516,6 +520,30 @@ export function useRealtimeSync(
       if (!task_id || !issue?.id) return;
       const wsId = getCurrentWsId();
       if (wsId) onUserTaskPromoted(qc, wsId, task_id, issue);
+    });
+
+    // Draft lifecycle. The server publishes `{ draft: DraftResponse }` for
+    // create/update and `{ draft_id: string }` for delete. See server draft.go
+    // h.publish calls. Mirrors the user-task handlers above.
+    const unsubDraftCreated = ws.on("draft:created", (p) => {
+      const { draft } = (p ?? {}) as { draft?: import("../types").Draft };
+      if (!draft?.id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onDraftCreated(qc, wsId, draft);
+    });
+
+    const unsubDraftUpdated = ws.on("draft:updated", (p) => {
+      const { draft } = (p ?? {}) as { draft?: import("../types").Draft };
+      if (!draft?.id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onDraftUpdated(qc, wsId, draft);
+    });
+
+    const unsubDraftDeleted = ws.on("draft:deleted", (p) => {
+      const { draft_id } = (p ?? {}) as { draft_id?: string };
+      if (!draft_id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onDraftDeleted(qc, wsId, draft_id);
     });
 
     const unsubIssueLabelsChanged = ws.on("issue_labels:changed", (p) => {
@@ -1282,6 +1310,9 @@ export function useRealtimeSync(
       unsubTaskUpdated();
       unsubTaskDeleted();
       unsubTaskPromoted();
+      unsubDraftCreated();
+      unsubDraftUpdated();
+      unsubDraftDeleted();
       unsubIssueLabelsChanged();
       unsubIssueMetadataChanged();
       unsubInboxNew();

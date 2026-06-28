@@ -23,6 +23,7 @@ import { DashboardPage } from "@multica/views/dashboard";
 import { AutopilotsPage } from "@multica/views/autopilots/components";
 import { MyIssuesPage } from "@multica/views/my-issues";
 import { TasksPage } from "@multica/views/tasks";
+import { DraftsPage } from "@multica/views/drafts";
 import { ShipPage, ShipReleasePage } from "@multica/views/ship";
 import { SkillsPage } from "@multica/views/skills";
 import { DesktopRuntimesPage } from "./components/desktop-runtimes-page";
@@ -164,6 +165,17 @@ export const appRoutes: RouteObject[] = [
             path: "tasks/:id",
             element: <TaskDetailPage />,
             handle: { title: "Task" },
+          },
+          {
+            // Drafts master-detail. Selection rides on ?draft=<id> (mirrors
+            // tasks), so there's no separate /drafts/:id route.
+            path: "drafts",
+            element: (
+              <ErrorBoundary>
+                <DraftsPage />
+              </ErrorBoundary>
+            ),
+            handle: { title: "Drafts" },
           },
           {
             path: "ship",

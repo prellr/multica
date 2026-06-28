@@ -16,6 +16,8 @@ import type {
   TimelineEntry,
   User,
   ListTasksResponse,
+  Draft,
+  ListDraftsResponse,
 } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -341,6 +343,48 @@ export const ListTasksResponseSchema = z.object({
 export const EMPTY_LIST_TASKS_RESPONSE: ListTasksResponse = {
   tasks: [],
   total: 0,
+};
+
+// Drafts. Standalone entity (its own table — not an issue row). Same leniency
+// rules as the schemas above: `status` is an open enum kept as `z.string()` so
+// a future server value (e.g. "accepted") parses instead of crashing,
+// optionals are nullable-tolerant, `.loose()` lets the server add fields later
+// without stripping them. Reads go through parseWithFallback at the client
+// boundary so an older desktop build talking to a newer backend degrades
+// gracefully rather than white-screening.
+export const DraftSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  owner_user_id: z.string(),
+  title: z.string(),
+  body: z.string(),
+  status: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const ListDraftsResponseSchema = z.object({
+  drafts: z.array(DraftSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_DRAFTS_RESPONSE: ListDraftsResponse = {
+  drafts: [],
+  total: 0,
+};
+
+// Fallback for the single-draft endpoints (get/create/update). A validation
+// failure here is the rare worst case (badly-drifted backend); the empty draft
+// keeps the editor rendering rather than throwing into the UI.
+export const EMPTY_DRAFT: Draft = {
+  id: "",
+  workspace_id: "",
+  owner_user_id: "",
+  title: "",
+  body: "",
+  status: "draft",
+  created_at: "",
+  updated_at: "",
 };
 
 const SubscriberSchema = z.object({

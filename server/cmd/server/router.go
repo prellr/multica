@@ -498,6 +498,21 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/", h.UpdateDraft)
 					r.Patch("/", h.UpdateDraft)
 					r.Delete("/", h.DeleteDraft)
+
+					// Draft annotation layer (slice 1): a non-destructive,
+					// re-anchoring annotation overlay on the draft body. Nested
+					// under the draft — every annotation route resolves the
+					// parent draft via loadDraftForUser first, then operates on
+					// draft.ID. {aid} is UUID-only.
+					r.Route("/annotations", func(r chi.Router) {
+						r.Get("/", h.ListDraftAnnotations)
+						r.Post("/", h.CreateDraftAnnotation)
+						r.Route("/{aid}", func(r chi.Router) {
+							r.Patch("/", h.UpdateDraftAnnotation)
+							r.Delete("/", h.DeleteDraftAnnotation)
+							r.Post("/messages", h.AddDraftAnnotationMessage)
+						})
+					})
 				})
 			})
 

@@ -68,6 +68,18 @@ const (
 	EventDraftUpdated = "draft:updated"
 	EventDraftDeleted = "draft:deleted"
 
+	// Draft annotation events (Drafts slice 1 — the non-destructive annotation
+	// overlay on a draft body). Workspace-scoped like drafts. Created/updated
+	// carry the full annotation payload (anchor + state + thread), deleted
+	// carries `{ draft_id, annotation_id }` so the receiver can drop it from
+	// the right draft's annotation cache. message:created carries the new
+	// thread message plus its draft+annotation ids. Slice 1 is human-only;
+	// slice 2 (agent authoring) reuses these same events unchanged.
+	EventDraftAnnotationCreated        = "draft_annotation:created"
+	EventDraftAnnotationUpdated        = "draft_annotation:updated"
+	EventDraftAnnotationDeleted        = "draft_annotation:deleted"
+	EventDraftAnnotationMessageCreated = "draft_annotation:message_created"
+
 	// Inbox events
 	EventInboxNew           = "inbox:new"
 	EventInboxRead          = "inbox:read"

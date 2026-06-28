@@ -58,6 +58,16 @@ const (
 	// combined event keeps the transition atomic.
 	EventUserTaskPromoted = "task:promoted"
 
+	// Draft events (CRUD on the standalone draft table). Workspace- and
+	// owner-scoped; the frontend invalidates the draft list/detail caches on
+	// receipt so a draft created/edited/deleted in one client (or, in a later
+	// slice, by the agent) stays fresh everywhere. Created/updated carry the
+	// full draft payload; deleted carries only `draft_id` (the receiver removes
+	// it from the list and clears its detail cache).
+	EventDraftCreated = "draft:created"
+	EventDraftUpdated = "draft:updated"
+	EventDraftDeleted = "draft:deleted"
+
 	// Inbox events
 	EventInboxNew           = "inbox:new"
 	EventInboxRead          = "inbox:read"

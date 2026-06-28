@@ -484,6 +484,23 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// {id} above because of the trailing `/messages` segment.
 			r.Get("/api/tasks/{taskId}/messages", h.ListTaskMessagesByUser)
 
+			// Drafts (standalone workspace- + owner-scoped markdown documents).
+			// Slice 0 is single-user CRUD; later slices add the annotation
+			// surface, the agent, and co-editing. {id} is UUID-only (drafts
+			// have no human-readable identifier).
+			r.Route("/api/drafts", func(r chi.Router) {
+				r.Get("/", h.ListDrafts)
+				r.Post("/", h.CreateDraft)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetDraft)
+					// PUT + PATCH on the same handler mirrors the issue/task API
+					// (the MCP client only has a `patch()` method).
+					r.Put("/", h.UpdateDraft)
+					r.Patch("/", h.UpdateDraft)
+					r.Delete("/", h.DeleteDraft)
+				})
+			})
+
 			// Labels
 			r.Route("/api/labels", func(r chi.Router) {
 				r.Get("/", h.ListLabels)

@@ -25,6 +25,12 @@ catalog:
   # see CLAUDE.md "API Response Compatibility")
   zod: "^4.1.5"
 
+  # Fuzzy text matching — powers the draft-annotation re-anchoring engine
+  # (packages/core/drafts/reanchor.ts): match_main / Levenshtein similarity to
+  # relocate an annotation's quote as the document body is edited.
+  diff-match-patch: "^1.0.5"
+  "@types/diff-match-patch": "^1.0.36"
+
   # UI & Styling
   tailwindcss: "^4"
   "@tailwindcss/postcss": "^4"

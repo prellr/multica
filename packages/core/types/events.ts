@@ -40,6 +40,11 @@ export type WSEventType =
   | "draft:created"
   | "draft:updated"
   | "draft:deleted"
+  // Draft annotation layer (slice 1 — the non-destructive annotation overlay).
+  | "draft_annotation:created"
+  | "draft_annotation:updated"
+  | "draft_annotation:deleted"
+  | "draft_annotation:message_created"
   | "inbox:new"
   | "inbox:read"
   | "inbox:archived"

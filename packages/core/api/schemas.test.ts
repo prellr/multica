@@ -5,6 +5,8 @@ import {
   PromoteDeployEnvironmentResponseSchema,
   DraftSchema,
   ListDraftsResponseSchema,
+  DraftAnnotationSchema,
+  ListDraftAnnotationsResponseSchema,
 } from "./schemas";
 
 const baseIssue = {
@@ -156,6 +158,71 @@ describe("DraftSchema / ListDraftsResponseSchema drift", () => {
   it("rejects a non-array 'drafts' so parseWithFallback can return its fallback", () => {
     expect(
       ListDraftsResponseSchema.safeParse({ drafts: "nope", total: 0 }).success,
+    ).toBe(false);
+  });
+});
+
+// Draft annotations (slice 1). The author_type / type / state are open enums;
+// slice 2 adds an "agent" author with no schema change. The thread defaults to
+// [] (a bare highlight has none, and a drifted backend that omits it must not
+// throw). All reads go through parseWithFallback.
+const baseAnnotation = {
+  id: "44444444-4444-4444-4444-444444444444",
+  draft_id: "33333333-3333-3333-3333-333333333333",
+  workspace_id: "ws-1",
+  author_type: "user",
+  author_user_id: "user-1",
+  type: "comment",
+  quote: "quick brown fox",
+  context_before: "The ",
+  context_after: " jumps",
+  pos_hint: 4,
+  state: "open",
+  suggestion_before: null,
+  suggestion_after: null,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+  messages: [],
+};
+
+describe("DraftAnnotationSchema / ListDraftAnnotationsResponseSchema drift", () => {
+  it("accepts unknown type / state / author_type values (open enums downgrade, not crash)", () => {
+    const parsed = DraftAnnotationSchema.parse({
+      ...baseAnnotation,
+      type: "some_future_type",
+      state: "some_future_state",
+      author_type: "agent", // slice-2 value, must parse on a slice-1 client
+    });
+    expect(parsed.type).toBe("some_future_type");
+    expect(parsed.state).toBe("some_future_state");
+    expect(parsed.author_type).toBe("agent");
+  });
+
+  it("defaults a null/missing messages thread to [] instead of throwing", () => {
+    const { messages: _omit, ...annotationNoThread } = baseAnnotation;
+    const parsed = DraftAnnotationSchema.parse(annotationNoThread);
+    expect(parsed.messages).toEqual([]);
+    const parsedNull = DraftAnnotationSchema.parse({ ...baseAnnotation, messages: null });
+    expect(parsedNull.messages).toEqual([]);
+  });
+
+  it("rejects a wrong-typed pos_hint (string) so the client returns its fallback", () => {
+    expect(DraftAnnotationSchema.safeParse({ ...baseAnnotation, pos_hint: "nope" }).success).toBe(false);
+  });
+
+  it("rejects an annotation missing a required field so parseWithFallback falls back", () => {
+    const { id: _omit, ...annotationMissingId } = baseAnnotation;
+    expect(DraftAnnotationSchema.safeParse(annotationMissingId).success).toBe(false);
+  });
+
+  it("defaults a null/missing annotations array to [] instead of throwing", () => {
+    const parsed = ListDraftAnnotationsResponseSchema.parse({ total: 0 });
+    expect(parsed.annotations).toEqual([]);
+  });
+
+  it("rejects a non-array 'annotations' so parseWithFallback can return its fallback", () => {
+    expect(
+      ListDraftAnnotationsResponseSchema.safeParse({ annotations: "nope", total: 0 }).success,
     ).toBe(false);
   });
 });

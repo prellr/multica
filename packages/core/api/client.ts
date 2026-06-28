@@ -10,6 +10,11 @@ import type {
   ListDraftsResponse,
   CreateDraftRequest,
   UpdateDraftRequest,
+  DraftAnnotation,
+  ListDraftAnnotationsResponse,
+  CreateDraftAnnotationRequest,
+  UpdateDraftAnnotationRequest,
+  DraftAnnotationMessage,
   CreateIssueRequest,
   UpdateIssueRequest,
   ListIssuesResponse,
@@ -303,6 +308,12 @@ import {
   ListDraftsResponseSchema,
   EMPTY_LIST_DRAFTS_RESPONSE,
   EMPTY_DRAFT,
+  DraftAnnotationSchema,
+  DraftAnnotationMessageSchema,
+  ListDraftAnnotationsResponseSchema,
+  EMPTY_LIST_DRAFT_ANNOTATIONS_RESPONSE,
+  EMPTY_DRAFT_ANNOTATION,
+  EMPTY_DRAFT_ANNOTATION_MESSAGE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -843,6 +854,58 @@ export class ApiClient {
 
   async deleteDraft(id: string): Promise<void> {
     await this.fetch(`/api/drafts/${id}`, { method: "DELETE" });
+  }
+
+  // Draft annotation layer (slice 1). Nested under the draft. Every read goes
+  // through parseWithFallback so an older desktop build talking to a newer
+  // backend degrades gracefully (open-enum drift downgrades, never crashes).
+  async listDraftAnnotations(draftId: string): Promise<ListDraftAnnotationsResponse> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${draftId}/annotations`);
+    return parseWithFallback(raw, ListDraftAnnotationsResponseSchema, EMPTY_LIST_DRAFT_ANNOTATIONS_RESPONSE, {
+      endpoint: "GET /api/drafts/:id/annotations",
+    });
+  }
+
+  async createDraftAnnotation(draftId: string, data: CreateDraftAnnotationRequest): Promise<DraftAnnotation> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${draftId}/annotations`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, DraftAnnotationSchema, EMPTY_DRAFT_ANNOTATION, {
+      endpoint: "POST /api/drafts/:id/annotations",
+    });
+  }
+
+  async updateDraftAnnotation(
+    draftId: string,
+    annotationId: string,
+    data: UpdateDraftAnnotationRequest,
+  ): Promise<DraftAnnotation> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${draftId}/annotations/${annotationId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, DraftAnnotationSchema, EMPTY_DRAFT_ANNOTATION, {
+      endpoint: "PATCH /api/drafts/:id/annotations/:aid",
+    });
+  }
+
+  async deleteDraftAnnotation(draftId: string, annotationId: string): Promise<void> {
+    await this.fetch(`/api/drafts/${draftId}/annotations/${annotationId}`, { method: "DELETE" });
+  }
+
+  async addDraftAnnotationMessage(
+    draftId: string,
+    annotationId: string,
+    body: string,
+  ): Promise<DraftAnnotationMessage> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${draftId}/annotations/${annotationId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    });
+    return parseWithFallback(raw, DraftAnnotationMessageSchema, EMPTY_DRAFT_ANNOTATION_MESSAGE, {
+      endpoint: "POST /api/drafts/:id/annotations/:aid/messages",
+    });
   }
 
   async batchUpdateIssues(issueIds: string[], updates: UpdateIssueRequest): Promise<{ updated: number }> {

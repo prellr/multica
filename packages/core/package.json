@@ -41,6 +41,7 @@
     "./drafts/annotation-mutations": "./drafts/annotation-mutations.ts",
     "./drafts/annotation-ws-updaters": "./drafts/annotation-ws-updaters.ts",
     "./drafts/turn-mutations": "./drafts/turn-mutations.ts",
+    "./drafts/collab": "./drafts/collab/index.ts",
     "./tasks/mutations": "./tasks/mutations.ts",
     "./tasks/cache-helpers": "./tasks/cache-helpers.ts",
     "./tasks/ws-updaters": "./tasks/ws-updaters.ts",
@@ -124,6 +125,8 @@
     "i18next": "catalog:",
     "posthog-js": "catalog:",
     "react-i18next": "catalog:",
+    "y-protocols": "catalog:",
+    "yjs": "catalog:",
     "zod": "catalog:",
     "zustand": "catalog:"
   },

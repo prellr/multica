@@ -31,6 +31,18 @@ catalog:
   diff-match-patch: "^1.0.5"
   "@types/diff-match-patch": "^1.0.36"
 
+  # Drafts Yjs co-editing floor (slice 3a). The CRDT layer under the Tiptap
+  # draft editor: collaboration extensions bind the editor to a shared Y.Doc.
+  # VERSION TRAP — extension-collaboration / -caret are PINNED to 3.22.1 (no
+  # caret). >=3.24.0 drags @tiptap/core + @tiptap/pm to a newer exact version
+  # and forces a suite-wide bump. y-tiptap is the v3 y-prosemirror successor
+  # (pulls lib0); keep yjs / lib0 / y-protocols single-versioned via the catalog.
+  yjs: "^13.6"
+  "@tiptap/y-tiptap": "^3.0.2"
+  "@tiptap/extension-collaboration": "3.22.1"
+  "@tiptap/extension-collaboration-caret": "3.22.1"
+  y-protocols: "^1"
+
   # UI & Styling
   tailwindcss: "^4"
   "@tailwindcss/postcss": "^4"

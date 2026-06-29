@@ -35,6 +35,10 @@ import { Markdown } from "@tiptap/markdown";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { Extension, InputRule, type AnyExtension } from "@tiptap/core";
 import { Suggestion } from "@tiptap/suggestion";
+import Collaboration from "@tiptap/extension-collaboration";
+import CollaborationCaret from "@tiptap/extension-collaboration-caret";
+import type * as Y from "yjs";
+import type { Awareness } from "y-protocols/awareness";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
 import { BaseMentionExtension } from "./mention-extension";
 import { createMentionSuggestion, createBroadcastSuggestion } from "./mention-suggestion";
@@ -134,12 +138,32 @@ export interface EditorExtensionsOptions {
    * system prompts) but *preserving* an existing one still matters.
    */
   disableMentions?: boolean;
+  /**
+   * Yjs co-editing floor (Drafts slice 3a). When provided, the editor binds to
+   * a shared `Y.Doc` via the Collaboration extension and StarterKit's local
+   * `UndoRedo` history is dropped (Yjs owns undo through its own UndoManager —
+   * keeping both produces a desynced, corrupt history). The editor MUST mount
+   * EMPTY when this is set: Collaboration hydrates the doc from the fragment, so
+   * passing `content` as well double-applies and corrupts the CRDT.
+   *
+   * `awareness` is optional; when present, CollaborationCaret renders remote
+   * peers' cursors/selections from the awareness channel. Non-draft editors
+   * never pass this option and are therefore byte-identical to before.
+   */
+  collaboration?: {
+    doc: Y.Doc;
+    awareness?: Awareness;
+    /** The local peer's caret label/color for CollaborationCaret. */
+    user?: { name: string; color: string };
+    /** Y.js fragment name; defaults to "default". */
+    field?: string;
+  };
 }
 
 export function createEditorExtensions(
   options: EditorExtensionsOptions,
 ): AnyExtension[] {
-  const { placeholder: placeholderText } = options;
+  const { placeholder: placeholderText, collaboration } = options;
 
   return [
     orderedListInputGuard,
@@ -147,6 +171,11 @@ export function createEditorExtensions(
       heading: { levels: [1, 2, 3] },
       link: false,
       codeBlock: false,
+      // Drop StarterKit's local history ONLY under collaboration — Yjs owns undo
+      // via its own UndoManager, and running both desyncs the history stack.
+      // Without collaboration this stays at the default, so non-draft editors
+      // (issues, chat, comments) are byte-identical to before.
+      ...(collaboration ? { undoRedo: false as const } : {}),
     }),
     CodeBlockLowlight.extend({
       addNodeView() {
@@ -212,5 +241,24 @@ export function createEditorExtensions(
     ),
     createBlurShortcutExtension(),
     createFileUploadExtension(options.onUploadFileRef!),
+    // Yjs co-editing floor (slice 3a). Appended last so it binds after the
+    // schema-defining extensions are registered. Only present when a doc is
+    // passed — see the `collaboration` option doc for the empty-mount rule.
+    ...(collaboration
+      ? [
+          Collaboration.configure({
+            document: collaboration.doc,
+            field: collaboration.field ?? "default",
+          }),
+          ...(collaboration.awareness
+            ? [
+                CollaborationCaret.configure({
+                  provider: { awareness: collaboration.awareness },
+                  ...(collaboration.user ? { user: collaboration.user } : {}),
+                }),
+              ]
+            : []),
+        ]
+      : []),
   ];
 }

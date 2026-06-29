@@ -24,6 +24,18 @@ INSERT INTO agent (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 RETURNING *;
 
+-- name: CreateAgentWithID :one
+-- Like CreateAgent but with a caller-supplied id. Used to seed built-in agents
+-- (Aye) with a deterministic, recomputable id (a UUIDv5 derived from the
+-- workspace id) so they're addressable without a lookup. Application code must
+-- only pass a trusted, derived id here — never raw user input.
+INSERT INTO agent (
+    id, workspace_id, name, description, avatar_url, runtime_mode,
+    runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
+    instructions, custom_env, custom_args, mcp_config, model, thinking_level
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+RETURNING *;
+
 -- name: UpdateAgent :one
 UPDATE agent SET
     name = COALESCE(sqlc.narg('name'), name),

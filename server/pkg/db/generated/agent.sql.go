@@ -834,6 +834,89 @@ func (q *Queries) CreateAgentTask(ctx context.Context, arg CreateAgentTaskParams
 	return i, err
 }
 
+const createAgentWithID = `-- name: CreateAgentWithID :one
+INSERT INTO agent (
+    id, workspace_id, name, description, avatar_url, runtime_mode,
+    runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
+    instructions, custom_env, custom_args, mcp_config, model, thinking_level
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, runtime_id, instructions, archived_at, archived_by, custom_env, custom_args, mcp_config, model, thinking_level, current_revision_id, current_revision_number
+`
+
+type CreateAgentWithIDParams struct {
+	ID                 pgtype.UUID `json:"id"`
+	WorkspaceID        pgtype.UUID `json:"workspace_id"`
+	Name               string      `json:"name"`
+	Description        string      `json:"description"`
+	AvatarUrl          pgtype.Text `json:"avatar_url"`
+	RuntimeMode        string      `json:"runtime_mode"`
+	RuntimeConfig      []byte      `json:"runtime_config"`
+	RuntimeID          pgtype.UUID `json:"runtime_id"`
+	Visibility         string      `json:"visibility"`
+	MaxConcurrentTasks int32       `json:"max_concurrent_tasks"`
+	OwnerID            pgtype.UUID `json:"owner_id"`
+	Instructions       string      `json:"instructions"`
+	CustomEnv          []byte      `json:"custom_env"`
+	CustomArgs         []byte      `json:"custom_args"`
+	McpConfig          []byte      `json:"mcp_config"`
+	Model              pgtype.Text `json:"model"`
+	ThinkingLevel      pgtype.Text `json:"thinking_level"`
+}
+
+// Like CreateAgent but with a caller-supplied id. Used to seed built-in agents
+// (Aye) with a deterministic, recomputable id (a UUIDv5 derived from the
+// workspace id) so they're addressable without a lookup. Application code must
+// only pass a trusted, derived id here — never raw user input.
+func (q *Queries) CreateAgentWithID(ctx context.Context, arg CreateAgentWithIDParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, createAgentWithID,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Name,
+		arg.Description,
+		arg.AvatarUrl,
+		arg.RuntimeMode,
+		arg.RuntimeConfig,
+		arg.RuntimeID,
+		arg.Visibility,
+		arg.MaxConcurrentTasks,
+		arg.OwnerID,
+		arg.Instructions,
+		arg.CustomEnv,
+		arg.CustomArgs,
+		arg.McpConfig,
+		arg.Model,
+		arg.ThinkingLevel,
+	)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.AvatarUrl,
+		&i.RuntimeMode,
+		&i.RuntimeConfig,
+		&i.Visibility,
+		&i.Status,
+		&i.MaxConcurrentTasks,
+		&i.OwnerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Description,
+		&i.RuntimeID,
+		&i.Instructions,
+		&i.ArchivedAt,
+		&i.ArchivedBy,
+		&i.CustomEnv,
+		&i.CustomArgs,
+		&i.McpConfig,
+		&i.Model,
+		&i.ThinkingLevel,
+		&i.CurrentRevisionID,
+		&i.CurrentRevisionNumber,
+	)
+	return i, err
+}
+
 const createQuickCreateTask = `-- name: CreateQuickCreateTask :one
 INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context)
 VALUES ($1, $2, NULL, 'queued', $3, $4)

@@ -499,6 +499,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Patch("/", h.UpdateDraft)
 					r.Delete("/", h.DeleteDraft)
 
+					// Send-turn (slice 2): enqueue one draft turn for Aye. The
+					// handler resolves the draft via loadDraftForUser then uses
+					// draft.ID, so cross-owner / bad-UUID requests 404 before
+					// any enqueue.
+					r.Post("/turn", h.StartDraftTurn)
+
 					// Draft annotation layer (slice 1): a non-destructive,
 					// re-anchoring annotation overlay on the draft body. Nested
 					// under the draft — every annotation route resolves the

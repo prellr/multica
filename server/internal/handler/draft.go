@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -298,4 +299,86 @@ func (h *Handler) DeleteDraft(w http.ResponseWriter, r *http.Request) {
 
 	h.publish(protocol.EventDraftDeleted, workspaceID, "member", userID, map[string]any{"draft_id": uuidToString(draft.ID)})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// DraftTurnResponse is the JSON shape returned by the Send endpoint. It echoes
+// the enqueued task so the Draft view can subscribe to its task:message /
+// task:progress stream and show the "Aye is working" indicator.
+type DraftTurnResponse struct {
+	TaskID  string `json:"task_id"`
+	DraftID string `json:"draft_id"`
+	AgentID string `json:"agent_id"`
+	Status  string `json:"status"`
+}
+
+// StartDraftTurn enqueues a draft-turn task for Aye (Drafts slice 2). The human
+// clicked Send: snapshot the open-annotation queue, then queue one conservative
+// turn. Aye reads the live draft + queue and responds via the `multica draft *`
+// surface; her replies/suggestions stream back as draft_annotation:* events
+// during the run, and a draft:turn_completed event fires when she's done.
+//
+// Per the UUID-parsing convention the draft is resolved via loadDraftForUser
+// (workspace membership + owner scoping) and all subsequent work uses draft.ID;
+// the request carries no pure-UUID body so there's nothing else to validate.
+// Cross-owner / bad-UUID requests 404 at loadDraftForUser before any enqueue.
+func (h *Handler) StartDraftTurn(w http.ResponseWriter, r *http.Request) {
+	draft, ok := h.loadDraftForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+
+	// Snapshot the currently-open annotation ids. These are provenance only —
+	// Aye re-lists the live queue at run time — so a failure to load them is
+	// non-fatal: the turn still runs, just without the Send-time snapshot.
+	var openIDs []string
+	annotations, err := h.Queries.ListDraftAnnotations(r.Context(), draft.ID)
+	if err == nil {
+		for _, a := range annotations {
+			if a.State == draftAnnotationDefaultState { // "open"
+				openIDs = append(openIDs, uuidToString(a.ID))
+			}
+		}
+	} else {
+		slog.Warn("start draft turn: failed to snapshot open annotations",
+			append(logger.RequestAttrs(r), "error", err, "draft_id", uuidToString(draft.ID))...)
+	}
+
+	// Aye's id is deterministic from the workspace id (seeded at workspace
+	// create; see aye.go). Verify the row exists before enqueueing so a
+	// workspace that somehow predates the seed gets a clear 409 instead of a
+	// task that never claims.
+	ayeID := AyeAgentID(draft.WorkspaceID)
+	if _, err := h.Queries.GetAgent(r.Context(), ayeID); err != nil {
+		writeError(w, http.StatusConflict, "draft agent is not available in this workspace")
+		return
+	}
+
+	task, err := h.TaskService.EnqueueDraftTurn(r.Context(), service.EnqueueDraftTurnParams{
+		WorkspaceID:       draft.WorkspaceID,
+		AgentID:           ayeID,
+		DraftID:           draft.ID,
+		RequesterID:       userID,
+		OpenAnnotationIDs: openIDs,
+		DocRev:            timestampToString(draft.UpdatedAt),
+	})
+	if err != nil {
+		// The most common cause is "agent has no runtime" — the owner hasn't
+		// connected a daemon yet. Surface it as a 409 so the UI can prompt
+		// them to start one rather than reading it as a server fault.
+		slog.Warn("start draft turn failed",
+			append(logger.RequestAttrs(r), "error", err, "draft_id", uuidToString(draft.ID))...)
+		writeError(w, http.StatusConflict, "could not start a turn: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, DraftTurnResponse{
+		TaskID:  uuidToString(task.ID),
+		DraftID: uuidToString(draft.ID),
+		AgentID: uuidToString(ayeID),
+		Status:  task.Status,
+	})
 }

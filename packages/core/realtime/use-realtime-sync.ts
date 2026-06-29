@@ -36,6 +36,7 @@ import {
   onDraftAnnotationDeleted,
   onDraftAnnotationMessageCreated,
 } from "../drafts/annotation-ws-updaters";
+import { draftAnnotationKeys } from "../drafts/annotation-queries";
 import { onInboxNew, onInboxInvalidate, onInboxIssueStatusChanged, onInboxIssueDeleted } from "../inbox/ws-updaters";
 import { inboxKeys } from "../inbox/queries";
 import { notificationPreferenceOptions } from "../notification-preferences/queries";
@@ -589,6 +590,22 @@ export function useRealtimeSync(
       if (!draft_id || !annotation_id || !message?.id) return;
       const wsId = getCurrentWsId();
       if (wsId) onDraftAnnotationMessageCreated(qc, wsId, draft_id, annotation_id, message);
+    });
+
+    // Drafts slice 2 — a Send-turn finished. The per-action replies/suggestions
+    // already patched the annotation cache live during the run via
+    // draft_annotation:* events; on completion we invalidate the draft's
+    // annotation list so any final server state (states the agent flipped,
+    // ordering) reconciles. The view also subscribes to this event directly
+    // (useWSEvent) to dismiss the "Aye is working" indicator and show the
+    // closing summary.
+    const unsubDraftTurnCompleted = ws.on("draft:turn_completed", (p) => {
+      const { draft_id } = (p ?? {}) as { draft_id?: string };
+      if (!draft_id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) {
+        qc.invalidateQueries({ queryKey: draftAnnotationKeys.lists(wsId, draft_id) });
+      }
     });
 
     const unsubIssueLabelsChanged = ws.on("issue_labels:changed", (p) => {
@@ -1362,6 +1379,7 @@ export function useRealtimeSync(
       unsubDraftAnnotationUpdated();
       unsubDraftAnnotationDeleted();
       unsubDraftAnnotationMessageCreated();
+      unsubDraftTurnCompleted();
       unsubIssueLabelsChanged();
       unsubIssueMetadataChanged();
       unsubInboxNew();

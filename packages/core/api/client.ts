@@ -15,6 +15,7 @@ import type {
   CreateDraftAnnotationRequest,
   UpdateDraftAnnotationRequest,
   DraftAnnotationMessage,
+  DraftTurnResponse,
   CreateIssueRequest,
   UpdateIssueRequest,
   ListIssuesResponse,
@@ -314,6 +315,8 @@ import {
   EMPTY_LIST_DRAFT_ANNOTATIONS_RESPONSE,
   EMPTY_DRAFT_ANNOTATION,
   EMPTY_DRAFT_ANNOTATION_MESSAGE,
+  DraftTurnResponseSchema,
+  EMPTY_DRAFT_TURN_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -892,6 +895,22 @@ export class ApiClient {
 
   async deleteDraftAnnotation(draftId: string, annotationId: string): Promise<void> {
     await this.fetch(`/api/drafts/${draftId}/annotations/${annotationId}`, { method: "DELETE" });
+  }
+
+  /**
+   * Send-turn (slice 2): enqueue one draft turn for Aye. Returns the queued
+   * task so the caller can subscribe to its task:message stream. Parsed through
+   * a schema with an empty fallback — a drifted/garbled response yields an
+   * empty task_id rather than throwing into the UI; the caller treats that as
+   * "the turn didn't start".
+   */
+  async startDraftTurn(draftId: string): Promise<DraftTurnResponse> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${draftId}/turn`, {
+      method: "POST",
+    });
+    return parseWithFallback(raw, DraftTurnResponseSchema, EMPTY_DRAFT_TURN_RESPONSE, {
+      endpoint: "POST /api/drafts/:id/turn",
+    });
   }
 
   async addDraftAnnotationMessage(

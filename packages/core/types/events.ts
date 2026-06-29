@@ -45,6 +45,10 @@ export type WSEventType =
   | "draft_annotation:updated"
   | "draft_annotation:deleted"
   | "draft_annotation:message_created"
+  // Draft turn lifecycle (slice 2 — the Send-turn). Fires when Aye's turn task
+  // completes; carries `{ draft_id, task_id, agent_id, summary }`. The per-turn
+  // replies/suggestions stream in live as draft_annotation:* during the run.
+  | "draft:turn_completed"
   | "inbox:new"
   | "inbox:read"
   | "inbox:archived"
@@ -293,6 +297,20 @@ export interface TaskQueuedPayload {
   issue_id: string;
   chat_session_id?: string;
   status: string;
+}
+
+/**
+ * Payload for `draft:turn_completed` (slice 2 — the Send-turn). The per-turn
+ * replies/suggestions already arrived as draft_annotation:* events during the
+ * run; this fires once at the end so the view can dismiss the working indicator
+ * and surface Aye's closing narration (`summary`). Every field is optional at
+ * the consumer (the WS payload is untyped JSON crossing the boundary).
+ */
+export interface DraftTurnCompletedPayload {
+  draft_id: string;
+  task_id: string;
+  agent_id: string;
+  summary: string;
 }
 
 export interface TaskDispatchPayload {

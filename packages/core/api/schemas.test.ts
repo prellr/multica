@@ -7,6 +7,7 @@ import {
   ListDraftsResponseSchema,
   DraftAnnotationSchema,
   ListDraftAnnotationsResponseSchema,
+  DraftTurnResponseSchema,
 } from "./schemas";
 
 const baseIssue = {
@@ -224,5 +225,39 @@ describe("DraftAnnotationSchema / ListDraftAnnotationsResponseSchema drift", () 
     expect(
       ListDraftAnnotationsResponseSchema.safeParse({ annotations: "nope", total: 0 }).success,
     ).toBe(false);
+  });
+});
+
+// Draft turn (slice 2 — the Send-turn). POST /api/drafts/:id/turn is consumed
+// by the Send control. The schema is fully optional (every field defaults) so a
+// drifted/garbled response degrades to an empty turn rather than throwing into
+// the UI — the control reads an empty task_id as "the turn didn't start".
+describe("DraftTurnResponseSchema drift", () => {
+  it("parses a well-formed turn response", () => {
+    const parsed = DraftTurnResponseSchema.parse({
+      task_id: "t-1",
+      draft_id: "d-1",
+      agent_id: "a-1",
+      status: "queued",
+    });
+    expect(parsed.task_id).toBe("t-1");
+    expect(parsed.status).toBe("queued");
+  });
+
+  it("defaults every field when the server omits them (no white-screen)", () => {
+    // A badly-drifted backend returning {} must not throw; the empty fallback
+    // is what the client treats as "turn didn't start".
+    const parsed = DraftTurnResponseSchema.parse({});
+    expect(parsed.task_id).toBe("");
+    expect(parsed.status).toBe("");
+  });
+
+  it("accepts an unknown status value (open enum)", () => {
+    const parsed = DraftTurnResponseSchema.parse({ status: "some_future_status" });
+    expect(parsed.status).toBe("some_future_status");
+  });
+
+  it("rejects a wrong-typed task_id (number) so parseWithFallback falls back", () => {
+    expect(DraftTurnResponseSchema.safeParse({ task_id: 123 }).success).toBe(false);
   });
 });

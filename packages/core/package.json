@@ -40,6 +40,7 @@
     "./drafts/annotation-queries": "./drafts/annotation-queries.ts",
     "./drafts/annotation-mutations": "./drafts/annotation-mutations.ts",
     "./drafts/annotation-ws-updaters": "./drafts/annotation-ws-updaters.ts",
+    "./drafts/turn-mutations": "./drafts/turn-mutations.ts",
     "./tasks/mutations": "./tasks/mutations.ts",
     "./tasks/cache-helpers": "./tasks/cache-helpers.ts",
     "./tasks/ws-updaters": "./tasks/ws-updaters.ts",

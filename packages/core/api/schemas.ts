@@ -20,6 +20,7 @@ import type {
   ListDraftsResponse,
   DraftAnnotation,
   ListDraftAnnotationsResponse,
+  DraftTurnResponse,
 } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -465,6 +466,26 @@ export const EMPTY_DRAFT_ANNOTATION: DraftAnnotation = {
   created_at: "",
   updated_at: "",
   messages: [],
+};
+
+// Draft turn (slice 2 — the Send-turn). POST /api/drafts/:id/turn returns the
+// enqueued task. `status` stays z.string() (open enum, enum-drift rule).
+// .loose() lets the server add fields later. Consumed by the Send control to
+// learn the task_id it should subscribe to — a missing/garbled response must
+// degrade (the fallback yields an empty task_id, and the control treats that as
+// "turn didn't start" rather than white-screening).
+export const DraftTurnResponseSchema = z.object({
+  task_id: z.string().default(""),
+  draft_id: z.string().default(""),
+  agent_id: z.string().default(""),
+  status: z.string().default(""),
+}).loose();
+
+export const EMPTY_DRAFT_TURN_RESPONSE: DraftTurnResponse = {
+  task_id: "",
+  draft_id: "",
+  agent_id: "",
+  status: "",
 };
 
 const SubscriberSchema = z.object({

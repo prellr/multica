@@ -52,3 +52,17 @@ export interface UpdateDraftRequest {
   body?: string;
   status?: DraftStatus;
 }
+
+/**
+ * Response from POST /api/drafts/{id}/turn (slice 2 — the Send-turn). The
+ * server enqueues a draft turn for Aye and echoes the task so the view can
+ * subscribe to its task:message stream and show the "Aye is working" indicator.
+ * `status` is the queued task's status ("queued"); it's an open string for the
+ * same enum-drift reasons as DraftStatus.
+ */
+export interface DraftTurnResponse {
+  task_id: string;
+  draft_id: string;
+  agent_id: string;
+  status: string;
+}

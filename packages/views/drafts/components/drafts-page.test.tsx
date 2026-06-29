@@ -33,11 +33,11 @@ vi.mock("../../navigation", () => ({
   NavigationProvider: ({ children }: any) => children,
 }));
 
-// Mock the editor pane — it pulls in tiptap (ContentEditor/TitleEditor), which
-// is heavy and out of scope for the page-level master-detail test. The page's
-// own list + "New draft" behavior is what's under test here.
-vi.mock("./draft-editor", () => ({
-  DraftEditor: ({ draftId }: { draftId: string }) => (
+// Mock the editor pane — it pulls in tiptap + the annotation surface, which is
+// heavy and out of scope for the page-level master-detail test. The page's own
+// list + "New draft" behavior is what's under test here.
+vi.mock("../annotations/annotation-draft-editor", () => ({
+  AnnotationDraftEditor: ({ draftId }: { draftId: string }) => (
     <div data-testid="draft-editor">editing {draftId}</div>
   ),
 }));

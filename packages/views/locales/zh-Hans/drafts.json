@@ -18,6 +18,30 @@
     "load_failed": "加载 draft 失败。",
     "create_failed": "创建 draft 失败，请重试。",
     "save_failed": "保存 draft 失败，请重试。",
-    "delete_failed": "删除 draft 失败，请重试。"
+    "delete_failed": "删除 draft 失败，请重试。",
+    "annotation_create_failed": "添加批注失败，请重试。"
+  },
+  "annotations": {
+    "panel_title": "批注",
+    "toolbar_label": "批注所选内容",
+    "open_count": "未处理的批注",
+    "empty": "在 draft 中选中文本即可添加评论、建议或高亮。",
+    "no_quote": "（无文本）",
+    "text_changed": "文本已改动",
+    "reply_placeholder": "回复…",
+    "reply_submit": "回复",
+    "resolve": "解决",
+    "dismiss": "忽略",
+    "reopen": "重新打开",
+    "delete": "删除",
+    "remove_highlight": "移除高亮",
+    "orphaned_title": "已失锚",
+    "types": {
+      "comment": "评论",
+      "suggest": "建议",
+      "approve": "批准",
+      "block": "阻止",
+      "highlight": "高亮"
+    }
   }
 }

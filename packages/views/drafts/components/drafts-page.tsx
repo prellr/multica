@@ -18,7 +18,7 @@ import type { Draft } from "@multica/core/types";
 import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
 import { useT, useTimeAgo } from "../../i18n";
-import { DraftEditor } from "./draft-editor";
+import { AnnotationDraftEditor } from "../annotations/annotation-draft-editor";
 
 /**
  * Drafts master-detail page. Left panel: the user's drafts (newest-edited
@@ -133,7 +133,7 @@ export function DraftsPage() {
       <ResizableHandle />
       <ResizablePanel id="detail" minSize="40%">
         {selectedId ? (
-          <DraftEditor
+          <AnnotationDraftEditor
             key={selectedId}
             draftId={selectedId}
             onClose={() => setSelected("")}

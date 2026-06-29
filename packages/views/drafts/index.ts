@@ -1,2 +1,2 @@
 export { DraftsPage } from "./components/drafts-page";
-export { DraftEditor } from "./components/draft-editor";
+export { AnnotationDraftEditor } from "./annotations/annotation-draft-editor";

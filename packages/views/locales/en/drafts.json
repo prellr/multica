@@ -18,6 +18,30 @@
     "load_failed": "Failed to load draft.",
     "create_failed": "Couldn't create draft. Please try again.",
     "save_failed": "Couldn't save draft. Please try again.",
-    "delete_failed": "Couldn't delete draft. Please try again."
+    "delete_failed": "Couldn't delete draft. Please try again.",
+    "annotation_create_failed": "Couldn't add the annotation. Please try again."
+  },
+  "annotations": {
+    "panel_title": "Annotations",
+    "toolbar_label": "Annotate selection",
+    "open_count": "Open annotations",
+    "empty": "Select text in the draft to add a comment, suggestion, or highlight.",
+    "no_quote": "(no text)",
+    "text_changed": "Text changed",
+    "reply_placeholder": "Reply…",
+    "reply_submit": "Reply",
+    "resolve": "Resolve",
+    "dismiss": "Dismiss",
+    "reopen": "Reopen",
+    "delete": "Delete",
+    "remove_highlight": "Remove highlight",
+    "orphaned_title": "Orphaned",
+    "types": {
+      "comment": "Comment",
+      "suggest": "Suggest",
+      "approve": "Approve",
+      "block": "Block",
+      "highlight": "Highlight"
+    }
   }
 }

@@ -1,0 +1,44 @@
+/*
+ * Draft annotation overlay styling. Highlights are ProseMirror inline
+ * decorations (class .draft-annotation-highlight) — never marks in the doc — so
+ * removing an annotation simply stops painting them; the body markdown is
+ * untouched. Colors use semantic-token-derived values (color-mix on the
+ * shadcn tokens) so the highlight reads in both light and dark themes without
+ * hardcoded palette colors.
+ */
+
+.draft-annotation-highlight {
+  border-radius: 2px;
+  /* A soft wash keyed off the brand/accent token. */
+  background-color: color-mix(in oklab, var(--accent) 55%, transparent);
+  box-shadow: inset 0 -1px 0 0 color-mix(in oklab, var(--ring) 40%, transparent);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.draft-annotation-highlight:hover {
+  background-color: color-mix(in oklab, var(--accent) 75%, transparent);
+}
+
+/* Suggestion: lean on the primary token to distinguish it from a comment. */
+.draft-annotation-highlight[data-annotation-type="suggestion"] {
+  background-color: color-mix(in oklab, var(--primary) 22%, transparent);
+}
+
+/* Block: a destructive-tinted wash to read as "needs attention". */
+.draft-annotation-highlight[data-annotation-type="block"] {
+  background-color: color-mix(in oklab, var(--destructive) 22%, transparent);
+}
+
+/* Resolved / dismissed annotations fade their highlight. */
+.draft-annotation-highlight[data-annotation-state="resolved"],
+.draft-annotation-highlight[data-annotation-state="dismissed"] {
+  background-color: color-mix(in oklab, var(--muted) 60%, transparent);
+  box-shadow: none;
+}
+
+/* "Text changed" flag: an amber underline on an open annotation whose anchored
+ * text was materially edited. */
+.draft-annotation-highlight[data-annotation-changed="true"] {
+  box-shadow: inset 0 -2px 0 0 color-mix(in oklab, var(--warning, oklch(0.78 0.16 80)) 80%, transparent);
+}

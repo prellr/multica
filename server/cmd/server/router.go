@@ -237,6 +237,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		realtime.HandleWebSocket(hub, mc, pr, slugResolver, w, r)
 	})
 
+	// Drafts Yjs co-editing relay (slice 3a). Binary WebSocket; the server is a
+	// dumb relay over a per-draft room. Mounted at the top level (NOT under the
+	// /api/drafts workspace-member group) for the same reason as /ws: a browser
+	// WebSocket upgrade can't attach the X-Workspace-ID header the workspace
+	// middleware requires. Auth (cookie or first-message token) and the
+	// owner/membership gate run inside the handler, before the room join.
+	r.Get("/api/drafts/{id}/yjs", func(w http.ResponseWriter, r *http.Request) {
+		h.DraftYjsWebSocket(mc, pr, w, r)
+	})
+
 	// Local file serving (when using local storage)
 	if local, ok := store.(*storage.LocalStorage); ok {
 		r.Get("/uploads/*", func(w http.ResponseWriter, r *http.Request) {

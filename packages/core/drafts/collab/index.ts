@@ -1,4 +1,4 @@
-// Headless Yjs co-editing floor for Drafts (slice 3a spike).
+// Headless Yjs co-editing floor for Drafts (slice 3a).
 export {
   DRAFT_YJS_FRAGMENT,
   createDraftYContext,
@@ -7,3 +7,10 @@ export {
   type DraftYContext,
   type DocRelay,
 } from "./y-doc";
+
+export {
+  DraftYjsProvider,
+  REMOTE_ORIGIN,
+  type DraftYjsProviderOptions,
+} from "./provider";
+export { draftYjsWsUrl } from "./url";

@@ -37,9 +37,33 @@ const (
 	draftAnnotationDefaultType = "comment"
 	// draftAnnotationDefaultState is the canonical create-time state.
 	draftAnnotationDefaultState = "open"
-	// draftAnnotationAuthorUser is the only author kind slice 1 writes.
+	// draftAnnotationAuthorUser is the human author kind.
 	draftAnnotationAuthorUser = "user"
+	// draftAnnotationAuthorAgent is the agent author kind (Drafts slice 2).
+	// Aye writes annotation replies + anchored suggestions as 'agent'; the
+	// author_user_id column stays NULL for these rows.
+	draftAnnotationAuthorAgent = "agent"
 )
+
+// resolveDraftAnnotationAuthor decides how a draft annotation / thread message
+// write is attributed. It mirrors comment.go: an agent caller (validated
+// X-Agent-ID + X-Task-ID via resolveActor) writes author_type='agent' with a
+// NULL author_user_id; everyone else writes author_type='user' with their own
+// id. The returned (actorType, actorID) pair is what the WS publish uses so the
+// frontend can render agent-authored annotations with agent styling.
+//
+// Slice 2 keeps Aye's surface to replies + anchored suggestions; the body
+// endpoint stays human-only (full-replace, no CRDT yet).
+func (h *Handler) resolveDraftAnnotationAuthor(r *http.Request, userID, workspaceID string, fallbackUserID pgtype.UUID) (authorType string, authorUserID pgtype.UUID, actorType, actorID string) {
+	actorType, actorID = h.resolveActor(r, userID, workspaceID)
+	if actorType == "agent" {
+		// author_user_id is NULL for agent-authored rows (the column is
+		// nullable for exactly this case); the agent identity travels via
+		// author_type + the WS actor fields, not the user column.
+		return draftAnnotationAuthorAgent, pgtype.UUID{}, actorType, actorID
+	}
+	return draftAnnotationAuthorUser, fallbackUserID, "member", userID
+}
 
 // normalizeDraftAnnotationType maps a caller-supplied annotation type onto a
 // value safe to write. `type` is an open enum; the switch has a `default`
@@ -255,6 +279,11 @@ func (h *Handler) CreateDraftAnnotation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Attribution: agent callers (Aye, slice 2) write author_type='agent' with
+	// a NULL author_user_id; human callers write 'user' with their own id.
+	workspaceID := uuidToString(draft.WorkspaceID)
+	authorType, authorUserID, actorType, actorID := h.resolveDraftAnnotationAuthor(r, userID, workspaceID, ownerUUID)
+
 	annType := draftAnnotationDefaultType
 	if req.Type != nil {
 		annType = normalizeDraftAnnotationType(*req.Type)
@@ -279,8 +308,8 @@ func (h *Handler) CreateDraftAnnotation(w http.ResponseWriter, r *http.Request) 
 	annotation, err := h.Queries.CreateDraftAnnotation(r.Context(), db.CreateDraftAnnotationParams{
 		DraftID:          draft.ID,
 		WorkspaceID:      draft.WorkspaceID,
-		AuthorType:       draftAnnotationAuthorUser,
-		AuthorUserID:     ownerUUID,
+		AuthorType:       authorType,
+		AuthorUserID:     authorUserID,
 		Type:             annType,
 		Quote:            quote,
 		ContextBefore:    contextBefore,
@@ -296,13 +325,14 @@ func (h *Handler) CreateDraftAnnotation(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Optional initial thread message. A bare highlight has none.
+	// Optional initial thread message. A bare highlight has none. Authored by
+	// the same actor as the annotation itself.
 	var messages []DraftAnnotationMessageResponse
 	if req.Message != nil && *req.Message != "" {
 		msg, err := h.Queries.CreateDraftAnnotationMessage(r.Context(), db.CreateDraftAnnotationMessageParams{
 			AnnotationID: annotation.ID,
-			AuthorType:   draftAnnotationAuthorUser,
-			AuthorUserID: ownerUUID,
+			AuthorType:   authorType,
+			AuthorUserID: authorUserID,
 			Body:         *req.Message,
 		})
 		if err != nil {
@@ -312,9 +342,8 @@ func (h *Handler) CreateDraftAnnotation(w http.ResponseWriter, r *http.Request) 
 		messages = append(messages, draftAnnotationMessageToResponse(msg))
 	}
 
-	workspaceID := uuidToString(draft.WorkspaceID)
 	resp := draftAnnotationToResponse(annotation, messages)
-	h.publish(protocol.EventDraftAnnotationCreated, workspaceID, "member", userID, map[string]any{"annotation": resp})
+	h.publish(protocol.EventDraftAnnotationCreated, workspaceID, actorType, actorID, map[string]any{"annotation": resp})
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -389,8 +418,12 @@ func (h *Handler) UpdateDraftAnnotation(w http.ResponseWriter, r *http.Request) 
 	}
 
 	workspaceID := uuidToString(draft.WorkspaceID)
+	// State transitions (resolve/ack/dismiss) and re-anchors can come from Aye
+	// too; reflect the real actor on the WS event so clients attribute the
+	// change correctly.
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	resp := draftAnnotationToResponse(updated, msgResp)
-	h.publish(protocol.EventDraftAnnotationUpdated, workspaceID, "member", userID, map[string]any{"annotation": resp})
+	h.publish(protocol.EventDraftAnnotationUpdated, workspaceID, actorType, actorID, map[string]any{"annotation": resp})
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -455,10 +488,15 @@ func (h *Handler) AddDraftAnnotationMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Attribution: agent replies (Aye draining a thread, slice 2) carry
+	// author_type='agent'; human replies carry 'user'.
+	workspaceID := uuidToString(draft.WorkspaceID)
+	authorType, authorUserID, actorType, actorID := h.resolveDraftAnnotationAuthor(r, userID, workspaceID, ownerUUID)
+
 	msg, err := h.Queries.CreateDraftAnnotationMessage(r.Context(), db.CreateDraftAnnotationMessageParams{
 		AnnotationID: annotation.ID,
-		AuthorType:   draftAnnotationAuthorUser,
-		AuthorUserID: ownerUUID,
+		AuthorType:   authorType,
+		AuthorUserID: authorUserID,
 		Body:         req.Body,
 	})
 	if err != nil {
@@ -466,9 +504,8 @@ func (h *Handler) AddDraftAnnotationMessage(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	workspaceID := uuidToString(draft.WorkspaceID)
 	resp := draftAnnotationMessageToResponse(msg)
-	h.publish(protocol.EventDraftAnnotationMessageCreated, workspaceID, "member", userID, map[string]any{
+	h.publish(protocol.EventDraftAnnotationMessageCreated, workspaceID, actorType, actorID, map[string]any{
 		"draft_id":      uuidToString(draft.ID),
 		"annotation_id": uuidToString(annotation.ID),
 		"message":       resp,

@@ -11,6 +11,7 @@ import {
   draftAnnotationListOptions,
   useCreateDraftAnnotation,
 } from "@multica/core/drafts";
+import { useStartDraftTurn } from "@multica/core/drafts/turn-mutations";
 import { createDraftYContext, destroyDraftYContext, useDraftYjs } from "@multica/core/drafts/collab";
 import { useAuthStore } from "@multica/core/auth";
 import type { DraftAnnotationType } from "@multica/core/types";
@@ -28,6 +29,7 @@ import {
 import { AnnotationSelectToolbar } from "./annotation-select-toolbar";
 import { AnnotationThreadPanel } from "./annotation-thread-panel";
 import { DraftSendControl, DraftTurnNarration } from "./draft-turn-narration";
+import { createDraftSendShortcutExtension } from "./send-shortcut";
 import {
   useAnnotationAnchoring,
   buildAnchorFromSelection,
@@ -81,6 +83,35 @@ export function AnnotationDraftEditor({ draftId, onClose, onDeleted }: Annotatio
   // open draft, cleared on draft:turn_completed. Drives the Send control's
   // working state and the narration rail.
   const [activeTurnTaskId, setActiveTurnTaskId] = useState<string | null>(null);
+
+  // --- The Send-turn action (lifted from DraftSendControl) ----------------
+  // Owning the mutation here lets the SAME send fire from the header button,
+  // the editor's Cmd/Ctrl+Enter keymap, and the window-level fallback — one
+  // in-flight guard, no double-enqueue.
+  const startTurn = useStartDraftTurn(draftId);
+  const turnPending = startTurn.isPending;
+  const turnWorking = activeTurnTaskId !== null || turnPending;
+
+  const handleSend = () => {
+    // In-flight guard: never enqueue a second turn while one is pending or open.
+    if (turnWorking) return;
+    startTurn.mutate(undefined, {
+      onSuccess: (res) => {
+        // An empty task_id means the schema fell back (drifted/garbled
+        // response) — treat it as "didn't start" rather than entering a turn
+        // state we can't narrate.
+        if (res.task_id) setActiveTurnTaskId(res.task_id);
+        else toast.error(t(($) => $.turn.start_failed));
+      },
+      onError: () => toast.error(t(($) => $.turn.start_failed)),
+    });
+  };
+
+  // Hold the latest handleSend in a ref so the editor keymap (created once per
+  // draft) and the window listener always call the current guard/state without
+  // re-binding. Same pattern as the editor's onSubmitRef.
+  const handleSendRef = useRef(handleSend);
+  handleSendRef.current = handleSend;
   // Local title mirror, synced to the server title until the user types.
   const [titleDraft, setTitleDraft] = useState("");
   useEffect(() => {
@@ -163,6 +194,10 @@ export function AnnotationDraftEditor({ draftId, onClose, onDeleted }: Annotatio
           collaboration: { doc: yctx.doc, awareness: yctx.awareness, user: caretUser },
         }),
         AnnotationDecorationExtension,
+        // Cmd/Ctrl+Enter sends the draft turn from inside the editor. High
+        // priority so it consumes Mod-Enter before StarterKit's HardBreak
+        // inserts a line break. Drafts-only — not added to the shared factory.
+        createDraftSendShortcutExtension(() => handleSendRef.current()),
       ],
       editorProps: {
         attributes: { class: "flex-1 rich-text-editor text-sm outline-none" },
@@ -227,6 +262,22 @@ export function AnnotationDraftEditor({ draftId, onClose, onDeleted }: Annotatio
       if (recomputeTimerRef.current) clearTimeout(recomputeTimerRef.current);
     };
   }, []);
+
+  // Window-level Cmd/Ctrl+Enter fallback for when focus is OUTSIDE the editor
+  // (the thread panel, the Send button, the title input). When the editor IS
+  // focused, its keymap already handled the event — bail to avoid a double-fire
+  // (the editor's handler also consumes the keydown, but checking focus is the
+  // robust dedupe that doesn't depend on event ordering).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey)) return;
+      if (editor?.isFocused) return; // editor keymap owns this case
+      e.preventDefault();
+      handleSendRef.current();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [editor]);
 
   const handlePick = (type: DraftAnnotationType) => {
     if (!editor) return;
@@ -301,9 +352,9 @@ export function AnnotationDraftEditor({ draftId, onClose, onDeleted }: Annotatio
           </span>
           <div className="flex items-center gap-2">
             <DraftSendControl
-              draftId={draft.id}
-              activeTaskId={activeTurnTaskId}
-              onTurnChange={setActiveTurnTaskId}
+              onSend={handleSend}
+              working={turnWorking}
+              pending={turnPending}
             />
             <Button
               size="sm"

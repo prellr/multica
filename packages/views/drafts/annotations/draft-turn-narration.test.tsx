@@ -10,8 +10,6 @@ const TEST_RESOURCES = { en: { common: enCommon, drafts: enDrafts } };
 
 // --- Mocks ------------------------------------------------------------------
 
-const startTurnMutate = vi.hoisted(() => vi.fn());
-const startTurnState = vi.hoisted(() => ({ isPending: false }));
 // The live task:message stream the narration rail reads. Each test sets it
 // before render.
 let turnMessages: TaskMessagePayload[] = [];
@@ -20,7 +18,6 @@ let turnMessages: TaskMessagePayload[] = [];
 let turnCompletedHandler: ((p: unknown) => void) | null = null;
 
 vi.mock("@multica/core/drafts/turn-mutations", () => ({
-  useStartDraftTurn: () => ({ mutate: startTurnMutate, isPending: startTurnState.isPending }),
   useDraftTurnMessages: () => turnMessages,
 }));
 
@@ -32,13 +29,20 @@ vi.mock("@multica/core/realtime", () => ({
 
 import { DraftSendControl, DraftTurnNarration } from "./draft-turn-narration";
 
-function renderSend(activeTaskId: string | null, onTurnChange = vi.fn()) {
+function renderSend(
+  props: { working?: boolean; pending?: boolean; onSend?: () => void } = {},
+) {
+  const onSend = props.onSend ?? vi.fn();
   render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <DraftSendControl draftId="d-1" activeTaskId={activeTaskId} onTurnChange={onTurnChange} />
+      <DraftSendControl
+        onSend={onSend}
+        working={props.working ?? false}
+        pending={props.pending ?? false}
+      />
     </I18nProvider>,
   );
-  return { onTurnChange };
+  return { onSend };
 }
 
 function renderNarration(activeTaskId: string | null, onTurnChange = vi.fn()) {
@@ -51,41 +55,39 @@ function renderNarration(activeTaskId: string | null, onTurnChange = vi.fn()) {
 }
 
 beforeEach(() => {
-  startTurnMutate.mockReset();
-  startTurnState.isPending = false;
   turnMessages = [];
   turnCompletedHandler = null;
 });
 
 describe("DraftSendControl", () => {
-  it("renders the Send label when idle and starts a turn on click", () => {
-    const { onTurnChange } = renderSend(null);
+  it("renders the Send label when idle and fires onSend on click", () => {
+    const { onSend } = renderSend();
     const btn = screen.getByRole("button", { name: /send/i });
     expect(btn).not.toBeDisabled();
 
     fireEvent.click(btn);
-    expect(startTurnMutate).toHaveBeenCalledTimes(1);
-
-    // On success with a task_id, the parent is told the active turn id.
-    mutateSuccess({ task_id: "task-99", draft_id: "d-1", agent_id: "a-1", status: "queued" });
-    expect(onTurnChange).toHaveBeenCalledWith("task-99");
+    expect(onSend).toHaveBeenCalledTimes(1);
   });
 
   it("is disabled and shows the working label while a turn is active", () => {
-    renderSend("task-1");
+    renderSend({ working: true });
     const btn = screen.getByRole("button");
     expect(btn).toBeDisabled();
     // The working copy interpolates the agent name (Aye).
     expect(btn.textContent).toMatch(/Aye is thinking/i);
   });
 
-  it("does not enter a turn state when the response has an empty task_id", () => {
-    // A drifted/garbled response falls back to an empty task_id — treat it as
-    // "didn't start" rather than a turn we can't narrate.
-    const { onTurnChange } = renderSend(null);
-    fireEvent.click(screen.getByRole("button", { name: /send/i }));
-    mutateSuccess({ task_id: "", draft_id: "", agent_id: "", status: "" });
-    expect(onTurnChange).not.toHaveBeenCalled();
+  it("shows the sending label during the mutate-pending window", () => {
+    renderSend({ working: true, pending: true });
+    expect(screen.getByRole("button").textContent).toMatch(/Sending/i);
+  });
+
+  it("exposes the Cmd/Ctrl+Enter shortcut in the button tooltip", () => {
+    renderSend();
+    // formatShortcut renders ⌘↵ on Mac and Ctrl+Enter elsewhere — assert the
+    // Enter token is present regardless of platform.
+    const title = screen.getByRole("button").getAttribute("title") ?? "";
+    expect(title).toMatch(/↵|Enter/);
   });
 });
 
@@ -143,11 +145,4 @@ function msg(
   over: Partial<TaskMessagePayload> = {},
 ): TaskMessagePayload {
   return { task_id: "task-1", issue_id: "", seq, type, ...over };
-}
-
-/** Invoke the onSuccess callback from the most recent startTurn.mutate call. */
-function mutateSuccess(res: { task_id: string; draft_id: string; agent_id: string; status: string }) {
-  const lastCall = startTurnMutate.mock.calls.at(-1);
-  const opts = lastCall?.[1] as { onSuccess?: (r: typeof res) => void } | undefined;
-  opts?.onSuccess?.(res);
 }

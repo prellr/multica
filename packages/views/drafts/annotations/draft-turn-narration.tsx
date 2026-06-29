@@ -2,25 +2,27 @@
 
 import { useMemo } from "react";
 import { Send } from "lucide-react";
-import { useStartDraftTurn, useDraftTurnMessages } from "@multica/core/drafts/turn-mutations";
+import { useDraftTurnMessages } from "@multica/core/drafts/turn-mutations";
 import type { TaskMessagePayload } from "@multica/core/types";
 import { useWSEvent } from "@multica/core/realtime";
+import { modKey, enterKey, formatShortcut } from "@multica/core/platform";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   ThinkingSteps,
   type ThinkingStepItem,
 } from "@multica/ui/components/ui/thinking-steps";
 import { ThinkingIndicator } from "@multica/ui/components/ui/thinking-indicator";
-import { toast } from "sonner";
 import type { TFunction } from "i18next";
 import { useT } from "../../i18n";
 
 /**
  * The Send-turn affordance + narration rail (Drafts slice 2).
  *
- * - DraftSendControl is the header button: it POSTs /api/drafts/:id/turn,
- *   records the returned task id (lifted to the parent so the narration rail can
- *   read it), and shows a working state until the turn completes.
+ * - DraftSendControl is the header button: a PRESENTATIONAL control that fires
+ *   `onSend` (click) and reflects `working`/`pending`. The actual mutation
+ *   (useStartDraftTurn) is lifted to AnnotationDraftEditor so the SAME send
+ *   action is shared between the button, the editor's Cmd/Ctrl+Enter keymap,
+ *   and the window-level fallback — one source of truth, one in-flight guard.
  * - DraftTurnNarration is the rail: while a turn runs it renders the live
  *   task:message stream as Fluid Functionalism ThinkingSteps, with a
  *   ThinkingIndicator tail; on draft:turn_completed it clears.
@@ -31,43 +33,32 @@ import { useT } from "../../i18n";
  */
 
 interface DraftSendControlProps {
-  draftId: string;
-  /** The active turn's task id, or null when idle. Owned by the parent. */
-  activeTaskId: string | null;
-  /** Called with the new task id when a turn starts (or null on completion). */
-  onTurnChange: (taskId: string | null) => void;
+  /** Fires the draft-turn Send action. Owned (with its in-flight guard) by the parent. */
+  onSend: () => void;
+  /** True while a turn is in flight (button disabled, working label shown). */
+  working: boolean;
+  /** True for the brief mutate-pending window before the task id arrives. */
+  pending: boolean;
 }
 
-export function DraftSendControl({ draftId, activeTaskId, onTurnChange }: DraftSendControlProps) {
+export function DraftSendControl({ onSend, working, pending }: DraftSendControlProps) {
   const { t } = useT("drafts");
-  const startTurn = useStartDraftTurn(draftId);
-  const working = activeTaskId !== null || startTurn.isPending;
-
-  const handleSend = () => {
-    startTurn.mutate(undefined, {
-      onSuccess: (res) => {
-        // An empty task_id means the schema fell back (drifted/garbled
-        // response) — treat it as "didn't start" rather than entering a turn
-        // state we can't narrate.
-        if (res.task_id) onTurnChange(res.task_id);
-        else toast.error(t(($) => $.turn.start_failed));
-      },
-      onError: () => toast.error(t(($) => $.turn.start_failed)),
-    });
-  };
+  // Cosmetic shortcut hint in the tooltip (⌘↵ / Ctrl+Enter). Never gates behavior.
+  const shortcut = formatShortcut(modKey, enterKey);
 
   return (
     <Button
       size="sm"
       variant="default"
-      onClick={handleSend}
+      onClick={onSend}
       disabled={working}
+      title={`${t(($) => $.turn.send)} (${shortcut})`}
       // Keep the window-drag region clickable on desktop (header is in the
       // top strip); harmless on web.
       style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
     >
       <Send className="mr-1 h-3.5 w-3.5" />
-      {startTurn.isPending
+      {pending
         ? t(($) => $.turn.sending)
         : working
           ? t(($) => $.turn.working, { name: t(($) => $.turn.agent_name) })

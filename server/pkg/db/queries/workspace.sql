@@ -106,5 +106,19 @@ UPDATE workspace SET issue_counter = issue_counter + 1
 WHERE id = $1
 RETURNING issue_counter;
 
+-- name: ListWorkspacesWithOwner :many
+-- One-shot boot helper for the Aye backfill: every workspace alongside its
+-- owner user id. The owner is the earliest-created member with role 'owner'
+-- (DISTINCT ON picks one deterministically even if a workspace somehow has
+-- more than one owner row). Workspaces with no owner member are skipped — Aye's
+-- skill created_by references "user", so there's nothing to attribute the seed
+-- to without an owner.
+SELECT DISTINCT ON (w.id)
+    w.id AS workspace_id,
+    m.user_id AS owner_id
+FROM workspace w
+JOIN member m ON m.workspace_id = w.id AND m.role = 'owner'
+ORDER BY w.id, m.created_at ASC;
+
 -- name: DeleteWorkspace :exec
 DELETE FROM workspace WHERE id = $1;

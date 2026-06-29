@@ -351,6 +351,13 @@ func main() {
 	// and into the encrypted workspace_secret table. Idempotent: a
 	// second run on already-migrated workspaces is a cheap SELECT.
 	go migrateShipHubSecrets(sweepCtx, queries)
+	// Drafts Aye backfill. Runs once on boot to seed Aye (the Drafts lead
+	// agent) into any workspace created before Drafts shipped — those
+	// workspaces have no Aye row, so StartDraftTurn can't resolve her id and
+	// the Send-turn 409s. Idempotent: a workspace that already has Aye is
+	// skipped after a single probe, so it's safe on every boot. Doesn't block
+	// startup.
+	go handler.BackfillAyeAgents(sweepCtx, queries, pool)
 	// Ship Hub reconciler: every 5 minutes, refresh PR caches for every
 	// workspace with the feature enabled. Defensive — per-workspace errors
 	// are logged and skipped so one bad token can't starve the rest.

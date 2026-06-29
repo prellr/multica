@@ -352,10 +352,17 @@ func (h *Handler) StartDraftTurn(w http.ResponseWriter, r *http.Request) {
 	// workspace that somehow predates the seed gets a clear 409 instead of a
 	// task that never claims.
 	ayeID := AyeAgentID(draft.WorkspaceID)
-	if _, err := h.Queries.GetAgent(r.Context(), ayeID); err != nil {
+	aye, err := h.Queries.GetAgent(r.Context(), ayeID)
+	if err != nil {
 		writeError(w, http.StatusConflict, "draft agent is not available in this workspace")
 		return
 	}
+
+	// Lazy auto-bind: if Aye is unbound but a daemon's online local runtime
+	// exists, attach it now so the turn can run. Covers workspaces whose daemon
+	// connected before the register-time auto-bind shipped. No-op when she's
+	// already bound or no runtime is available (the enqueue then 409s).
+	h.ensureAyeRuntime(r.Context(), aye)
 
 	task, err := h.TaskService.EnqueueDraftTurn(r.Context(), service.EnqueueDraftTurnParams{
 		WorkspaceID:       draft.WorkspaceID,

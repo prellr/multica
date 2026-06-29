@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // AyeAgentID must be deterministic (same workspace → same agent id) and unique
@@ -92,5 +93,141 @@ func TestCreateWorkspace_SeedsAye(t *testing.T) {
 	}
 	if len(skillContent) == 0 {
 		t.Error("expected Layer 2 skill content, got empty")
+	}
+}
+
+// seedUnboundAye inserts Aye's deterministic row for the test workspace with a
+// NULL runtime_id (the freshly-seeded, no-daemon-yet state) and returns her id.
+func seedUnboundAye(t *testing.T) string {
+	t.Helper()
+	wsUUID := util.MustParseUUID(testWorkspaceID)
+	ayeID := util.UUIDToString(AyeAgentID(wsUUID))
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO agent (
+			id, workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks, owner_id, instructions,
+			custom_env, custom_args
+		)
+		VALUES ($1, $2, 'Aye', '', 'local', '{}'::jsonb, NULL, 'workspace', 1, $3, '', '{}'::jsonb, '[]'::jsonb)
+		ON CONFLICT (id) DO UPDATE SET runtime_id = NULL
+	`, ayeID, testWorkspaceID, testUserID); err != nil {
+		t.Fatalf("seed unbound Aye: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, ayeID)
+	})
+	return ayeID
+}
+
+func ayeRuntimeID(t *testing.T, ayeID string) (string, bool) {
+	t.Helper()
+	var rt *string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT runtime_id::text FROM agent WHERE id = $1`, ayeID,
+	).Scan(&rt); err != nil {
+		t.Fatalf("load Aye runtime_id: %v", err)
+	}
+	if rt == nil {
+		return "", false
+	}
+	return *rt, true
+}
+
+// Registering a daemon runtime must auto-bind a previously-unbound Aye, so the
+// workspace's first `make daemon` makes her runnable with no manual step.
+func TestDaemonRegister_AutoBindsUnboundAye(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ayeID := seedUnboundAye(t)
+	if _, bound := ayeRuntimeID(t, ayeID); bound {
+		t.Fatal("precondition: Aye should start unbound")
+	}
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/register", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    "test-daemon-autobind",
+		"device_name":  "autobind-device",
+		"runtimes": []map[string]any{
+			{"name": "autobind-runtime", "type": "claude", "version": "1.0.0", "status": "online"},
+		},
+	}, testWorkspaceID, "test-daemon-autobind")
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	runtimes, _ := resp["runtimes"].([]any)
+	if len(runtimes) == 0 {
+		t.Fatal("expected a registered runtime in the response")
+	}
+	registeredRuntimeID := runtimes[0].(map[string]any)["id"].(string)
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, registeredRuntimeID)
+	})
+
+	bound, ok := ayeRuntimeID(t, ayeID)
+	if !ok {
+		t.Fatal("expected Aye to be auto-bound to a runtime after daemon register")
+	}
+	if bound != registeredRuntimeID {
+		t.Errorf("expected Aye bound to the registered runtime %s, got %s", registeredRuntimeID, bound)
+	}
+}
+
+// BindBuiltinAgentRuntime must NOT rebind an already-bound agent (it only binds
+// when runtime_id IS NULL), and must never touch a user-created agent.
+func TestBindBuiltinAgentRuntime_IdempotentAndScoped(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ayeID := seedUnboundAye(t)
+	wsUUID := util.MustParseUUID(testWorkspaceID)
+
+	// Two runtimes: bind to the first, then attempt a rebind to the second.
+	rt1 := createClaimReclaimRuntime(t, context.Background(), "bind-rt-1")
+	rt2 := createClaimReclaimRuntime(t, context.Background(), "bind-rt-2")
+
+	n, err := testHandler.Queries.BindBuiltinAgentRuntime(context.Background(), bindParams(ayeID, rt1, testWorkspaceID))
+	if err != nil {
+		t.Fatalf("first bind: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected first bind to affect 1 row, got %d", n)
+	}
+
+	// Second bind must be a no-op — she's no longer NULL.
+	n, err = testHandler.Queries.BindBuiltinAgentRuntime(context.Background(), bindParams(ayeID, rt2, testWorkspaceID))
+	if err != nil {
+		t.Fatalf("second bind: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected second bind to be a no-op (already bound), affected %d rows", n)
+	}
+	if bound, _ := ayeRuntimeID(t, ayeID); bound != rt1 {
+		t.Errorf("expected Aye to stay bound to rt1 %s, got %s", rt1, bound)
+	}
+
+	// A user-created agent at a DIFFERENT id must never be touched by a bind
+	// keyed on Aye's id, even if it's unbound.
+	userAgentID := createHandlerTestAgent(t, "user-agent-bind", []byte("[]"))
+	testPool.Exec(context.Background(), `UPDATE agent SET runtime_id = NULL WHERE id = $1`, userAgentID)
+	n, err = testHandler.Queries.BindBuiltinAgentRuntime(context.Background(), bindParams(util.UUIDToString(AyeAgentID(wsUUID)), rt2, testWorkspaceID))
+	if err != nil {
+		t.Fatalf("bind keyed on Aye id: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("a bind keyed on Aye's id must not touch any other agent, affected %d rows", n)
+	}
+}
+
+func bindParams(agentID, runtimeID, workspaceID string) db.BindBuiltinAgentRuntimeParams {
+	return db.BindBuiltinAgentRuntimeParams{
+		ID:          util.MustParseUUID(agentID),
+		RuntimeID:   util.MustParseUUID(runtimeID),
+		WorkspaceID: util.MustParseUUID(workspaceID),
 	}
 }

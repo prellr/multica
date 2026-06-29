@@ -514,6 +514,10 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := make([]AgentRuntimeResponse, 0, len(req.Runtimes))
+	// The first registered runtime in this workspace, used to auto-bind the
+	// built-in Aye agent (Drafts slice 2) so she's runnable the instant a
+	// daemon connects. Captured here, bound once after the loop.
+	var firstRuntimeID pgtype.UUID
 	for _, runtime := range req.Runtimes {
 		provider := strings.TrimSpace(runtime.Type)
 		if provider == "" {
@@ -568,6 +572,10 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if !firstRuntimeID.Valid {
+			firstRuntimeID = row.ID
+		}
+
 		registered := db.AgentRuntime{
 			ID:             row.ID,
 			WorkspaceID:    row.WorkspaceID,
@@ -619,6 +627,12 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 
 		resp = append(resp, runtimeToResponse(registered))
 	}
+
+	// Auto-bind Aye (the built-in seed) to this daemon's runtime if she's still
+	// unbound, so the workspace's first daemon connect makes her runnable with no
+	// manual step. Idempotent + scoped to her deterministic id; a reconnect or an
+	// already-bound agent is a no-op (see bindAyeRuntimeOnRegister).
+	h.bindAyeRuntimeOnRegister(r.Context(), wsUUID, firstRuntimeID)
 
 	slog.Info("daemon registered", "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID, "runtimes_count", len(resp))
 

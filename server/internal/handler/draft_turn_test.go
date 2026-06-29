@@ -58,6 +58,76 @@ func createDraftForTest(t *testing.T, title, body string) string {
 	return draftID
 }
 
+// Lazy auto-bind: an unbound Aye + an online LOCAL runtime in the workspace →
+// StartDraftTurn binds her on the fly and enqueues, instead of 409ing. This is
+// the complement to register-time auto-bind, covering workspaces whose daemon
+// connected before that shipped.
+func TestStartDraftTurn_LazyBindsAyeFromLocalRuntime(t *testing.T) {
+	// Seed an UNBOUND Aye (no runtime_id).
+	wsUUID := util.MustParseUUID(testWorkspaceID)
+	ayeID := util.UUIDToString(AyeAgentID(wsUUID))
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO agent (
+			id, workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks, owner_id, instructions,
+			custom_env, custom_args
+		)
+		VALUES ($1, $2, 'Aye', '', 'local', '{}'::jsonb, NULL, 'workspace', 1, $3, '', '{}'::jsonb, '[]'::jsonb)
+		ON CONFLICT (id) DO UPDATE SET runtime_id = NULL
+	`, ayeID, testWorkspaceID, testUserID); err != nil {
+		t.Fatalf("seed unbound Aye: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE agent_id = $1`, ayeID)
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, ayeID)
+	})
+
+	// An online LOCAL runtime for the workspace (the test fixture's runtime is
+	// 'cloud', so lazy-bind wouldn't pick it).
+	var localRuntimeID string
+	if err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status,
+			device_info, metadata, last_seen_at, visibility
+		)
+		VALUES ($1, NULL, 'lazy-local-rt', 'local', 'claude', 'online', 'lazy fixture', '{}'::jsonb, now(), 'private')
+		RETURNING id
+	`, testWorkspaceID).Scan(&localRuntimeID); err != nil {
+		t.Fatalf("seed local runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, localRuntimeID)
+	})
+
+	draftID := createDraftForTest(t, "lazy bind", "# body")
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/drafts/"+draftID+"/turn", nil)
+	req = withURLParam(req, "id", draftID)
+	testHandler.StartDraftTurn(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 after lazy-bind, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Aye must now be bound to an online LOCAL runtime. We assert the binding's
+	// PROPERTIES (mode+status) rather than the exact id: lazy-bind picks the
+	// first online local runtime by creation order, and a concurrently-running
+	// test in the same package may have its own local runtime that sorts
+	// earlier — the contract we care about is "bound to a usable local runtime",
+	// not "bound to this specific fixture".
+	var boundMode, boundStatus *string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT rt.runtime_mode, rt.status
+		FROM agent a JOIN agent_runtime rt ON rt.id = a.runtime_id
+		WHERE a.id = $1
+	`, ayeID).Scan(&boundMode, &boundStatus); err != nil {
+		t.Fatalf("Aye was not lazy-bound to any runtime: %v", err)
+	}
+	if boundMode == nil || *boundMode != "local" || boundStatus == nil || *boundStatus != "online" {
+		t.Errorf("expected Aye bound to an online local runtime, got mode=%v status=%v", boundMode, boundStatus)
+	}
+}
+
 func TestStartDraftTurn_RejectsBadUUID(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/drafts/not-a-uuid/turn", nil)

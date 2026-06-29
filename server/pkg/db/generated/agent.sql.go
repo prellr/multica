@@ -115,6 +115,41 @@ func (q *Queries) ArchiveAgentsByRuntime(ctx context.Context, arg ArchiveAgentsB
 	return items, nil
 }
 
+const bindBuiltinAgentRuntime = `-- name: BindBuiltinAgentRuntime :execrows
+UPDATE agent
+SET runtime_id = $2, updated_at = now()
+WHERE id = $1
+  AND workspace_id = $3
+  AND runtime_id IS NULL
+  AND archived_at IS NULL
+`
+
+type BindBuiltinAgentRuntimeParams struct {
+	ID          pgtype.UUID `json:"id"`
+	RuntimeID   pgtype.UUID `json:"runtime_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// Auto-bind a built-in seed agent (Aye) to a runtime when a daemon connects, so
+// she becomes runnable without a manual step (Drafts slice 2). Idempotent and
+// safe by construction:
+//   - `id = $1` targets exactly the caller-computed built-in agent id
+//     (AyeAgentID); a user-created agent can never match, so this never rebinds
+//     someone else's agent.
+//   - `runtime_id IS NULL` means it ONLY binds a currently-unbound agent — a
+//     second daemon connect, or an agent the owner already pointed at a
+//     runtime, is left untouched (no silent rebind).
+//   - `workspace_id = $3` is the tenant guard.
+//
+// Returns the affected row count so the caller can log bound-vs-skipped.
+func (q *Queries) BindBuiltinAgentRuntime(ctx context.Context, arg BindBuiltinAgentRuntimeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bindBuiltinAgentRuntime, arg.ID, arg.RuntimeID, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const cancelAgentTask = `-- name: CancelAgentTask :one
 UPDATE agent_task_queue
 SET status = 'cancelled', completed_at = now()

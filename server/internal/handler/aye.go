@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -230,4 +231,85 @@ func seedAyeAgent(ctx context.Context, qtx *db.Queries, workspaceID pgtype.UUID,
 	}
 
 	return nil
+}
+
+// bindAyeRuntimeOnRegister binds Aye (the built-in seed) to a freshly-registered
+// local runtime if she's still unbound, so a workspace's first `make daemon`
+// makes her runnable without any manual step (Drafts slice 2). Called from
+// DaemonRegister after the runtime upsert.
+//
+// Safe + idempotent by construction (see BindBuiltinAgentRuntime): it targets
+// ONLY Aye's deterministic id, ONLY when her runtime_id is NULL, scoped to the
+// workspace — so it never rebinds a user-created agent and a reconnect is a
+// no-op. Best-effort: a bind failure is logged, not surfaced, so it never fails
+// the daemon's registration.
+func (h *Handler) bindAyeRuntimeOnRegister(ctx context.Context, workspaceID, runtimeID pgtype.UUID) {
+	if !workspaceID.Valid || !runtimeID.Valid {
+		return
+	}
+	n, err := h.Queries.BindBuiltinAgentRuntime(ctx, db.BindBuiltinAgentRuntimeParams{
+		ID:          AyeAgentID(workspaceID),
+		RuntimeID:   runtimeID,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		slog.Warn("auto-bind Aye to runtime failed",
+			"workspace_id", uuidToString(workspaceID),
+			"runtime_id", uuidToString(runtimeID),
+			"error", err,
+		)
+		return
+	}
+	if n > 0 {
+		slog.Info("auto-bound Aye to runtime on daemon register",
+			"workspace_id", uuidToString(workspaceID),
+			"runtime_id", uuidToString(runtimeID),
+		)
+	}
+}
+
+// ensureAyeRuntime is the lazy complement to bindAyeRuntimeOnRegister: at
+// Send-turn time, if Aye is still unbound but the workspace has an online local
+// runtime, bind her to it before enqueuing. This covers workspaces whose daemon
+// registered before the register-time auto-bind shipped (Aye unbound, but a
+// runtime already exists). It NEVER provisions a runtime — if there's no online
+// local runtime the existing 409 stands (correct: no daemon is running).
+//
+// `aye` is the already-loaded agent row (so we skip the bind entirely when she's
+// bound). Best-effort: a list/bind failure leaves her unbound and the caller's
+// enqueue surfaces the usual "agent has no runtime" 409.
+func (h *Handler) ensureAyeRuntime(ctx context.Context, aye db.Agent) {
+	if aye.RuntimeID.Valid {
+		return // already bound — nothing to do
+	}
+	runtimes, err := h.Queries.ListAgentRuntimes(ctx, aye.WorkspaceID)
+	if err != nil {
+		return
+	}
+	var pick pgtype.UUID
+	for _, rt := range runtimes {
+		if rt.RuntimeMode == "local" && rt.Status == "online" {
+			pick = rt.ID
+			break
+		}
+	}
+	if !pick.Valid {
+		return // no online local runtime — leave unbound, the 409 is correct
+	}
+	if _, err := h.Queries.BindBuiltinAgentRuntime(ctx, db.BindBuiltinAgentRuntimeParams{
+		ID:          aye.ID,
+		RuntimeID:   pick,
+		WorkspaceID: aye.WorkspaceID,
+	}); err != nil {
+		slog.Warn("lazy-bind Aye to runtime failed",
+			"workspace_id", uuidToString(aye.WorkspaceID),
+			"runtime_id", uuidToString(pick),
+			"error", err,
+		)
+		return
+	}
+	slog.Info("lazy-bound Aye to runtime on draft turn",
+		"workspace_id", uuidToString(aye.WorkspaceID),
+		"runtime_id", uuidToString(pick),
+	)
 }

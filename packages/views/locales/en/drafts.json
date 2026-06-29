@@ -21,6 +21,18 @@
     "delete_failed": "Couldn't delete draft. Please try again.",
     "annotation_create_failed": "Couldn't add the annotation. Please try again."
   },
+  "turn": {
+    "send": "Send",
+    "sending": "Sending…",
+    "working": "{{name}} is thinking",
+    "agent_name": "Aye",
+    "narration_title": "{{name}}'s turn",
+    "completed": "{{name}} finished her turn.",
+    "start_failed": "Couldn't start a turn. Connect a daemon, then try again.",
+    "thinking": "Thinking",
+    "tool": "Using {{tool}}",
+    "tool_generic": "Working"
+  },
   "annotations": {
     "panel_title": "Annotations",
     "toolbar_label": "Annotate selection",

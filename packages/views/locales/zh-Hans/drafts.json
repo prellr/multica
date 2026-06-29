@@ -21,6 +21,18 @@
     "delete_failed": "删除 draft 失败，请重试。",
     "annotation_create_failed": "添加批注失败，请重试。"
   },
+  "turn": {
+    "send": "发送",
+    "sending": "发送中…",
+    "working": "{{name}} 正在思考",
+    "agent_name": "Aye",
+    "narration_title": "{{name}} 的回合",
+    "completed": "{{name}} 完成了这一回合。",
+    "start_failed": "无法开始回合。请先连接 daemon，然后重试。",
+    "thinking": "思考中",
+    "tool": "正在使用 {{tool}}",
+    "tool_generic": "处理中"
+  },
   "annotations": {
     "panel_title": "批注",
     "toolbar_label": "批注所选内容",

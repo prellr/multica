@@ -26,6 +26,7 @@ import {
 } from "./decoration-extension";
 import { AnnotationSelectToolbar } from "./annotation-select-toolbar";
 import { AnnotationThreadPanel } from "./annotation-thread-panel";
+import { DraftSendControl, DraftTurnNarration } from "./draft-turn-narration";
 import {
   useAnnotationAnchoring,
   buildAnchorFromSelection,
@@ -73,6 +74,10 @@ export function AnnotationDraftEditor({ draftId, onClose, onDeleted }: Annotatio
   const { recompute, annotationsSignature } = useAnnotationAnchoring(wsId, draftId, annotations);
 
   const [activeId, setActiveId] = useState<string | null>(null);
+  // The in-flight draft-turn task id (slice 2). Transient UI state: one turn per
+  // open draft, cleared on draft:turn_completed. Drives the Send control's
+  // working state and the narration rail.
+  const [activeTurnTaskId, setActiveTurnTaskId] = useState<string | null>(null);
   // Local title mirror, synced to the server title until the user types.
   const [titleDraft, setTitleDraft] = useState("");
   useEffect(() => {
@@ -224,6 +229,11 @@ export function AnnotationDraftEditor({ draftId, onClose, onDeleted }: Annotatio
             {draft.title.trim() || t(($) => $.detail.untitled)}
           </span>
           <div className="flex items-center gap-2">
+            <DraftSendControl
+              draftId={draft.id}
+              activeTaskId={activeTurnTaskId}
+              onTurnChange={setActiveTurnTaskId}
+            />
             <Button
               size="sm"
               variant="ghost"
@@ -257,6 +267,15 @@ export function AnnotationDraftEditor({ draftId, onClose, onDeleted }: Annotatio
             </div>
           </div>
         </div>
+
+        {/* Aye's Send-turn narration rail (slice 2). Renders only while a turn
+            is in flight; the live thinking/tool stream maps into FF
+            ThinkingSteps. */}
+        <DraftTurnNarration
+          draftId={draft.id}
+          activeTaskId={activeTurnTaskId}
+          onTurnChange={setActiveTurnTaskId}
+        />
       </div>
 
       <AnnotationThreadPanel

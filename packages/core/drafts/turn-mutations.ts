@@ -48,7 +48,11 @@ export function useDraftTurnMessages(taskId: string | null | undefined): TaskMes
     // No staleness/refetch: the WS handler owns this cache. We just re-render
     // when setQueryData fires.
     staleTime: Infinity,
-    gcTime: 0,
+    // A small non-zero gcTime keeps the accumulated task:message narration alive
+    // across a transient rail unmount/remount mid-turn (a re-render that briefly
+    // drops the only observer). gcTime:0 would garbage-collect the entry the
+    // instant the rail unmounts and blank the streamed steps on remount.
+    gcTime: 60_000,
   });
   return data ?? [];
 }

@@ -69,6 +69,9 @@ catalogs:
     katex:
       specifier: ^0.16.45
       version: 0.16.45
+    lib0:
+      specifier: ^0.2
+      version: 0.2.117
     lucide-react:
       specifier: ^1.0.1
       version: 1.0.1
@@ -537,6 +540,9 @@ importers:
       i18next:
         specifier: 'catalog:'
         version: 26.0.8(typescript@5.9.3)
+      lib0:
+        specifier: 'catalog:'
+        version: 0.2.117
       posthog-js:
         specifier: 'catalog:'
         version: 1.369.3

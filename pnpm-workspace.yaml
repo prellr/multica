@@ -36,12 +36,16 @@ catalog:
   # VERSION TRAP — extension-collaboration / -caret are PINNED to 3.22.1 (no
   # caret). >=3.24.0 drags @tiptap/core + @tiptap/pm to a newer exact version
   # and forces a suite-wide bump. y-tiptap is the v3 y-prosemirror successor
-  # (pulls lib0); keep yjs / lib0 / y-protocols single-versioned via the catalog.
+  # (pulls lib0). lib0 is catalogued because the headless DraftYjsProvider imports
+  # lib0/encoding + lib0/decoding directly (it hand-rolls the y-websocket wire
+  # framing); pinning it here keeps it single-versioned with yjs / y-protocols /
+  # y-tiptap, which all depend on it transitively.
   yjs: "^13.6"
   "@tiptap/y-tiptap": "^3.0.2"
   "@tiptap/extension-collaboration": "3.22.1"
   "@tiptap/extension-collaboration-caret": "3.22.1"
   y-protocols: "^1"
+  lib0: "^0.2"
 
   # UI & Styling
   tailwindcss: "^4"

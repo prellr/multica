@@ -123,6 +123,7 @@
     "@tanstack/react-query-devtools": "^5.96.2",
     "diff-match-patch": "catalog:",
     "i18next": "catalog:",
+    "lib0": "catalog:",
     "posthog-js": "catalog:",
     "react-i18next": "catalog:",
     "y-protocols": "catalog:",

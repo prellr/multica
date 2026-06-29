@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
@@ -138,8 +139,29 @@ func (h *Handler) gateDraftForYjs(ctx context.Context, mc realtime.MembershipChe
 // serveDraftYjs runs the relay loop for one authenticated, gated connection. It
 // joins the draft's room, replays the persisted log, then pumps inbound frames
 // (relaying to peers and persisting sync frames) until the connection closes.
+// draftYjsReadLimit bounds a single inbound frame (memory-DoS guard). Sized
+// generous for a large paste / a big initial-state update on connect, but
+// bounded so one authed client can't force an arbitrarily large alloc + BYTEA
+// row. A doc update is normally a few KB; 4 MB is a wide ceiling for a worst-case
+// full-state push on a large document.
+const draftYjsReadLimit = 4 << 20 // 4 MiB
+
 func (h *Handler) serveDraftYjs(ctx context.Context, conn *websocket.Conn, draft db.Draft, userID string) {
 	draftID := uuidToString(draft.ID)
+
+	// Read-pump hardening (mirrors realtime.HandleWebSocket's readPump):
+	//   - SetReadLimit bounds a single frame (memory-DoS guard).
+	//   - SetReadDeadline + SetPongHandler are the keepalive: a client that
+	//     drops without a FIN (sleep / killed wifi / crash) stops ponging, the
+	//     read deadline fires, ReadMessage errors, and this loop exits — so the
+	//     goroutine, socket, and room-member entry are reclaimed instead of
+	//     leaking. The write pump (in draftyjs) sends the pings on pingPeriod.
+	conn.SetReadLimit(draftYjsReadLimit)
+	_ = conn.SetReadDeadline(time.Now().Add(draftyjs.PongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(draftyjs.PongWait))
+	})
+
 	hub := h.DraftYjsHub
 	member, room := hub.Join(draftID, conn)
 	defer func() {
@@ -154,17 +176,21 @@ func (h *Handler) serveDraftYjs(ctx context.Context, conn *websocket.Conn, draft
 			slog.Info("draft yjs: last client left room; body may lag the yjs log until next open",
 				"draft_id", draftID, "user_id", userID)
 		}
-		conn.Close()
+		// The write pump (started by Join, stopped by Leave→closeSend) owns the
+		// conn.Close(); we don't double-close here.
 	}()
 
-	slog.Info("draft yjs: client joined", "draft_id", draftID, "user_id", userID)
-
-	// Replay the persisted update log to the joining client. Each logged frame
-	// is sent verbatim; the client applies them in order and converges. A
-	// replay write failure means the client already vanished — bail.
-	if err := h.replayDraftYjsLog(ctx, draft.ID, member); err != nil {
-		slog.Debug("draft yjs: replay failed", "draft_id", draftID, "error", err)
-		return
+	// Replay the persisted update log to the joining client, and surface the log
+	// size — the log is uncompacted in 3a (compaction deferred), so warn-logging
+	// the row count makes the unbounded-log / replay-scale window observable in
+	// prod before it becomes a problem.
+	replayed := h.replayDraftYjsLog(ctx, draft.ID, draftID, member)
+	logHasGrown := replayed >= draftYjsLogGrowthWarnAt
+	if logHasGrown {
+		slog.Warn("draft yjs: replaying a large uncompacted update log (compaction deferred to a later slice)",
+			"draft_id", draftID, "user_id", userID, "log_rows", replayed)
+	} else {
+		slog.Info("draft yjs: client joined", "draft_id", draftID, "user_id", userID, "log_rows", replayed)
 	}
 
 	for {
@@ -182,7 +208,9 @@ func (h *Handler) serveDraftYjs(ctx context.Context, conn *websocket.Conn, draft
 		}
 
 		// Relay to every OTHER member first (presence + edits propagate with
-		// minimal latency), then persist sync frames.
+		// minimal latency), then persist sync frames. Broadcast queues
+		// non-blockingly through each peer's write pump, so a slow peer is
+		// evicted rather than blocking this read goroutine.
 		room.Broadcast(frame, member)
 
 		if draftyjs.IsSyncFrame(frame) {
@@ -193,20 +221,38 @@ func (h *Handler) serveDraftYjs(ctx context.Context, conn *websocket.Conn, draft
 	}
 }
 
-// replayDraftYjsLog streams every persisted update for a draft to one member,
-// in seq order. Yjs applies them idempotently, so replaying the whole
-// (uncompacted) log is a correct initial sync.
-func (h *Handler) replayDraftYjsLog(ctx context.Context, draftID pgtype.UUID, member *draftyjs.Member) error {
+// draftYjsLogGrowthWarnAt is the replay-row count above which a join warn-logs
+// the uncompacted-log size. Chosen as a soft "this draft has accumulated a lot
+// of history" threshold — purely observability; replay still works at any size.
+const draftYjsLogGrowthWarnAt = 1000
+
+// replayDraftYjsLog queues every persisted update for a draft to one member, in
+// seq order, through its write pump. Yjs applies them idempotently, so replaying
+// the whole (uncompacted) log is a correct initial sync. Returns the number of
+// rows replayed (for log-growth observability). A full queue mid-replay means
+// the member is already a slow consumer — it'll be evicted by the pump/Broadcast
+// path, so we stop queuing to it rather than blocking.
+func (h *Handler) replayDraftYjsLog(ctx context.Context, draftID pgtype.UUID, logDraftID string, member *draftyjs.Member) int {
 	updates, err := h.Queries.ListDraftYjsUpdates(ctx, draftID)
 	if err != nil {
-		return err
+		// A failed replay query is a real problem: the joining client converges
+		// only from live peer traffic, not history. Warn (per review).
+		slog.Warn("draft yjs: failed to load update log for replay", "error", err, "draft_id", logDraftID)
+		return 0
 	}
+	queued := 0
 	for _, u := range updates {
-		if err := member.Send(u.Update); err != nil {
-			return err
+		if !h.DraftYjsHub.Enqueue(member, u.Update) {
+			// Member's queue is full — it's a slow consumer and will be evicted.
+			// Stop replaying to it; the read loop / Broadcast path handles
+			// teardown.
+			slog.Warn("draft yjs: replay queue full, member is a slow consumer",
+				"draft_id", logDraftID, "queued", queued, "total", len(updates))
+			break
 		}
+		queued++
 	}
-	return nil
+	return queued
 }
 
 // persistDraftYjsUpdate appends one opaque sync frame to the draft's log. A

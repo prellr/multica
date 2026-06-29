@@ -43,6 +43,13 @@ catalog:
   remark-math: "^6.0.0"
   mermaid: "^11.14.0"
 
+  # Animation (MIT). The modern, tree-shakeable successor to framer-motion —
+  # imports come from "motion/react". Used by chat (views) and the Drafts
+  # narration rail's Fluid Functionalism components (ui). Cataloged so both
+  # packages pin one version (the FF registry ships framer-motion imports we
+  # retarget to motion/react on copy-in).
+  motion: "^12.38.0"
+
   # Icons
   lucide-react: "^1.0.1"
 

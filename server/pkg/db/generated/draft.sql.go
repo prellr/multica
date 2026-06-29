@@ -16,7 +16,7 @@ INSERT INTO draft (
     workspace_id, owner_user_id, title, body, status
 ) VALUES (
     $1, $2, $3, $4, $5
-) RETURNING id, workspace_id, owner_user_id, title, body, status, created_at, updated_at
+) RETURNING id, workspace_id, owner_user_id, title, body, status, created_at, updated_at, yjs_state
 `
 
 type CreateDraftParams struct {
@@ -47,6 +47,7 @@ func (q *Queries) CreateDraft(ctx context.Context, arg CreateDraftParams) (Draft
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.YjsState,
 	)
 	return i, err
 }
@@ -127,7 +128,7 @@ func (q *Queries) DeleteDraft(ctx context.Context, arg DeleteDraftParams) error 
 }
 
 const getDraft = `-- name: GetDraft :one
-SELECT id, workspace_id, owner_user_id, title, body, status, created_at, updated_at FROM draft
+SELECT id, workspace_id, owner_user_id, title, body, status, created_at, updated_at, yjs_state FROM draft
 WHERE id = $1 AND workspace_id = $2 AND owner_user_id = $3
 `
 
@@ -151,12 +152,13 @@ func (q *Queries) GetDraft(ctx context.Context, arg GetDraftParams) (Draft, erro
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.YjsState,
 	)
 	return i, err
 }
 
 const getDraftByID = `-- name: GetDraftByID :one
-SELECT id, workspace_id, owner_user_id, title, body, status, created_at, updated_at FROM draft WHERE id = $1
+SELECT id, workspace_id, owner_user_id, title, body, status, created_at, updated_at, yjs_state FROM draft WHERE id = $1
 `
 
 // Id-only lookup, NOT owner/workspace-scoped. ONLY for trusted server-internal
@@ -176,13 +178,14 @@ func (q *Queries) GetDraftByID(ctx context.Context, id pgtype.UUID) (Draft, erro
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.YjsState,
 	)
 	return i, err
 }
 
 const listDraftsForUser = `-- name: ListDraftsForUser :many
 
-SELECT id, workspace_id, owner_user_id, title, body, status, created_at, updated_at FROM draft
+SELECT id, workspace_id, owner_user_id, title, body, status, created_at, updated_at, yjs_state FROM draft
 WHERE workspace_id = $1 AND owner_user_id = $2
 ORDER BY updated_at DESC
 `
@@ -216,6 +219,7 @@ func (q *Queries) ListDraftsForUser(ctx context.Context, arg ListDraftsForUserPa
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.YjsState,
 		); err != nil {
 			return nil, err
 		}
@@ -234,7 +238,7 @@ UPDATE draft SET
     status = COALESCE($6, status),
     updated_at = now()
 WHERE id = $1 AND workspace_id = $2 AND owner_user_id = $3
-RETURNING id, workspace_id, owner_user_id, title, body, status, created_at, updated_at
+RETURNING id, workspace_id, owner_user_id, title, body, status, created_at, updated_at, yjs_state
 `
 
 type UpdateDraftParams struct {
@@ -269,6 +273,7 @@ func (q *Queries) UpdateDraft(ctx context.Context, arg UpdateDraftParams) (Draft
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.YjsState,
 	)
 	return i, err
 }

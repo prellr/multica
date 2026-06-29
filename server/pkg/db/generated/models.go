@@ -804,6 +804,7 @@ type Draft struct {
 	Status      string             `json:"status"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	YjsState    []byte             `json:"yjs_state"`
 }
 
 type DraftAnnotation struct {
@@ -831,6 +832,14 @@ type DraftAnnotationMessage struct {
 	AuthorUserID pgtype.UUID        `json:"author_user_id"`
 	Body         string             `json:"body"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type DraftYjsUpdate struct {
+	ID        pgtype.UUID        `json:"id"`
+	DraftID   pgtype.UUID        `json:"draft_id"`
+	Seq       int64              `json:"seq"`
+	Update    []byte             `json:"update"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type Feedback struct {

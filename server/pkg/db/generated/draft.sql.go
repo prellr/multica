@@ -51,6 +51,62 @@ func (q *Queries) CreateDraft(ctx context.Context, arg CreateDraftParams) (Draft
 	return i, err
 }
 
+const createDraftTurnTask = `-- name: CreateDraftTurnTask :one
+INSERT INTO agent_task_queue (
+    agent_id, runtime_id, issue_id, status, priority, context
+) VALUES ($1, $2, NULL, 'queued', $3, $4)
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task
+`
+
+type CreateDraftTurnTaskParams struct {
+	AgentID   pgtype.UUID `json:"agent_id"`
+	RuntimeID pgtype.UUID `json:"runtime_id"`
+	Priority  int32       `json:"priority"`
+	Context   []byte      `json:"context"`
+}
+
+// Drafts slice 2 — task created when a human clicks Send on a draft. Like the
+// channel-mention task it has neither issue_id nor chat_session_id; the daemon
+// detects this variant via context.type == "draft_turn" and reads the draft +
+// open-annotation queue at execution time. Mirrors CreateChannelMentionTask.
+func (q *Queries) CreateDraftTurnTask(ctx context.Context, arg CreateDraftTurnTaskParams) (AgentTaskQueue, error) {
+	row := q.db.QueryRow(ctx, createDraftTurnTask,
+		arg.AgentID,
+		arg.RuntimeID,
+		arg.Priority,
+		arg.Context,
+	)
+	var i AgentTaskQueue
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.IssueID,
+		&i.Status,
+		&i.Priority,
+		&i.DispatchedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.Result,
+		&i.Error,
+		&i.CreatedAt,
+		&i.Context,
+		&i.RuntimeID,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.TriggerCommentID,
+		&i.ChatSessionID,
+		&i.AutopilotRunID,
+		&i.Attempt,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.FailureReason,
+		&i.TriggerSummary,
+		&i.ForceFreshSession,
+		&i.IsLeaderTask,
+	)
+	return i, err
+}
+
 const deleteDraft = `-- name: DeleteDraft :exec
 DELETE FROM draft WHERE id = $1 AND workspace_id = $2 AND owner_user_id = $3
 `
@@ -85,6 +141,31 @@ type GetDraftParams struct {
 // another workspace) returns no rows, which the handler maps to 404.
 func (q *Queries) GetDraft(ctx context.Context, arg GetDraftParams) (Draft, error) {
 	row := q.db.QueryRow(ctx, getDraft, arg.ID, arg.WorkspaceID, arg.OwnerUserID)
+	var i Draft
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.OwnerUserID,
+		&i.Title,
+		&i.Body,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getDraftByID = `-- name: GetDraftByID :one
+SELECT id, workspace_id, owner_user_id, title, body, status, created_at, updated_at FROM draft WHERE id = $1
+`
+
+// Id-only lookup, NOT owner/workspace-scoped. ONLY for trusted server-internal
+// paths that have already established access by other means — e.g. the daemon
+// task-dispatch hydrator, which resolves the draft from a task it already owns
+// and needs only the title for the prompt. Never reachable from a user request
+// boundary (all user-facing reads go through GetDraft).
+func (q *Queries) GetDraftByID(ctx context.Context, id pgtype.UUID) (Draft, error) {
+	row := q.db.QueryRow(ctx, getDraftByID, id)
 	var i Draft
 	err := row.Scan(
 		&i.ID,

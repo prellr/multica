@@ -1594,6 +1594,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	hasQuickCreate := false
 	hasChannelMention := false
 	hasThreadIssue := false
+	hasDraftTurn := false
 	if task.Context != nil && !task.IssueID.Valid && !task.ChatSessionID.Valid && !task.AutopilotRunID.Valid {
 		// Lightweight type sniff before committing to a full unmarshal —
 		// we have three no-issue/no-chat task shapes today (quick-create,
@@ -1864,6 +1865,58 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					maxArtifactsPerAnchor,
 				)
 			}
+		case service.DraftTurnContextType:
+			// Drafts slice 2 — the Send-turn. TaskKind routes the prompt to
+			// buildDraftTurnPrompt; the agent reads the draft body + the open-
+			// annotation queue live via `multica draft get / annotations`, so
+			// nothing about the document is embedded on the wire (it would be
+			// stale by claim time). We surface only the Send-time provenance
+			// (draft id/title, how many threads were open, the doc revision)
+			// and the workspace for the isolation check.
+			var dt service.DraftTurnContext
+			if json.Unmarshal(task.Context, &dt) == nil {
+				hasDraftTurn = true
+				resp.TaskKind = "draft_turn"
+				resp.WorkspaceID = dt.WorkspaceID
+				resp.DraftID = dt.DraftID
+				resp.DraftOpenAnnotationCount = len(dt.OpenAnnotationIDs)
+				resp.DraftDocRev = dt.DocRev
+
+				// Re-read the draft title (best-effort) so the prompt can name
+				// the document. Body is deliberately NOT read here — the agent
+				// fetches the live body itself.
+				if dt.DraftID != "" {
+					if draftUUID, err := util.ParseUUID(dt.DraftID); err == nil {
+						if d, err := h.Queries.GetDraftByID(r.Context(), draftUUID); err == nil {
+							resp.DraftTitle = d.Title
+						}
+					}
+				}
+
+				// Workspace repos for execenv injection (best-effort, like the
+				// other contextless branches). Aye runs in a workspace work
+				// dir even though she edits no code — the daemon still needs a
+				// dir to run the CLI in.
+				if ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(dt.WorkspaceID)); err == nil && ws.Repos != nil {
+					var repos []RepoData
+					if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
+						resp.Repos = repos
+					}
+				}
+
+				// Memory artifact injection. Anchor on the agent (Aye's long-
+				// lived persona / preferences). No issue or project anchor — a
+				// draft turn isn't issue-bound.
+				const maxArtifactsPerAnchor = 10
+				resp.MemoryArtifacts = h.fetchMemoryArtifactsForTask(
+					r.Context(),
+					parseUUID(dt.WorkspaceID),
+					[]taskAnchor{
+						{Type: "agent", ID: task.AgentID},
+					},
+					maxArtifactsPerAnchor,
+				)
+			}
 		}
 	}
 
@@ -1888,6 +1941,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			"has_quick_create", hasQuickCreate,
 			"has_channel_mention", hasChannelMention,
 			"has_thread_issue", hasThreadIssue,
+			"has_draft_turn", hasDraftTurn,
 		)
 		if _, cerr := h.TaskService.CancelTask(r.Context(), task.ID); cerr != nil {
 			slog.Error("task claim: cancel after workspace check failed",

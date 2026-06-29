@@ -128,6 +128,18 @@ type Task struct {
 	ThreadIssueProjectTitle   string `json:"thread_issue_project_title,omitempty"`
 	ThreadIssueParentIssueID  string `json:"thread_issue_parent_issue_id,omitempty"`
 	ThreadIssueParentIssueKey string `json:"thread_issue_parent_issue_key,omitempty"`
+	// Drafts slice 2 — populated when the task is a draft turn (the human
+	// clicked Send). Mutually exclusive with IssueID / ChatSessionID /
+	// ChannelID: the daemon detects draft-turn tasks via TaskKind ==
+	// "draft_turn" and routes through buildDraftTurnPrompt. The draft body +
+	// annotations are NOT embedded — the agent reads them live via
+	// `multica draft get / annotations`, so the snapshot stays fresh between
+	// enqueue and claim. DraftOpenAnnotationCount + DraftDocRev are the Send-
+	// time provenance the prompt surfaces.
+	DraftID                  string `json:"draft_id,omitempty"`
+	DraftTitle               string `json:"draft_title,omitempty"`
+	DraftOpenAnnotationCount int    `json:"draft_open_annotation_count,omitempty"`
+	DraftDocRev              string `json:"draft_doc_rev,omitempty"`
 	// RequestingUserName + RequestingUserProfileDescription describe the human
 	// the agent is working on behalf of. v1 sources them from the runtime
 	// owner (the user who registered the daemon). Empty when the runtime has

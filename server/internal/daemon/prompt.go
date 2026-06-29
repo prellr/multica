@@ -21,6 +21,12 @@ func BuildPrompt(task Task, provider string) string {
 	if task.TaskKind == "thread_issue" {
 		return buildThreadIssuePrompt(task)
 	}
+	// Drafts slice 2 — the Send-turn. Detected by TaskKind (a draft-turn task
+	// has no IssueID / ChatSessionID / ChannelID), routed before everything
+	// else so it never falls through to the default issue prompt.
+	if task.TaskKind == "draft_turn" {
+		return buildDraftTurnPrompt(task)
+	}
 	// Channel-mention check goes next: a channel-mention task has neither
 	// IssueID nor ChatSessionID, but it shouldn't fall through to the
 	// quick-create or default-issue branches. The hydrator on the server
@@ -145,6 +151,57 @@ func buildQuickCreatePrompt(task Task) string {
 	b.WriteString("- After success, print exactly one line: `Created MUL-<n>: <title>` and exit. No commentary, no follow-up tool calls.\n")
 	b.WriteString("- Do NOT call `multica issue get` or `multica issue comment add` — there is no issue to query or comment on.\n")
 	b.WriteString("- On CLI error, exit with the error as the only output. The platform writes a failure notification automatically.\n")
+	return b.String()
+}
+
+// buildDraftTurnPrompt constructs the prompt for a Drafts Send-turn (slice 2).
+// The human clicked Send on a draft; Aye runs ONE small, conservative turn —
+// she reads the live document body + the open-annotation queue, then responds
+// via the `multica draft *` surface (thread replies + anchored
+// questions/suggestions; she does NOT rewrite the body this slice).
+//
+// The draft body and annotations are deliberately NOT embedded in the prompt —
+// they'd be stale by the time the task claims, so Aye reads them live with
+// `multica draft get` / `multica draft annotations`. The prompt carries only
+// the draft id + Send-time provenance (how many threads were open, the doc
+// revision at Send), plus the discipline that keeps the turn small.
+func buildDraftTurnPrompt(task Task) string {
+	var b strings.Builder
+	b.WriteString("You are running a Drafts turn in a Multica workspace. A human just clicked **Send** on a draft you co-author with them.\n\n")
+	if task.Agent != nil && task.Agent.Name != "" {
+		fmt.Fprintf(&b, "**You are:** %s\n", task.Agent.Name)
+	}
+	if task.DraftTitle != "" {
+		fmt.Fprintf(&b, "**Draft:** %q\n", task.DraftTitle)
+	}
+	fmt.Fprintf(&b, "**Draft ID:** `%s`\n", task.DraftID)
+	if task.DraftOpenAnnotationCount > 0 {
+		fmt.Fprintf(&b, "**Open threads at Send:** %d\n", task.DraftOpenAnnotationCount)
+	}
+	if task.DraftDocRev != "" {
+		fmt.Fprintf(&b, "**Document revision at Send:** %s\n", task.DraftDocRev)
+	}
+	b.WriteString("\n")
+
+	b.WriteString("Run your turn:\n\n")
+	fmt.Fprintf(&b, "1. Read the current document: `multica draft get %s --output json`.\n", task.DraftID)
+	fmt.Fprintf(&b, "2. Read the open-annotation queue (your work board): `multica draft annotations %s --state open --output json`.\n", task.DraftID)
+	b.WriteString("3. Respond — ONE small, conservative turn. Drain a bounded set of the threads open on you; don't try to settle everything. Your moves:\n")
+	fmt.Fprintf(&b, "   - **Reply** to a thread: `multica draft reply %s <annotationId> --body \"…\"`.\n", task.DraftID)
+	fmt.Fprintf(&b, "   - **Resolve / ack / dismiss** a thread you've handled: `multica draft resolve|ack|dismiss %s <annotationId>`.\n", task.DraftID)
+	fmt.Fprintf(&b, "   - **Plant an anchored question** on a load-bearing or surprising part: `multica draft annotate %s --quote \"<exact text>\" --type question --body \"…\"`.\n", task.DraftID)
+	fmt.Fprintf(&b, "   - **Propose a suggestion** (before→after the human accepts in one click): `multica draft annotate %s --quote \"<exact text>\" --type suggestion --suggest-after \"<replacement>\"`.\n", task.DraftID)
+	b.WriteString("\n")
+
+	b.WriteString("Hard rules for this turn:\n\n")
+	b.WriteString("- **Do NOT rewrite the document body.** There is no body-edit command. When you want the text changed, propose it as a `suggestion` annotation — the human accepts it. Live co-editing is a later slice.\n")
+	b.WriteString("- **Do NOT create issues** during a draft turn. Keep your moves in-doc (replies + suggestions). Proposing graduation (\"this looks ready to fan out\") in a reply is fine; doing the fan-out is not.\n")
+	b.WriteString("- **Keep the turn small.** Feedback is continuous; your consumption is quantized. Conservative beats thorough — a tight, coherent set of moves the human can follow beats a sprawling rewrite of the board.\n")
+	b.WriteString("- **Anchor precisely.** A question or suggestion lives on the exact text it's about, with `--quote` matching the document, not as a vague note.\n")
+	b.WriteString("- **Respect `approve` and `block`.** An approved span is settled — don't reopen it. A block means stop on that point.\n")
+	b.WriteString("- **Run the memory loop.** Before asking the human something, search memory (`multica memory search`); when you learn a durable constraint or rationale, write it (`multica memory create`).\n\n")
+
+	b.WriteString("When you're done, produce a short plain-text summary of what you did this turn (which threads you replied to, what you proposed) as your final output and exit. Your per-action writes already streamed to the human live; the summary is your closing narration.\n")
 	return b.String()
 }
 

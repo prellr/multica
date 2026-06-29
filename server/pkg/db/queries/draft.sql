@@ -16,6 +16,14 @@ ORDER BY updated_at DESC;
 SELECT * FROM draft
 WHERE id = $1 AND workspace_id = $2 AND owner_user_id = $3;
 
+-- name: GetDraftByID :one
+-- Id-only lookup, NOT owner/workspace-scoped. ONLY for trusted server-internal
+-- paths that have already established access by other means — e.g. the daemon
+-- task-dispatch hydrator, which resolves the draft from a task it already owns
+-- and needs only the title for the prompt. Never reachable from a user request
+-- boundary (all user-facing reads go through GetDraft).
+SELECT * FROM draft WHERE id = $1;
+
 -- name: CreateDraft :one
 -- Owner is the requesting user. title/body/status fall back to their column
 -- defaults when the caller omits them (body '', status 'draft').
@@ -44,3 +52,13 @@ RETURNING *;
 -- foreign UUID through this delete silently no-ops rather than destroying
 -- another user's draft.
 DELETE FROM draft WHERE id = $1 AND workspace_id = $2 AND owner_user_id = $3;
+
+-- name: CreateDraftTurnTask :one
+-- Drafts slice 2 — task created when a human clicks Send on a draft. Like the
+-- channel-mention task it has neither issue_id nor chat_session_id; the daemon
+-- detects this variant via context.type == "draft_turn" and reads the draft +
+-- open-annotation queue at execution time. Mirrors CreateChannelMentionTask.
+INSERT INTO agent_task_queue (
+    agent_id, runtime_id, issue_id, status, priority, context
+) VALUES ($1, $2, NULL, 'queued', $3, $4)
+RETURNING *;

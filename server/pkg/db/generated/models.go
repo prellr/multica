@@ -795,6 +795,53 @@ type DeployPreflight struct {
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
+type Draft struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	OwnerUserID pgtype.UUID        `json:"owner_user_id"`
+	Title       string             `json:"title"`
+	Body        string             `json:"body"`
+	Status      string             `json:"status"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	YjsState    []byte             `json:"yjs_state"`
+}
+
+type DraftAnnotation struct {
+	ID               pgtype.UUID        `json:"id"`
+	DraftID          pgtype.UUID        `json:"draft_id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	AuthorType       string             `json:"author_type"`
+	AuthorUserID     pgtype.UUID        `json:"author_user_id"`
+	Type             string             `json:"type"`
+	Quote            string             `json:"quote"`
+	ContextBefore    string             `json:"context_before"`
+	ContextAfter     string             `json:"context_after"`
+	PosHint          int32              `json:"pos_hint"`
+	State            string             `json:"state"`
+	SuggestionBefore pgtype.Text        `json:"suggestion_before"`
+	SuggestionAfter  pgtype.Text        `json:"suggestion_after"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type DraftAnnotationMessage struct {
+	ID           pgtype.UUID        `json:"id"`
+	AnnotationID pgtype.UUID        `json:"annotation_id"`
+	AuthorType   string             `json:"author_type"`
+	AuthorUserID pgtype.UUID        `json:"author_user_id"`
+	Body         string             `json:"body"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type DraftYjsUpdate struct {
+	ID        pgtype.UUID        `json:"id"`
+	DraftID   pgtype.UUID        `json:"draft_id"`
+	Seq       int64              `json:"seq"`
+	Update    []byte             `json:"update"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type Feedback struct {
 	ID          pgtype.UUID        `json:"id"`
 	UserID      pgtype.UUID        `json:"user_id"`

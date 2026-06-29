@@ -25,6 +25,28 @@ catalog:
   # see CLAUDE.md "API Response Compatibility")
   zod: "^4.1.5"
 
+  # Fuzzy text matching — powers the draft-annotation re-anchoring engine
+  # (packages/core/drafts/reanchor.ts): match_main / Levenshtein similarity to
+  # relocate an annotation's quote as the document body is edited.
+  diff-match-patch: "^1.0.5"
+  "@types/diff-match-patch": "^1.0.36"
+
+  # Drafts Yjs co-editing floor (slice 3a). The CRDT layer under the Tiptap
+  # draft editor: collaboration extensions bind the editor to a shared Y.Doc.
+  # VERSION TRAP — extension-collaboration / -caret are PINNED to 3.22.1 (no
+  # caret). >=3.24.0 drags @tiptap/core + @tiptap/pm to a newer exact version
+  # and forces a suite-wide bump. y-tiptap is the v3 y-prosemirror successor
+  # (pulls lib0). lib0 is catalogued because the headless DraftYjsProvider imports
+  # lib0/encoding + lib0/decoding directly (it hand-rolls the y-websocket wire
+  # framing); pinning it here keeps it single-versioned with yjs / y-protocols /
+  # y-tiptap, which all depend on it transitively.
+  yjs: "^13.6"
+  "@tiptap/y-tiptap": "^3.0.2"
+  "@tiptap/extension-collaboration": "3.22.1"
+  "@tiptap/extension-collaboration-caret": "3.22.1"
+  y-protocols: "^1"
+  lib0: "^0.2"
+
   # UI & Styling
   tailwindcss: "^4"
   "@tailwindcss/postcss": "^4"
@@ -36,6 +58,13 @@ catalog:
   rehype-katex: "^7.0.1"
   remark-math: "^6.0.0"
   mermaid: "^11.14.0"
+
+  # Animation (MIT). The modern, tree-shakeable successor to framer-motion —
+  # imports come from "motion/react". Used by chat (views) and the Drafts
+  # narration rail's Fluid Functionalism components (ui). Cataloged so both
+  # packages pin one version (the FF registry ships framer-motion imports we
+  # retarget to motion/react on copy-in).
+  motion: "^12.38.0"
 
   # Icons
   lucide-react: "^1.0.1"

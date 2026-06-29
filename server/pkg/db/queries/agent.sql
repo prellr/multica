@@ -24,6 +24,37 @@ INSERT INTO agent (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 RETURNING *;
 
+-- name: CreateAgentWithID :one
+-- Like CreateAgent but with a caller-supplied id. Used to seed built-in agents
+-- (Aye) with a deterministic, recomputable id (a UUIDv5 derived from the
+-- workspace id) so they're addressable without a lookup. Application code must
+-- only pass a trusted, derived id here — never raw user input.
+INSERT INTO agent (
+    id, workspace_id, name, description, avatar_url, runtime_mode,
+    runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
+    instructions, custom_env, custom_args, mcp_config, model, thinking_level
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+RETURNING *;
+
+-- name: BindBuiltinAgentRuntime :execrows
+-- Auto-bind a built-in seed agent (Aye) to a runtime when a daemon connects, so
+-- she becomes runnable without a manual step (Drafts slice 2). Idempotent and
+-- safe by construction:
+--   - `id = $1` targets exactly the caller-computed built-in agent id
+--     (AyeAgentID); a user-created agent can never match, so this never rebinds
+--     someone else's agent.
+--   - `runtime_id IS NULL` means it ONLY binds a currently-unbound agent — a
+--     second daemon connect, or an agent the owner already pointed at a
+--     runtime, is left untouched (no silent rebind).
+--   - `workspace_id = $3` is the tenant guard.
+-- Returns the affected row count so the caller can log bound-vs-skipped.
+UPDATE agent
+SET runtime_id = $2, updated_at = now()
+WHERE id = $1
+  AND workspace_id = $3
+  AND runtime_id IS NULL
+  AND archived_at IS NULL;
+
 -- name: UpdateAgent :one
 UPDATE agent SET
     name = COALESCE(sqlc.narg('name'), name),

@@ -323,3 +323,44 @@ func TestBuildPromptNonSquadLeaderNoRule(t *testing.T) {
 		t.Errorf("buildCommentPrompt must NOT inject squad leader no_action rule for non-squad-leader agents, got:\n%s", out)
 	}
 }
+
+// Drafts slice 2 — the Send-turn prompt. Locks in the slice-2 scope guards:
+// Aye reads the doc + open queue, responds via `multica draft *`, and is
+// explicitly forbidden from rewriting the body or creating issues mid-turn.
+func TestBuildDraftTurnPrompt(t *testing.T) {
+	task := Task{
+		TaskKind:                 "draft_turn",
+		DraftID:                  "draft-123",
+		DraftTitle:               "Rollout plan",
+		DraftOpenAnnotationCount: 3,
+		DraftDocRev:              "2026-06-28T12:00:00Z",
+		Agent:                    &AgentData{Name: "Aye"},
+	}
+	// Must route through buildDraftTurnPrompt via TaskKind (BuildPrompt entry).
+	out := BuildPrompt(task, "claude")
+
+	mustContain := []string{
+		// reads the live doc + queue
+		"multica draft get draft-123",
+		"multica draft annotations draft-123 --state open",
+		// the four moves
+		"multica draft reply draft-123",
+		"multica draft resolve|ack|dismiss draft-123",
+		"multica draft annotate draft-123",
+		// hard scope guards
+		"Do NOT rewrite the document body",
+		"Do NOT create issues",
+		"Keep the turn small",
+		// provenance surfaced
+		"Open threads at Send",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("buildDraftTurnPrompt missing %q, got:\n%s", s, out)
+		}
+	}
+	// Must NOT instruct a body edit (there's no body-edit command this slice).
+	if strings.Contains(out, "multica draft set-body") || strings.Contains(out, "set-body") {
+		t.Errorf("buildDraftTurnPrompt must not reference a body-edit command, got:\n%s", out)
+	}
+}

@@ -29,6 +29,14 @@ import {
   onIssueMetadataChanged,
 } from "../issues/ws-updaters";
 import { onUserTaskCreated, onUserTaskUpdated, onUserTaskDeleted, onUserTaskPromoted } from "../tasks/ws-updaters";
+import { onDraftCreated, onDraftUpdated, onDraftDeleted } from "../drafts/ws-updaters";
+import {
+  onDraftAnnotationCreated,
+  onDraftAnnotationUpdated,
+  onDraftAnnotationDeleted,
+  onDraftAnnotationMessageCreated,
+} from "../drafts/annotation-ws-updaters";
+import { draftAnnotationKeys } from "../drafts/annotation-queries";
 import { onInboxNew, onInboxInvalidate, onInboxIssueStatusChanged, onInboxIssueDeleted } from "../inbox/ws-updaters";
 import { inboxKeys } from "../inbox/queries";
 import { notificationPreferenceOptions } from "../notification-preferences/queries";
@@ -367,6 +375,12 @@ export function useRealtimeSync(
       // Routing is by exact event name in ws-client subscriptions, so prefix
       // collisions are notional only.
       "task:created", "task:updated", "task:deleted", "task:promoted",
+      // Draft lifecycle (standalone draft table). Handled by explicit handlers
+      // below; skip the generic prefix refresh.
+      "draft:created", "draft:updated", "draft:deleted",
+      // Draft annotation layer (slice 1). Explicit handlers below.
+      "draft_annotation:created", "draft_annotation:updated",
+      "draft_annotation:deleted", "draft_annotation:message_created",
       "comment:created", "comment:updated", "comment:deleted",
       "comment:resolved", "comment:unresolved",
       "activity:created",
@@ -516,6 +530,82 @@ export function useRealtimeSync(
       if (!task_id || !issue?.id) return;
       const wsId = getCurrentWsId();
       if (wsId) onUserTaskPromoted(qc, wsId, task_id, issue);
+    });
+
+    // Draft lifecycle. The server publishes `{ draft: DraftResponse }` for
+    // create/update and `{ draft_id: string }` for delete. See server draft.go
+    // h.publish calls. Mirrors the user-task handlers above.
+    const unsubDraftCreated = ws.on("draft:created", (p) => {
+      const { draft } = (p ?? {}) as { draft?: import("../types").Draft };
+      if (!draft?.id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onDraftCreated(qc, wsId, draft);
+    });
+
+    const unsubDraftUpdated = ws.on("draft:updated", (p) => {
+      const { draft } = (p ?? {}) as { draft?: import("../types").Draft };
+      if (!draft?.id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onDraftUpdated(qc, wsId, draft);
+    });
+
+    const unsubDraftDeleted = ws.on("draft:deleted", (p) => {
+      const { draft_id } = (p ?? {}) as { draft_id?: string };
+      if (!draft_id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onDraftDeleted(qc, wsId, draft_id);
+    });
+
+    // Draft annotation layer (slice 1). The server publishes `{ annotation }`
+    // for create/update, `{ draft_id, annotation_id }` for delete, and
+    // `{ draft_id, annotation_id, message }` for a new thread message. See
+    // server draft_annotation.go h.publish calls.
+    const unsubDraftAnnotationCreated = ws.on("draft_annotation:created", (p) => {
+      const { annotation } = (p ?? {}) as { annotation?: import("../types").DraftAnnotation };
+      if (!annotation?.id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onDraftAnnotationCreated(qc, wsId, annotation);
+    });
+
+    const unsubDraftAnnotationUpdated = ws.on("draft_annotation:updated", (p) => {
+      const { annotation } = (p ?? {}) as { annotation?: import("../types").DraftAnnotation };
+      if (!annotation?.id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onDraftAnnotationUpdated(qc, wsId, annotation);
+    });
+
+    const unsubDraftAnnotationDeleted = ws.on("draft_annotation:deleted", (p) => {
+      const { draft_id, annotation_id } = (p ?? {}) as { draft_id?: string; annotation_id?: string };
+      if (!draft_id || !annotation_id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onDraftAnnotationDeleted(qc, wsId, draft_id, annotation_id);
+    });
+
+    const unsubDraftAnnotationMessageCreated = ws.on("draft_annotation:message_created", (p) => {
+      const { draft_id, annotation_id, message } = (p ?? {}) as {
+        draft_id?: string;
+        annotation_id?: string;
+        message?: import("../types").DraftAnnotationMessage;
+      };
+      if (!draft_id || !annotation_id || !message?.id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onDraftAnnotationMessageCreated(qc, wsId, draft_id, annotation_id, message);
+    });
+
+    // Drafts slice 2 — a Send-turn finished. The per-action replies/suggestions
+    // already patched the annotation cache live during the run via
+    // draft_annotation:* events; on completion we invalidate the draft's
+    // annotation list so any final server state (states the agent flipped,
+    // ordering) reconciles. The view also subscribes to this event directly
+    // (useWSEvent) to dismiss the "Aye is working" indicator and show the
+    // closing summary.
+    const unsubDraftTurnCompleted = ws.on("draft:turn_completed", (p) => {
+      const { draft_id } = (p ?? {}) as { draft_id?: string };
+      if (!draft_id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) {
+        qc.invalidateQueries({ queryKey: draftAnnotationKeys.lists(wsId, draft_id) });
+      }
     });
 
     const unsubIssueLabelsChanged = ws.on("issue_labels:changed", (p) => {
@@ -1282,6 +1372,14 @@ export function useRealtimeSync(
       unsubTaskUpdated();
       unsubTaskDeleted();
       unsubTaskPromoted();
+      unsubDraftCreated();
+      unsubDraftUpdated();
+      unsubDraftDeleted();
+      unsubDraftAnnotationCreated();
+      unsubDraftAnnotationUpdated();
+      unsubDraftAnnotationDeleted();
+      unsubDraftAnnotationMessageCreated();
+      unsubDraftTurnCompleted();
       unsubIssueLabelsChanged();
       unsubIssueMetadataChanged();
       unsubInboxNew();

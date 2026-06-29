@@ -16,6 +16,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
+	"github.com/multica-ai/multica/server/internal/draftyjs"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/realtime"
@@ -73,11 +74,14 @@ type Config struct {
 }
 
 type Handler struct {
-	Queries               *db.Queries
-	DB                    dbExecutor
-	TxStarter             txStarter
-	Hub                   *realtime.Hub
-	DaemonHub             *daemonws.Hub
+	Queries   *db.Queries
+	DB        dbExecutor
+	TxStarter txStarter
+	Hub       *realtime.Hub
+	DaemonHub *daemonws.Hub
+	// DraftYjsHub keys per-draft Yjs co-editing rooms (Drafts slice 3a). Lazily
+	// created so tests and callers that never touch the draft relay pay nothing.
+	DraftYjsHub           *draftyjs.Hub
 	Bus                   *events.Bus
 	TaskService           *service.TaskService
 	AutopilotService      *service.AutopilotService
@@ -136,6 +140,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		TxStarter:             txStarter,
 		Hub:                   hub,
 		DaemonHub:             daemonHub,
+		DraftYjsHub:           draftyjs.NewHub(),
 		Bus:                   bus,
 		TaskService:           taskSvc,
 		AutopilotService:      service.NewAutopilotService(queries, txStarter, bus, taskSvc),

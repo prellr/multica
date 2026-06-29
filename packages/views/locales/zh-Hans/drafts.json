@@ -1,0 +1,60 @@
+{
+  "page": {
+    "title": "draft",
+    "new_draft": "新建 draft",
+    "empty_title": "还没有 draft",
+    "empty_description": "draft 是可以持续撰写和打磨的活文档。创建一个开始写作。"
+  },
+  "detail": {
+    "untitled": "未命名 draft",
+    "title_placeholder": "未命名 draft",
+    "body_placeholder": "开始写作…（支持 Markdown）",
+    "select_prompt": "选中一个 draft 打开，或新建一个。",
+    "delete_button": "删除",
+    "delete_confirm": "确定要删除这个 draft 吗？此操作不可撤销。",
+    "delete_success": "draft 已删除"
+  },
+  "errors": {
+    "load_failed": "加载 draft 失败。",
+    "create_failed": "创建 draft 失败，请重试。",
+    "save_failed": "保存 draft 失败，请重试。",
+    "delete_failed": "删除 draft 失败，请重试。",
+    "annotation_create_failed": "添加批注失败，请重试。"
+  },
+  "turn": {
+    "send": "发送",
+    "sending": "发送中…",
+    "working": "{{name}} 正在思考",
+    "agent_name": "Aye",
+    "narration_title": "{{name}} 的回合",
+    "completed": "{{name}} 完成了这一回合。",
+    "start_failed": "无法开始回合。请先连接 daemon，然后重试。",
+    "thinking": "思考中",
+    "tool": "正在使用 {{tool}}",
+    "tool_generic": "处理中"
+  },
+  "annotations": {
+    "panel_title": "批注",
+    "toolbar_label": "批注所选内容",
+    "open_count": "未处理的批注",
+    "empty": "在 draft 中选中文本即可添加评论、建议或高亮。",
+    "no_quote": "（无文本）",
+    "text_changed": "文本已改动",
+    "reply_placeholder": "回复…",
+    "reply_submit": "回复",
+    "resolve": "解决",
+    "dismiss": "忽略",
+    "reopen": "重新打开",
+    "delete": "删除",
+    "remove_highlight": "移除高亮",
+    "orphaned_title": "已失锚",
+    "types": {
+      "comment": "评论",
+      "question": "提问",
+      "suggest": "建议",
+      "approve": "批准",
+      "block": "阻止",
+      "highlight": "高亮"
+    }
+  }
+}

@@ -26,6 +26,16 @@ type EventHandler = (payload: unknown, actorId?: string, actorType?: string) => 
 interface WSContextValue {
   subscribe: (event: WSEventType, handler: EventHandler) => () => void;
   onReconnect: (callback: () => void) => () => void;
+  /** The base realtime WS URL (e.g. "ws://localhost:8080/ws"). Other WS
+   *  endpoints (the Drafts Yjs co-editing relay) derive their URL from this so
+   *  they always target the same host the app already talks to. */
+  wsUrl: string;
+  /** True when WS auth rides an HttpOnly cookie; false when a first-message
+   *  token is required. Mirrors the realtime client's mode. */
+  cookieAuth: boolean;
+  /** Returns the first-message auth token in token mode, or null in cookie
+   *  mode (where the cookie authenticates the upgrade automatically). */
+  getToken: () => string | null;
 }
 
 const WSContext = createContext<WSContextValue | null>(null);
@@ -136,8 +146,21 @@ export function WSProvider({
     [wsClient],
   );
 
+  const getToken = useCallback(
+    () => (cookieAuth ? null : storage.getItem("multica_token")),
+    [cookieAuth, storage],
+  );
+
   return (
-    <WSContext.Provider value={{ subscribe, onReconnect: onReconnectCb }}>
+    <WSContext.Provider
+      value={{
+        subscribe,
+        onReconnect: onReconnectCb,
+        wsUrl,
+        cookieAuth: cookieAuth ?? false,
+        getToken,
+      }}
+    >
       {children}
     </WSContext.Provider>
   );

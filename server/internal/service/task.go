@@ -627,6 +627,38 @@ type ShipCardActionContext struct {
 // ShipCardActionContextType marks a task as a Ship Hub card-action job.
 const ShipCardActionContextType = "ship_card_action"
 
+// DraftTurnContext is the JSON payload stored on a draft-turn task's context
+// column (Drafts slice 2). A draft turn fires when the human clicks Send: the
+// agent (Aye) reads the draft body + open-annotation queue and responds via the
+// `multica draft *` surface (thread replies + anchored suggestions; no body
+// rewrite this slice).
+//
+// The draft body and the live annotation set are intentionally NOT embedded —
+// the daemon re-reads them via the API at execution time so the snapshot stays
+// fresh between enqueue and claim (mirrors the channel-mention pattern, where
+// recent history is fetched at run time). OpenAnnotationIDs + DocRev are
+// captured at Send so the prompt can tell Aye exactly which threads were open
+// and at what revision the human pressed Send — a cheap provenance record, not
+// the source of truth.
+type DraftTurnContext struct {
+	Type        string `json:"type"`
+	WorkspaceID string `json:"workspace_id"`
+	DraftID     string `json:"draft_id"`
+	// RequesterID is the user who pressed Send (the draft owner). The draft
+	// REST handlers the agent calls are owner-scoped, and the daemon runs the
+	// CLI under the owner's token, so this is also who Aye acts on behalf of.
+	RequesterID string `json:"requester_id"`
+	// OpenAnnotationIDs are the annotation ids open on the agent at Send time.
+	// Snapshot only — Aye re-lists the live queue at run time.
+	OpenAnnotationIDs []string `json:"open_annotation_ids,omitempty"`
+	// DocRev is the draft's updated_at (RFC3339) at Send time, a coarse
+	// revision marker so Aye can note whether the body moved under her.
+	DocRev string `json:"doc_rev,omitempty"`
+}
+
+// DraftTurnContextType marks a task as a draft-turn job.
+const DraftTurnContextType = "draft_turn"
+
 // EnqueueTaskForChannelMentionParams is the input shape for
 // EnqueueTaskForChannelMention. Pulled into a struct because the caller
 // (handler) already has these values to hand and packing them into an
@@ -705,6 +737,74 @@ func (s *TaskService) EnqueueTaskForChannelMention(ctx context.Context, p Enqueu
 	)
 	// Match every other Enqueue* path: kick the daemon WS so the task
 	// gets claimed promptly instead of waiting for the next poll.
+	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
+	s.notifyTaskAvailable(task)
+	return task, nil
+}
+
+// EnqueueDraftTurnParams is the input shape for EnqueueDraftTurn.
+type EnqueueDraftTurnParams struct {
+	WorkspaceID       pgtype.UUID
+	AgentID           pgtype.UUID
+	DraftID           pgtype.UUID
+	RequesterID       string
+	OpenAnnotationIDs []string
+	DocRev            string
+}
+
+// EnqueueDraftTurn creates a queued draft-turn task (Drafts slice 2). It
+// mirrors EnqueueTaskForChannelMention exactly: the task carries the draft id +
+// open-queue snapshot in its JSONB context (no issue_id, no chat_session_id),
+// and the daemon's draft-turn dispatcher recognizes the variant via
+// context.type == "draft_turn" and reads the live draft + annotations from the
+// API at execution time.
+//
+// Pre-validates the agent (Aye) is reachable — not archived, has a runtime — so
+// the Send endpoint can fail fast with a clear error instead of queueing a task
+// that will never claim (e.g. when the workspace owner hasn't connected a
+// daemon yet). The caller (the Send handler) is responsible for any
+// single-flight / already-running-turn guard.
+func (s *TaskService) EnqueueDraftTurn(ctx context.Context, p EnqueueDraftTurnParams) (db.AgentTaskQueue, error) {
+	agent, err := s.Queries.GetAgent(ctx, p.AgentID)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
+	}
+	if agent.ArchivedAt.Valid {
+		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
+	}
+	if !agent.RuntimeID.Valid {
+		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
+	}
+
+	payload := DraftTurnContext{
+		Type:              DraftTurnContextType,
+		WorkspaceID:       util.UUIDToString(p.WorkspaceID),
+		DraftID:           util.UUIDToString(p.DraftID),
+		RequesterID:       p.RequesterID,
+		OpenAnnotationIDs: p.OpenAnnotationIDs,
+		DocRev:            p.DocRev,
+	}
+	contextJSON, err := json.Marshal(payload)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("marshal draft-turn context: %w", err)
+	}
+
+	task, err := s.Queries.CreateDraftTurnTask(ctx, db.CreateDraftTurnTaskParams{
+		AgentID:   p.AgentID,
+		RuntimeID: agent.RuntimeID,
+		Priority:  priorityToInt("medium"),
+		Context:   contextJSON,
+	})
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("create draft-turn task: %w", err)
+	}
+
+	slog.Info("draft-turn task enqueued",
+		"task_id", util.UUIDToString(task.ID),
+		"agent_id", util.UUIDToString(p.AgentID),
+		"draft_id", util.UUIDToString(p.DraftID),
+		"open_annotations", len(p.OpenAnnotationIDs),
+	)
 	s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
 	s.notifyTaskAvailable(task)
 	return task, nil
@@ -1579,6 +1679,39 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 		}
 	}
 
+	// Drafts slice 2: a draft-turn task writes its replies / suggestions DURING
+	// the run via the `multica draft *` CLI (each emitting a live
+	// draft_annotation:* WS event the Draft view already consumes), so there's
+	// nothing to materialize from the final output here. Completion's job is to
+	// flip the turn state back to the human: emit a draft:turn_completed event
+	// carrying the agent's closing narration so the Draft view can dismiss the
+	// "Aye is working" indicator and surface her summary. Detection is by JSONB
+	// context.type, like the channel-mention branch above.
+	if dt, ok := s.parseDraftTurnContext(task); ok && dt.DraftID != "" {
+		summary := ""
+		var payload protocol.TaskCompletedPayload
+		if err := json.Unmarshal(result, &payload); err == nil {
+			summary = util.UnescapeBackslashEscapes(payload.Output)
+		}
+		s.Bus.Publish(events.Event{
+			Type:        protocol.EventDraftTurnCompleted,
+			WorkspaceID: dt.WorkspaceID,
+			ActorType:   "agent",
+			ActorID:     util.UUIDToString(task.AgentID),
+			Payload: map[string]any{
+				"draft_id": dt.DraftID,
+				"task_id":  util.UUIDToString(task.ID),
+				"agent_id": util.UUIDToString(task.AgentID),
+				"summary":  summary,
+			},
+		})
+		slog.Info("draft-turn completed",
+			"task_id", util.UUIDToString(task.ID),
+			"draft_id", dt.DraftID,
+			"agent_id", util.UUIDToString(task.AgentID),
+		)
+	}
+
 	// Reconcile agent status
 	s.ReconcileAgentStatus(ctx, task.AgentID)
 
@@ -2233,6 +2366,13 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 	if cm, ok := s.parseChannelMentionContext(task); ok {
 		return cm.WorkspaceID
 	}
+	// Draft-turn tasks (slice 2) likewise carry workspace_id in the context
+	// JSONB — without this the daemon's /start /progress /complete /fail calls
+	// 404 and Aye's turn silently fails (same failure mode as quick-create /
+	// channel-mention).
+	if dt, ok := s.parseDraftTurnContext(task); ok {
+		return dt.WorkspaceID
+	}
 	return ""
 }
 
@@ -2459,6 +2599,26 @@ func (s *TaskService) parseChannelMentionContext(task db.AgentTaskQueue) (Channe
 		return ChannelMentionContext{}, false
 	}
 	return cm, true
+}
+
+// parseDraftTurnContext mirrors parseChannelMentionContext for Drafts slice 2
+// draft-turn tasks. Same constraints — no issue / chat / autopilot link — and
+// the workspace lives in the context JSONB.
+func (s *TaskService) parseDraftTurnContext(task db.AgentTaskQueue) (DraftTurnContext, bool) {
+	if task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid {
+		return DraftTurnContext{}, false
+	}
+	if len(task.Context) == 0 {
+		return DraftTurnContext{}, false
+	}
+	var dt DraftTurnContext
+	if err := json.Unmarshal(task.Context, &dt); err != nil {
+		return DraftTurnContext{}, false
+	}
+	if dt.Type != DraftTurnContextType {
+		return DraftTurnContext{}, false
+	}
+	return dt, true
 }
 
 // notifyQuickCreateCompleted writes a success inbox notification to the

@@ -16,6 +16,11 @@ import type {
   TimelineEntry,
   User,
   ListTasksResponse,
+  Draft,
+  ListDraftsResponse,
+  DraftAnnotation,
+  ListDraftAnnotationsResponse,
+  DraftTurnResponse,
 } from "../types";
 
 // ---------------------------------------------------------------------------
@@ -341,6 +346,146 @@ export const ListTasksResponseSchema = z.object({
 export const EMPTY_LIST_TASKS_RESPONSE: ListTasksResponse = {
   tasks: [],
   total: 0,
+};
+
+// Drafts. Standalone entity (its own table — not an issue row). Same leniency
+// rules as the schemas above: `status` is an open enum kept as `z.string()` so
+// a future server value (e.g. "accepted") parses instead of crashing,
+// optionals are nullable-tolerant, `.loose()` lets the server add fields later
+// without stripping them. Reads go through parseWithFallback at the client
+// boundary so an older desktop build talking to a newer backend degrades
+// gracefully rather than white-screening.
+export const DraftSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  owner_user_id: z.string(),
+  title: z.string(),
+  body: z.string(),
+  status: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const ListDraftsResponseSchema = z.object({
+  drafts: z.array(DraftSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_DRAFTS_RESPONSE: ListDraftsResponse = {
+  drafts: [],
+  total: 0,
+};
+
+// Fallback for the single-draft endpoints (get/create/update). A validation
+// failure here is the rare worst case (badly-drifted backend); the empty draft
+// keeps the editor rendering rather than throwing into the UI.
+export const EMPTY_DRAFT: Draft = {
+  id: "",
+  workspace_id: "",
+  owner_user_id: "",
+  title: "",
+  body: "",
+  status: "draft",
+  created_at: "",
+  updated_at: "",
+};
+
+// Draft annotation layer (slice 1). Same leniency rules as the draft schemas:
+// author_type / type / state are open enums kept as z.string() so a future
+// server value (e.g. an "agent" author in slice 2) parses instead of crashing;
+// the suggestion payload is nullable-tolerant; messages defaults to [] so a
+// null/missing thread never throws. .loose() lets the server add fields later
+// without stripping them. Reads go through parseWithFallback at the client
+// boundary (enum drift downgrades, never white-screens).
+export const DraftAnnotationMessageSchema = z.object({
+  id: z.string(),
+  annotation_id: z.string(),
+  author_type: z.string(),
+  author_user_id: z.string().default(""),
+  body: z.string(),
+  created_at: z.string(),
+}).loose();
+
+export const DraftAnnotationSchema = z.object({
+  id: z.string(),
+  draft_id: z.string(),
+  workspace_id: z.string(),
+  author_type: z.string(),
+  author_user_id: z.string().default(""),
+  type: z.string(),
+  quote: z.string().default(""),
+  context_before: z.string().default(""),
+  context_after: z.string().default(""),
+  pos_hint: z.number().default(0),
+  state: z.string(),
+  suggestion_before: z.string().nullish().transform((v) => v ?? null),
+  suggestion_after: z.string().nullish().transform((v) => v ?? null),
+  created_at: z.string(),
+  updated_at: z.string(),
+  // A null/missing thread defaults to [] — a bare highlight legitimately has no
+  // messages, and a drifted backend that omits the field must not throw.
+  messages: z.array(DraftAnnotationMessageSchema).nullish().transform((v) => v ?? []),
+}).loose();
+
+export const ListDraftAnnotationsResponseSchema = z.object({
+  annotations: z.array(DraftAnnotationSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_DRAFT_ANNOTATIONS_RESPONSE: ListDraftAnnotationsResponse = {
+  annotations: [],
+  total: 0,
+};
+
+export const EMPTY_DRAFT_ANNOTATION_MESSAGE: import("../types").DraftAnnotationMessage = {
+  id: "",
+  annotation_id: "",
+  author_type: "user",
+  author_user_id: "",
+  body: "",
+  created_at: "",
+};
+
+// Fallback for the single-annotation endpoints (create/update/message). A
+// validation failure here is the rare worst case (badly-drifted backend); an
+// empty annotation keeps the panel rendering rather than throwing into the UI.
+export const EMPTY_DRAFT_ANNOTATION: DraftAnnotation = {
+  id: "",
+  draft_id: "",
+  workspace_id: "",
+  author_type: "user",
+  author_user_id: "",
+  type: "comment",
+  quote: "",
+  context_before: "",
+  context_after: "",
+  pos_hint: 0,
+  state: "open",
+  suggestion_before: null,
+  suggestion_after: null,
+  created_at: "",
+  updated_at: "",
+  messages: [],
+};
+
+// Draft turn (slice 2 — the Send-turn). POST /api/drafts/:id/turn returns the
+// enqueued task. `status` stays z.string() (open enum, enum-drift rule).
+// .loose() lets the server add fields later. Consumed by the Send control to
+// learn the task_id it should subscribe to — a missing/garbled response must
+// degrade (the fallback yields an empty task_id, and the control treats that as
+// "turn didn't start" rather than white-screening).
+export const DraftTurnResponseSchema = z.object({
+  task_id: z.string().default(""),
+  draft_id: z.string().default(""),
+  agent_id: z.string().default(""),
+  status: z.string().default(""),
+}).loose();
+
+export const EMPTY_DRAFT_TURN_RESPONSE: DraftTurnResponse = {
+  task_id: "",
+  draft_id: "",
+  agent_id: "",
+  status: "",
 };
 
 const SubscriberSchema = z.object({

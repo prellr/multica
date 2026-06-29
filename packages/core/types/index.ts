@@ -1,5 +1,17 @@
 export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction } from "./issue";
 export type { Task, TaskStatus, TaskAssigneeType, ListTasksParams, ListTasksResponse, CreateTaskRequest, UpdateTaskRequest } from "./task";
+export type { Draft, DraftStatus, ListDraftsParams, ListDraftsResponse, CreateDraftRequest, UpdateDraftRequest, DraftTurnResponse } from "./draft";
+export type {
+  DraftAnnotation,
+  DraftAnnotationType,
+  DraftAnnotationState,
+  DraftAnnotationAuthorType,
+  DraftAnnotationMessage,
+  ListDraftAnnotationsResponse,
+  CreateDraftAnnotationRequest,
+  UpdateDraftAnnotationRequest,
+  AddDraftAnnotationMessageRequest,
+} from "./draft-annotation";
 export type {
   Agent,
   AgentStatus,

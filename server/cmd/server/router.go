@@ -237,6 +237,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		realtime.HandleWebSocket(hub, mc, pr, slugResolver, w, r)
 	})
 
+	// Drafts Yjs co-editing relay (slice 3a). Binary WebSocket; the server is a
+	// dumb relay over a per-draft room. Mounted at the top level (NOT under the
+	// /api/drafts workspace-member group) for the same reason as /ws: a browser
+	// WebSocket upgrade can't attach the X-Workspace-ID header the workspace
+	// middleware requires. Auth (cookie or first-message token) and the
+	// owner/membership gate run inside the handler, before the room join.
+	r.Get("/api/drafts/{id}/yjs", func(w http.ResponseWriter, r *http.Request) {
+		h.DraftYjsWebSocket(mc, pr, w, r)
+	})
+
 	// Local file serving (when using local storage)
 	if local, ok := store.(*storage.LocalStorage); ok {
 		r.Get("/uploads/*", func(w http.ResponseWriter, r *http.Request) {
@@ -483,6 +493,44 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Path-wildcard {taskId} structurally distinct from the user-task
 			// {id} above because of the trailing `/messages` segment.
 			r.Get("/api/tasks/{taskId}/messages", h.ListTaskMessagesByUser)
+
+			// Drafts (standalone workspace- + owner-scoped markdown documents).
+			// Slice 0 is single-user CRUD; later slices add the annotation
+			// surface, the agent, and co-editing. {id} is UUID-only (drafts
+			// have no human-readable identifier).
+			r.Route("/api/drafts", func(r chi.Router) {
+				r.Get("/", h.ListDrafts)
+				r.Post("/", h.CreateDraft)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetDraft)
+					// PUT + PATCH on the same handler mirrors the issue/task API
+					// (the MCP client only has a `patch()` method).
+					r.Put("/", h.UpdateDraft)
+					r.Patch("/", h.UpdateDraft)
+					r.Delete("/", h.DeleteDraft)
+
+					// Send-turn (slice 2): enqueue one draft turn for Aye. The
+					// handler resolves the draft via loadDraftForUser then uses
+					// draft.ID, so cross-owner / bad-UUID requests 404 before
+					// any enqueue.
+					r.Post("/turn", h.StartDraftTurn)
+
+					// Draft annotation layer (slice 1): a non-destructive,
+					// re-anchoring annotation overlay on the draft body. Nested
+					// under the draft — every annotation route resolves the
+					// parent draft via loadDraftForUser first, then operates on
+					// draft.ID. {aid} is UUID-only.
+					r.Route("/annotations", func(r chi.Router) {
+						r.Get("/", h.ListDraftAnnotations)
+						r.Post("/", h.CreateDraftAnnotation)
+						r.Route("/{aid}", func(r chi.Router) {
+							r.Patch("/", h.UpdateDraftAnnotation)
+							r.Delete("/", h.DeleteDraftAnnotation)
+							r.Post("/messages", h.AddDraftAnnotationMessage)
+						})
+					})
+				})
+			})
 
 			// Labels
 			r.Route("/api/labels", func(r chi.Router) {

@@ -35,9 +35,9 @@ const (
 	// collisions, but readers comparing the two blocks should not conflate
 	// them: agent-task verbs are status transitions (queued, dispatch,
 	// running, ...); user-task verbs are CRUD (created, updated, deleted).
-	EventTaskQueued    = "task:queued"    // ∅ → queued (enqueue / retry create)
-	EventTaskDispatch  = "task:dispatch"  // queued → dispatched (daemon claim)
-	EventTaskRunning   = "task:running"   // dispatched → running (daemon started)
+	EventTaskQueued    = "task:queued"   // ∅ → queued (enqueue / retry create)
+	EventTaskDispatch  = "task:dispatch" // queued → dispatched (daemon claim)
+	EventTaskRunning   = "task:running"  // dispatched → running (daemon started)
 	EventTaskProgress  = "task:progress"
 	EventTaskCompleted = "task:completed" // running → completed
 	EventTaskFailed    = "task:failed"    // running → failed
@@ -47,9 +47,9 @@ const (
 	// User task events (CRUD on issue rows where kind='task'). See the
 	// agent-task block above for why these share the `task:` prefix without
 	// colliding — frontend subscribes to exact event names.
-	EventUserTaskCreated  = "task:created"
-	EventUserTaskUpdated  = "task:updated"
-	EventUserTaskDeleted  = "task:deleted"
+	EventUserTaskCreated = "task:created"
+	EventUserTaskUpdated = "task:updated"
+	EventUserTaskDeleted = "task:deleted"
 	// Promote-to-issue lifecycle. Payload: { task_id, issue } so a single
 	// event drives both cache transitions on the receiver — the task list
 	// removes the row, the issue list adds it. Firing task:deleted +
@@ -57,6 +57,37 @@ const (
 	// half mid-network-blip would render an inconsistent view); the
 	// combined event keeps the transition atomic.
 	EventUserTaskPromoted = "task:promoted"
+
+	// Draft events (CRUD on the standalone draft table). Workspace- and
+	// owner-scoped; the frontend invalidates the draft list/detail caches on
+	// receipt so a draft created/edited/deleted in one client (or, in a later
+	// slice, by the agent) stays fresh everywhere. Created/updated carry the
+	// full draft payload; deleted carries only `draft_id` (the receiver removes
+	// it from the list and clears its detail cache).
+	EventDraftCreated = "draft:created"
+	EventDraftUpdated = "draft:updated"
+	EventDraftDeleted = "draft:deleted"
+
+	// Draft annotation events (Drafts slice 1 — the non-destructive annotation
+	// overlay on a draft body). Workspace-scoped like drafts. Created/updated
+	// carry the full annotation payload (anchor + state + thread), deleted
+	// carries `{ draft_id, annotation_id }` so the receiver can drop it from
+	// the right draft's annotation cache. message:created carries the new
+	// thread message plus its draft+annotation ids. Slice 1 is human-only;
+	// slice 2 (agent authoring) reuses these same events unchanged.
+	EventDraftAnnotationCreated        = "draft_annotation:created"
+	EventDraftAnnotationUpdated        = "draft_annotation:updated"
+	EventDraftAnnotationDeleted        = "draft_annotation:deleted"
+	EventDraftAnnotationMessageCreated = "draft_annotation:message_created"
+
+	// Draft turn lifecycle (Drafts slice 2 — the Send-turn). Emitted when Aye's
+	// draft-turn task completes: carries `{ draft_id, task_id, agent_id,
+	// summary }`. The agent's per-turn replies + suggestions stream in live as
+	// draft_annotation:* events during the run; this single completion event is
+	// what lets the Draft view dismiss the "Aye is working" indicator and show
+	// her closing narration. The granular thinking/tool stream is the existing
+	// task:message / task:progress events, scoped by task_id.
+	EventDraftTurnCompleted = "draft:turn_completed"
 
 	// Inbox events
 	EventInboxNew           = "inbox:new"

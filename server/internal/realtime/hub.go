@@ -635,6 +635,43 @@ func firstMessageAuth(conn *websocket.Conn) (string, string) {
 	return msg.Payload.Token, ""
 }
 
+// AuthenticateToken validates a JWT or PAT string and returns the user ID, or
+// an error-message JSON string on failure. Exported so other WebSocket
+// endpoints (e.g. the Drafts Yjs co-editing relay) reuse the exact same
+// token-validation path rather than re-implementing JWT/PAT parsing.
+func AuthenticateToken(ctx context.Context, tokenStr string, pr PATResolver) (userID string, errMsg string) {
+	return authenticateToken(tokenStr, pr, ctx)
+}
+
+// CookieUserID extracts and validates the auth cookie on r, returning the user
+// id when present and valid. An empty userID with an empty errMsg means "no
+// cookie present" — the caller should fall back to first-message auth after the
+// upgrade (mirrors HandleWebSocket). A non-empty errMsg means a cookie was
+// present but invalid; the caller should reject before upgrading.
+func CookieUserID(ctx context.Context, r *http.Request, pr PATResolver) (userID string, errMsg string) {
+	cookie, err := r.Cookie(auth.AuthCookieName)
+	if err != nil || cookie.Value == "" {
+		return "", ""
+	}
+	return authenticateToken(cookie.Value, pr, ctx)
+}
+
+// FirstMessageAuth reads the first WebSocket frame expecting an auth payload and
+// validates the token within. Exported wrapper over the connect handshake so
+// other binary/JSON WS endpoints share the identical first-frame auth contract.
+func FirstMessageAuth(ctx context.Context, conn *websocket.Conn, pr PATResolver) (userID string, errMsg string) {
+	tokenStr, errMsg := firstMessageAuth(conn)
+	if errMsg != "" {
+		return "", errMsg
+	}
+	return authenticateToken(tokenStr, pr, ctx)
+}
+
+// CheckWSOrigin applies the same WebSocket origin allowlist HandleWebSocket
+// uses. Exported so a custom upgrader on another endpoint enforces the identical
+// CSRF defense.
+func CheckWSOrigin(r *http.Request) bool { return checkOrigin(r) }
+
 type wsMessageWriter interface {
 	WriteMessage(messageType int, data []byte) error
 }

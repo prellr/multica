@@ -5,6 +5,17 @@ import type {
   ListTasksResponse,
   CreateTaskRequest,
   UpdateTaskRequest,
+  Draft,
+  ListDraftsParams,
+  ListDraftsResponse,
+  CreateDraftRequest,
+  UpdateDraftRequest,
+  DraftAnnotation,
+  ListDraftAnnotationsResponse,
+  CreateDraftAnnotationRequest,
+  UpdateDraftAnnotationRequest,
+  DraftAnnotationMessage,
+  DraftTurnResponse,
   CreateIssueRequest,
   UpdateIssueRequest,
   ListIssuesResponse,
@@ -294,6 +305,18 @@ import {
   EMPTY_MCP_SERVER_DIRECTORY_RESPONSE,
   ListTasksResponseSchema,
   EMPTY_LIST_TASKS_RESPONSE,
+  DraftSchema,
+  ListDraftsResponseSchema,
+  EMPTY_LIST_DRAFTS_RESPONSE,
+  EMPTY_DRAFT,
+  DraftAnnotationSchema,
+  DraftAnnotationMessageSchema,
+  ListDraftAnnotationsResponseSchema,
+  EMPTY_LIST_DRAFT_ANNOTATIONS_RESPONSE,
+  EMPTY_DRAFT_ANNOTATION,
+  EMPTY_DRAFT_ANNOTATION_MESSAGE,
+  DraftTurnResponseSchema,
+  EMPTY_DRAFT_TURN_RESPONSE,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -789,6 +812,119 @@ export class ApiClient {
   // of /tasks/:id.
   async promoteTask(id: string): Promise<Issue> {
     return this.fetch(`/api/tasks/${id}/promote`, { method: "POST" });
+  }
+
+  // Drafts. Standalone workspace- + owner-scoped markdown documents (slice 0
+  // of the Drafts feature). Every read goes through parseWithFallback so a
+  // server-side shape drift — an older desktop build talking to a newer
+  // backend — surfaces as the fallback rather than a white-screen. No bare
+  // `as` on any response body.
+  async listDrafts(params?: ListDraftsParams): Promise<ListDraftsResponse> {
+    const search = new URLSearchParams();
+    if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
+    const raw = await this.fetch<unknown>(`/api/drafts?${search}`);
+    return parseWithFallback(raw, ListDraftsResponseSchema, EMPTY_LIST_DRAFTS_RESPONSE, {
+      endpoint: "GET /api/drafts",
+    });
+  }
+
+  async getDraft(id: string): Promise<Draft> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${id}`);
+    return parseWithFallback(raw, DraftSchema, EMPTY_DRAFT, {
+      endpoint: "GET /api/drafts/:id",
+    });
+  }
+
+  async createDraft(data: CreateDraftRequest): Promise<Draft> {
+    const raw = await this.fetch<unknown>("/api/drafts", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, DraftSchema, EMPTY_DRAFT, {
+      endpoint: "POST /api/drafts",
+    });
+  }
+
+  async updateDraft(id: string, data: UpdateDraftRequest): Promise<Draft> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, DraftSchema, EMPTY_DRAFT, {
+      endpoint: "PATCH /api/drafts/:id",
+    });
+  }
+
+  async deleteDraft(id: string): Promise<void> {
+    await this.fetch(`/api/drafts/${id}`, { method: "DELETE" });
+  }
+
+  // Draft annotation layer (slice 1). Nested under the draft. Every read goes
+  // through parseWithFallback so an older desktop build talking to a newer
+  // backend degrades gracefully (open-enum drift downgrades, never crashes).
+  async listDraftAnnotations(draftId: string): Promise<ListDraftAnnotationsResponse> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${draftId}/annotations`);
+    return parseWithFallback(raw, ListDraftAnnotationsResponseSchema, EMPTY_LIST_DRAFT_ANNOTATIONS_RESPONSE, {
+      endpoint: "GET /api/drafts/:id/annotations",
+    });
+  }
+
+  async createDraftAnnotation(draftId: string, data: CreateDraftAnnotationRequest): Promise<DraftAnnotation> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${draftId}/annotations`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, DraftAnnotationSchema, EMPTY_DRAFT_ANNOTATION, {
+      endpoint: "POST /api/drafts/:id/annotations",
+    });
+  }
+
+  async updateDraftAnnotation(
+    draftId: string,
+    annotationId: string,
+    data: UpdateDraftAnnotationRequest,
+  ): Promise<DraftAnnotation> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${draftId}/annotations/${annotationId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, DraftAnnotationSchema, EMPTY_DRAFT_ANNOTATION, {
+      endpoint: "PATCH /api/drafts/:id/annotations/:aid",
+    });
+  }
+
+  async deleteDraftAnnotation(draftId: string, annotationId: string): Promise<void> {
+    await this.fetch(`/api/drafts/${draftId}/annotations/${annotationId}`, { method: "DELETE" });
+  }
+
+  /**
+   * Send-turn (slice 2): enqueue one draft turn for Aye. Returns the queued
+   * task so the caller can subscribe to its task:message stream. Parsed through
+   * a schema with an empty fallback — a drifted/garbled response yields an
+   * empty task_id rather than throwing into the UI; the caller treats that as
+   * "the turn didn't start".
+   */
+  async startDraftTurn(draftId: string): Promise<DraftTurnResponse> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${draftId}/turn`, {
+      method: "POST",
+    });
+    return parseWithFallback(raw, DraftTurnResponseSchema, EMPTY_DRAFT_TURN_RESPONSE, {
+      endpoint: "POST /api/drafts/:id/turn",
+    });
+  }
+
+  async addDraftAnnotationMessage(
+    draftId: string,
+    annotationId: string,
+    body: string,
+  ): Promise<DraftAnnotationMessage> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${draftId}/annotations/${annotationId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    });
+    return parseWithFallback(raw, DraftAnnotationMessageSchema, EMPTY_DRAFT_ANNOTATION_MESSAGE, {
+      endpoint: "POST /api/drafts/:id/annotations/:aid/messages",
+    });
   }
 
   async batchUpdateIssues(issueIds: string[], updates: UpdateIssueRequest): Promise<{ updated: number }> {

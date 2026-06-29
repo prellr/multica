@@ -41,20 +41,20 @@ func generateIssuePrefix(name string) string {
 }
 
 type WorkspaceResponse struct {
-	ID                   string  `json:"id"`
-	Name                 string  `json:"name"`
-	Slug                 string  `json:"slug"`
-	Description          *string `json:"description"`
-	Context              *string `json:"context"`
-	Settings             any     `json:"settings"`
-	Repos                any     `json:"repos"`
-	IssuePrefix          string  `json:"issue_prefix"`
-	OrchestratorAgentID  *string `json:"orchestrator_agent_id"` // optional pointer to the workspace's orchestrator agent — woken up on agent-authored issue comments to drive cross-agent workflows
-	CreatedAt            string  `json:"created_at"`
-	UpdatedAt            string  `json:"updated_at"`
+	ID                  string  `json:"id"`
+	Name                string  `json:"name"`
+	Slug                string  `json:"slug"`
+	Description         *string `json:"description"`
+	Context             *string `json:"context"`
+	Settings            any     `json:"settings"`
+	Repos               any     `json:"repos"`
+	IssuePrefix         string  `json:"issue_prefix"`
+	OrchestratorAgentID *string `json:"orchestrator_agent_id"` // optional pointer to the workspace's orchestrator agent — woken up on agent-authored issue comments to drive cross-agent workflows
+	CreatedAt           string  `json:"created_at"`
+	UpdatedAt           string  `json:"updated_at"`
 	// ChannelsEnabled gates the entire Channels feature surface — when false
 	// the sidebar entry hides and every /api/channels endpoint 404s.
-	ChannelsEnabled      bool   `json:"channels_enabled"`
+	ChannelsEnabled bool `json:"channels_enabled"`
 	// ChannelRetentionDays is the workspace-level default retention window
 	// for channel messages, in days. null/nil = retain forever.
 	ChannelRetentionDays *int32 `json:"channel_retention_days"`
@@ -201,9 +201,9 @@ func workspaceToResponse(w db.Workspace) WorkspaceResponse {
 // webhookPublicURL() for paths that don't have a request in scope
 // (background goroutines).
 type secretFlags struct {
-	HasEncryptedGitHubToken    bool
-	HasEncryptedWebhookSecret  bool
-	WebhookURL                 string
+	HasEncryptedGitHubToken   bool
+	HasEncryptedWebhookSecret bool
+	WebhookURL                string
 }
 
 func workspaceToResponseWithSecretFlags(w db.Workspace, flags secretFlags) WorkspaceResponse {
@@ -422,6 +422,14 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// can never disagree. COALESCE in MarkUserOnboarded keeps it idempotent.
 	if _, err := qtx.MarkUserOnboarded(r.Context(), parseUUID(userID)); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mark user onboarded")
+		return
+	}
+
+	// Seed Aye, the built-in lead agent for the Drafts surface, into the new
+	// workspace (in-transaction so a partial workspace can never exist without
+	// her). Deterministic id via AyeAgentID(ws.ID); see aye.go.
+	if err := seedAyeAgent(r.Context(), qtx, ws.ID, parseUUID(userID)); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to seed default agent: "+err.Error())
 		return
 	}
 
@@ -1119,10 +1127,10 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 //   - currentSettings: the existing row's settings (used so we don't clobber
 //     other ship_hub.* fields the client wasn't editing).
 //   - patchSettings:   the settings the request body included (may be nil).
-//                      Caller-provided values win over current except for the
-//                      token, which is always taken from `token`.
+//     Caller-provided values win over current except for the
+//     token, which is always taken from `token`.
 //   - token:           pointer-of-string. nil means "do nothing"; an empty
-//                      string clears the stored token.
+//     string clears the stored token.
 //
 // Returns the marshalled JSON to write back. Never returns nil so the column
 // always holds a valid JSON object.

@@ -30,24 +30,24 @@ import (
 const maxAgentDescriptionLength = 255
 
 type AgentResponse struct {
-	ID                 string              `json:"id"`
-	WorkspaceID        string              `json:"workspace_id"`
-	RuntimeID          string              `json:"runtime_id"`
-	Name               string              `json:"name"`
-	Description        string              `json:"description"`
-	Instructions       string              `json:"instructions"`
-	AvatarURL          *string             `json:"avatar_url"`
-	RuntimeMode        string              `json:"runtime_mode"`
-	RuntimeConfig      any                 `json:"runtime_config"`
-	CustomEnv          map[string]string   `json:"custom_env"`
-	CustomArgs         []string            `json:"custom_args"`
-	McpConfig          json.RawMessage     `json:"mcp_config"`
-	CustomEnvRedacted  bool                `json:"custom_env_redacted"`
-	McpConfigRedacted  bool                `json:"mcp_config_redacted"`
-	Visibility         string              `json:"visibility"`
-	Status             string              `json:"status"`
-	MaxConcurrentTasks int32               `json:"max_concurrent_tasks"`
-	Model              string              `json:"model"`
+	ID                 string            `json:"id"`
+	WorkspaceID        string            `json:"workspace_id"`
+	RuntimeID          string            `json:"runtime_id"`
+	Name               string            `json:"name"`
+	Description        string            `json:"description"`
+	Instructions       string            `json:"instructions"`
+	AvatarURL          *string           `json:"avatar_url"`
+	RuntimeMode        string            `json:"runtime_mode"`
+	RuntimeConfig      any               `json:"runtime_config"`
+	CustomEnv          map[string]string `json:"custom_env"`
+	CustomArgs         []string          `json:"custom_args"`
+	McpConfig          json.RawMessage   `json:"mcp_config"`
+	CustomEnvRedacted  bool              `json:"custom_env_redacted"`
+	McpConfigRedacted  bool              `json:"mcp_config_redacted"`
+	Visibility         string            `json:"visibility"`
+	Status             string            `json:"status"`
+	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
+	Model              string            `json:"model"`
 	// ThinkingLevel is the runtime-native reasoning/effort token persisted
 	// for this agent (empty = use runtime default). The picker is per-runtime
 	// per-model; the API never normalizes across providers. See MUL-2339.
@@ -238,6 +238,15 @@ type AgentTaskResponse struct {
 	ThreadIssueProjectTitle   string `json:"thread_issue_project_title,omitempty"`
 	ThreadIssueParentIssueID  string `json:"thread_issue_parent_issue_id,omitempty"`
 	ThreadIssueParentIssueKey string `json:"thread_issue_parent_issue_key,omitempty"`
+	// Drafts slice 2 — populated when the daemon claims a draft-turn task
+	// (JSONB context.type == "draft_turn"). The daemon dispatches via TaskKind
+	// == "draft_turn". The draft body + annotations are NOT carried here; the
+	// agent reads them live via `multica draft get / annotations`. These are
+	// the Send-time provenance the prompt surfaces. Mirror daemon/types.go.
+	DraftID                  string `json:"draft_id,omitempty"`
+	DraftTitle               string `json:"draft_title,omitempty"`
+	DraftOpenAnnotationCount int    `json:"draft_open_annotation_count,omitempty"`
+	DraftDocRev              string `json:"draft_doc_rev,omitempty"`
 	// RequestingUserName + RequestingUserProfileDescription mirror the user
 	// the agent is acting on behalf of (see daemon/types.go). v1 sources them
 	// from the runtime owner so they're populated for daemon runtimes and
@@ -246,7 +255,7 @@ type AgentTaskResponse struct {
 	// is empty.
 	RequestingUserName               string `json:"requesting_user_name,omitempty"`
 	RequestingUserProfileDescription string `json:"requesting_user_profile_description,omitempty"`
-	Kind                      string `json:"kind"` // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "channel_mention" | "thread_issue" | "direct" — used by the activity row to label tasks that have no linked issue
+	Kind                             string `json:"kind"` // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "channel_mention" | "thread_issue" | "direct" — used by the activity row to label tasks that have no linked issue
 }
 
 // ChannelHistoryMessage is the minimal shape the daemon needs to render
@@ -364,6 +373,8 @@ func computeTaskKind(t db.AgentTaskQueue) string {
 					return "channel_mention"
 				case service.ThreadIssueTaskContextType:
 					return "thread_issue"
+				case service.DraftTurnContextType:
+					return "draft_turn"
 				}
 			}
 		}

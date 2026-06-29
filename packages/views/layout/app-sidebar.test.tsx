@@ -87,6 +87,7 @@ vi.mock("@multica/core/paths", () => ({
     inbox: () => "/acme/inbox",
     myIssues: () => "/acme/my-issues",
     tasks: () => "/acme/tasks",
+    drafts: () => "/acme/drafts",
     issues: () => "/acme/issues",
     projects: () => "/acme/projects",
     memory: () => "/acme/memory",

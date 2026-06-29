@@ -42,6 +42,7 @@ func RegisterAllMCPTools(srv *server.MCPServer, c *cli.APIClient) {
 	registerAutopilotTools(srv, c)
 	registerWorkspaceTools(srv, c)
 	registerShipHubTools(srv, c)
+	registerDraftTools(srv, c)
 }
 
 // ---------------------------------------------------------------------------
@@ -2352,6 +2353,196 @@ func registerShipHubPRActionTools(srv *server.MCPServer, c *cli.APIClient) {
 			}
 			var out json.RawMessage
 			if err := c.PostJSON(ctx, "/api/pull_requests/"+url.PathEscape(prID)+"/summarize_review_feedback", map[string]any{}, &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}),
+	)
+}
+
+// draftAnnotationTypeEnum mirrors the server's normalizeDraftAnnotationType
+// allowlist (handler/draft_annotation.go). 'question' is a first-class type — it
+// persists as 'question', not a 'comment' downgrade. Adding a type requires
+// touching both lists; the server map is the source of truth (it validates),
+// this just narrows the picker so agents don't propose values the surface
+// doesn't render distinctly.
+var draftAnnotationTypeEnum = []string{"comment", "question", "suggestion", "approve", "block", "highlight"}
+
+// draftAnnotationStateEnum mirrors normalizeDraftAnnotationState.
+var draftAnnotationStateEnum = []string{"open", "acknowledged", "resolved", "dismissed"}
+
+// registerDraftTools exposes the Drafts agent-capability surface (slice 2) as
+// MCP tools. Each tool wraps an existing slice-0/slice-1 REST handler — no new
+// business logic. This is what lets Aye read a draft + its open-annotation
+// queue and respond (reply, set state, plant questions/suggestions). When the
+// MCP server runs inside a draft-turn task the API client carries the trusted
+// X-Agent-ID + X-Task-ID headers, so the server attributes writes as
+// author_type='agent'. There is deliberately no set-body tool: the body
+// endpoint is full-replace with no CRDT, so wholesale rewriting is out of
+// scope until slice 3.
+func registerDraftTools(srv *server.MCPServer, c *cli.APIClient) {
+	srv.AddTool(
+		mcp.NewTool(
+			"multica_draft_get",
+			mcp.WithDescription("Fetch a draft's body (markdown) plus metadata (title, status, owner). Start a draft turn by reading this so you have the document the annotations anchor to."),
+			mcp.WithString("id", mcp.Required()),
+		),
+		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+			id, errResult := requireString(req, "id")
+			if errResult != nil {
+				return errResult, nil
+			}
+			var out json.RawMessage
+			if err := c.GetJSON(ctx, "/api/drafts/"+url.PathEscape(id), &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}),
+	)
+
+	srv.AddTool(
+		mcp.NewTool(
+			"multica_draft_annotations",
+			mcp.WithDescription("List a draft's annotations with their threads — the negotiation board you drain. Each row carries its anchor (quote + surrounding context), type, state, author, and back-and-forth messages. Pass state='open' to scope to the work queue (threads still needing attention)."),
+			mcp.WithString("id", mcp.Required()),
+			mcp.WithString("state", mcp.Enum(draftAnnotationStateEnum...), mcp.Description("Client-side filter to this state. Omit for all.")),
+		),
+		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+			id, errResult := requireString(req, "id")
+			if errResult != nil {
+				return errResult, nil
+			}
+			var result map[string]any
+			if err := c.GetJSON(ctx, "/api/drafts/"+url.PathEscape(id)+"/annotations", &result); err != nil {
+				return nil, err
+			}
+			// state is a client-side filter (the list endpoint returns all)
+			// so the agent can scope to its queue without a new endpoint.
+			if want := argString(req, "state"); want != "" {
+				if listRaw, ok := result["annotations"].([]any); ok {
+					filtered := make([]any, 0, len(listRaw))
+					for _, raw := range listRaw {
+						if m, ok := raw.(map[string]any); ok {
+							if s, _ := m["state"].(string); s == want {
+								filtered = append(filtered, raw)
+							}
+						}
+					}
+					result["annotations"] = filtered
+					result["total"] = len(filtered)
+				}
+			}
+			return result, nil
+		}),
+	)
+
+	srv.AddTool(
+		mcp.NewTool(
+			"multica_draft_reply",
+			mcp.WithDescription("Add a message to an annotation thread — your primary verb here. Replying drains a thread that's open on you. The reply is attributed to you (author_type='agent') when run inside a draft turn."),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Draft id.")),
+			mcp.WithString("annotation_id", mcp.Required()),
+			mcp.WithString("body", mcp.Required(), mcp.Description("Reply text (markdown).")),
+		),
+		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+			id, errResult := requireString(req, "id")
+			if errResult != nil {
+				return errResult, nil
+			}
+			annID, errResult := requireString(req, "annotation_id")
+			if errResult != nil {
+				return errResult, nil
+			}
+			body, errResult := requireString(req, "body")
+			if errResult != nil {
+				return errResult, nil
+			}
+			path := "/api/drafts/" + url.PathEscape(id) + "/annotations/" + url.PathEscape(annID) + "/messages"
+			var out json.RawMessage
+			if err := c.PostJSON(ctx, path, map[string]any{"body": body}, &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}),
+	)
+
+	srv.AddTool(
+		mcp.NewTool(
+			"multica_draft_set_state",
+			mcp.WithDescription("Transition an annotation's state. 'resolved' = settled, 'acknowledged' = seen but not done, 'dismissed' = won't act. Resolving a thread you've answered moves it off the open queue."),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Draft id.")),
+			mcp.WithString("annotation_id", mcp.Required()),
+			mcp.WithString("state", mcp.Required(), mcp.Enum(draftAnnotationStateEnum...)),
+		),
+		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+			id, errResult := requireString(req, "id")
+			if errResult != nil {
+				return errResult, nil
+			}
+			annID, errResult := requireString(req, "annotation_id")
+			if errResult != nil {
+				return errResult, nil
+			}
+			state, errResult := requireString(req, "state")
+			if errResult != nil {
+				return errResult, nil
+			}
+			path := "/api/drafts/" + url.PathEscape(id) + "/annotations/" + url.PathEscape(annID)
+			var out json.RawMessage
+			if err := c.PatchJSON(ctx, path, map[string]any{"state": state}, &out); err != nil {
+				return nil, err
+			}
+			return out, nil
+		}),
+	)
+
+	srv.AddTool(
+		mcp.NewTool(
+			"multica_draft_annotate",
+			mcp.WithDescription("Create an anchored annotation: open a question-thread precisely on the text it's about ('§4 — should this cover rollback?'), or plant a suggestion (a before→after the human accepts in one click). Anchor with quote (the exact text). For a suggestion, pass type='suggestion' + suggestion_after (the replacement); suggestion_before defaults to quote. For a question, pass type='question' + body (the opening message). This is how you do your side of the inquisitiveness loop — anchored, in place, not a vague rail note. You never rewrite the body; you suggest via annotations."),
+			mcp.WithString("id", mcp.Required(), mcp.Description("Draft id.")),
+			mcp.WithString("quote", mcp.Required(), mcp.Description("Exact text the annotation anchors to.")),
+			mcp.WithString("type", mcp.Enum(draftAnnotationTypeEnum...), mcp.Description("Default 'question'.")),
+			mcp.WithString("body", mcp.Description("Opening thread message (for question/comment).")),
+			mcp.WithString("context_before", mcp.Description("Text immediately before the quote; improves re-anchoring as the body changes.")),
+			mcp.WithString("context_after", mcp.Description("Text immediately after the quote.")),
+			mcp.WithNumber("pos_hint", mcp.Description("Character-offset hint for the anchor.")),
+			mcp.WithString("suggestion_before", mcp.Description("Original text for a suggestion; defaults to quote.")),
+			mcp.WithString("suggestion_after", mcp.Description("Replacement text for a suggestion (required when type='suggestion').")),
+		),
+		toolHandler(func(ctx context.Context, req mcp.CallToolRequest) (any, error) {
+			id, errResult := requireString(req, "id")
+			if errResult != nil {
+				return errResult, nil
+			}
+			quote, errResult := requireString(req, "quote")
+			if errResult != nil {
+				return errResult, nil
+			}
+			annType := stringOrDefault(argString(req, "type"), "question")
+			body := map[string]any{
+				"type":           annType,
+				"quote":          quote,
+				"context_before": argString(req, "context_before"),
+				"context_after":  argString(req, "context_after"),
+			}
+			if v, ok := argInt(req, "pos_hint"); ok {
+				body["pos_hint"] = v
+			}
+			if msg := argString(req, "body"); msg != "" {
+				body["message"] = msg
+			}
+			if annType == "suggestion" {
+				after := argString(req, "suggestion_after")
+				if after == "" {
+					return mcp.NewToolResultError("suggestion_after is required when type='suggestion'"), nil
+				}
+				before := stringOrDefault(argString(req, "suggestion_before"), quote)
+				body["suggestion_before"] = before
+				body["suggestion_after"] = after
+			}
+			var out json.RawMessage
+			if err := c.PostJSON(ctx, "/api/drafts/"+url.PathEscape(id)+"/annotations", body, &out); err != nil {
 				return nil, err
 			}
 			return out, nil

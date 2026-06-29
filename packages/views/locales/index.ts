@@ -11,6 +11,7 @@ import enLabels from "./en/labels.json";
 import enMembers from "./en/members.json";
 import enMyIssues from "./en/my-issues.json";
 import enTasks from "./en/tasks.json";
+import enDrafts from "./en/drafts.json";
 import enSearch from "./en/search.json";
 import enInbox from "./en/inbox.json";
 import enWorkspace from "./en/workspace.json";
@@ -39,6 +40,7 @@ import zhHansLabels from "./zh-Hans/labels.json";
 import zhHansMembers from "./zh-Hans/members.json";
 import zhHansMyIssues from "./zh-Hans/my-issues.json";
 import zhHansTasks from "./zh-Hans/tasks.json";
+import zhHansDrafts from "./zh-Hans/drafts.json";
 import zhHansSearch from "./zh-Hans/search.json";
 import zhHansInbox from "./zh-Hans/inbox.json";
 import zhHansWorkspace from "./zh-Hans/workspace.json";
@@ -73,6 +75,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     members: enMembers,
     "my-issues": enMyIssues,
     tasks: enTasks,
+    drafts: enDrafts,
     search: enSearch,
     inbox: enInbox,
     workspace: enWorkspace,
@@ -103,6 +106,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     members: zhHansMembers,
     "my-issues": zhHansMyIssues,
     tasks: zhHansTasks,
+    drafts: zhHansDrafts,
     search: zhHansSearch,
     inbox: zhHansInbox,
     workspace: zhHansWorkspace,

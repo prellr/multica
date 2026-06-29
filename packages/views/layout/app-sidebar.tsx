@@ -18,6 +18,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   Inbox,
   ListTodo,
+  NotebookPen,
   Bot,
   MessageCircle,
   Monitor,
@@ -111,6 +112,7 @@ type NavKey =
   | "inbox"
   | "myIssues"
   | "tasks"
+  | "drafts"
   | "issues"
   | "projects"
   | "memory"
@@ -129,6 +131,7 @@ type NavLabelKey =
   | "inbox"
   | "my_issues"
   | "tasks"
+  | "drafts"
   | "issues"
   | "projects"
   | "memory"
@@ -149,6 +152,9 @@ const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] 
   // because they're a personal-feeling surface — see the brand spec. The
   // workspace still owns the data; this is just where the entry-point lives.
   { key: "tasks", labelKey: "tasks", icon: ListTodo },
+  // Drafts are owner-scoped (each user's own living documents), so they sit
+  // alongside Tasks in the personal section rather than under Workspace.
+  { key: "drafts", labelKey: "drafts", icon: NotebookPen },
 ];
 
 type NavItem = { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox };

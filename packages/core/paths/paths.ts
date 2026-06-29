@@ -41,6 +41,10 @@ function workspaceScoped(slug: string) {
     // links and redirects here on mount. Callers everywhere (TaskRow,
     // inbox "Open task" link) get the sidebar UX for free.
     taskDetail: (id: string) => `${ws}/tasks?task=${encode(id)}`,
+    drafts: () => `${ws}/drafts`,
+    // Master-detail sidebar URL, mirroring taskDetail: opening a draft syncs
+    // the selection to ?draft=<id> on the drafts page.
+    draftDetail: (id: string) => `${ws}/drafts?draft=${encode(id)}`,
     channels: () => `${ws}/channels`,
     channelDetail: (id: string) => `${ws}/channels/${encode(id)}`,
     ship: () => `${ws}/ship`,

@@ -25,6 +25,16 @@
   background-color: color-mix(in oklab, var(--primary) 22%, transparent);
 }
 
+/* Question: a ring-tinted wash with a dotted underline so an "Aye is asking you
+ * something" thread reads as distinct from a plain comment (the inquisitive verb
+ * gets its own affordance). */
+.draft-annotation-highlight[data-annotation-type="question"] {
+  background-color: color-mix(in oklab, var(--ring) 18%, transparent);
+  box-shadow: inset 0 -1px 0 0 color-mix(in oklab, var(--ring) 65%, transparent);
+  text-decoration: underline dotted color-mix(in oklab, var(--ring) 70%, transparent);
+  text-underline-offset: 3px;
+}
+
 /* Block: a destructive-tinted wash to read as "needs attention". */
 .draft-annotation-highlight[data-annotation-type="block"] {
   background-color: color-mix(in oklab, var(--destructive) 22%, transparent);

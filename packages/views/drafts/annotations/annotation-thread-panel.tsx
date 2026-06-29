@@ -3,6 +3,7 @@
 import { useState } from "react";
 import {
   MessageSquare,
+  HelpCircle,
   Lightbulb,
   Check,
   Ban,
@@ -29,6 +30,7 @@ import type { AnchoredAnnotation } from "./use-annotation-anchoring";
 
 const TYPE_ICON: Record<string, typeof MessageSquare> = {
   comment: MessageSquare,
+  question: HelpCircle,
   suggestion: Lightbulb,
   approve: Check,
   block: Ban,

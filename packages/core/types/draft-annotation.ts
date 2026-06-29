@@ -25,6 +25,10 @@ export type DraftAnnotationAuthorType = "user" | "agent" | (string & {});
  */
 export type DraftAnnotationType =
   | "comment"
+  // A 'question' is Aye's primary inquisitive verb (slice 2): an anchored
+  // "I'm asking you something" thread, distinct from a comment so it can be
+  // filtered/styled separately. Persists as 'question' on the server.
+  | "question"
   | "suggestion"
   | "approve"
   | "block"

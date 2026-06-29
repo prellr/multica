@@ -376,3 +376,42 @@ func TestDraftAnnotationTypeEnumDrift(t *testing.T) {
 		t.Fatalf("expected unknown type to downgrade to 'comment', got %q", created.Type)
 	}
 }
+
+// 'question' is a first-class type (slice 2) — Aye's primary inquisitive verb.
+// It must PERSIST as 'question', not collapse to 'comment' via the open-enum
+// default. This asserts both the response AND the row in the DB (the CLI/MCP
+// tests only check the outbound body against a mock, which can't catch a
+// server-side downgrade).
+func TestDraftAnnotationQuestionTypePersists(t *testing.T) {
+	draftID := seedDraft(t)
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/drafts/"+draftID+"/annotations", map[string]any{
+		"type":    "question",
+		"quote":   "quick brown fox",
+		"message": "Should this cover rollback?",
+	})
+	req = withURLParam(req, "id", draftID)
+	testHandler.CreateDraftAnnotation(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateDraftAnnotation question: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var created DraftAnnotationResponse
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	if created.Type != "question" {
+		t.Fatalf("expected response type 'question', got %q", created.Type)
+	}
+
+	// The persisted row must be 'question', not a 'comment' downgrade.
+	var persisted string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT type FROM draft_annotation WHERE id = $1`, created.ID,
+	).Scan(&persisted); err != nil {
+		t.Fatalf("load annotation row: %v", err)
+	}
+	if persisted != "question" {
+		t.Fatalf("expected DB type 'question', got %q (silent downgrade to comment?)", persisted)
+	}
+}

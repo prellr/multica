@@ -50,6 +50,7 @@
     "orphaned_title": "Orphaned",
     "types": {
       "comment": "Comment",
+      "question": "Question",
       "suggest": "Suggest",
       "approve": "Approve",
       "block": "Block",

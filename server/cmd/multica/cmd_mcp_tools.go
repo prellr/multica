@@ -2361,10 +2361,11 @@ func registerShipHubPRActionTools(srv *server.MCPServer, c *cli.APIClient) {
 }
 
 // draftAnnotationTypeEnum mirrors the server's normalizeDraftAnnotationType
-// allowlist. 'question' is the agent-facing alias surfaced in the CLI; the
-// server stores it through the open-enum 'comment' downgrade, so it's safe to
-// offer here without a server change. Narrowing the picker keeps the agent from
-// proposing types the surface doesn't render distinctly.
+// allowlist (handler/draft_annotation.go). 'question' is a first-class type — it
+// persists as 'question', not a 'comment' downgrade. Adding a type requires
+// touching both lists; the server map is the source of truth (it validates),
+// this just narrows the picker so agents don't propose values the surface
+// doesn't render distinctly.
 var draftAnnotationTypeEnum = []string{"comment", "question", "suggestion", "approve", "block", "highlight"}
 
 // draftAnnotationStateEnum mirrors normalizeDraftAnnotationState.

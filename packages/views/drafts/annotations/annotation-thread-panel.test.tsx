@@ -90,6 +90,32 @@ describe("AnnotationThreadPanel", () => {
     expect(screen.getByText("Is this the right animal?")).toBeInTheDocument();
   });
 
+  it("renders an agent-authored 'question' annotation (the first-class type) as a pin card", () => {
+    // 'question' is Aye's primary inquisitive verb (slice 2) — a first-class
+    // type, not a 'comment' downgrade. The panel must render it (its own icon)
+    // without falling over.
+    const ann = makeAnnotation({
+      id: "a-q",
+      type: "question",
+      author_type: "agent",
+      author_user_id: "",
+      quote: "§4 rollback",
+      messages: [
+        {
+          id: "m-q",
+          annotation_id: "a-q",
+          author_type: "agent",
+          author_user_id: "",
+          body: "Should this cover rollback?",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+    renderPanel({ anchored: [anchored(ann)] });
+    expect(screen.getByText(/§4 rollback/)).toBeInTheDocument();
+    expect(screen.getByText("Should this cover rollback?")).toBeInTheDocument();
+  });
+
   it("shows an open-count badge for open annotations", () => {
     renderPanel({ anchored: [anchored(makeAnnotation())] });
     // The open-count badge carries an aria-label.

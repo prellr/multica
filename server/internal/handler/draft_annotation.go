@@ -67,12 +67,17 @@ func (h *Handler) resolveDraftAnnotationAuthor(r *http.Request, userID, workspac
 
 // normalizeDraftAnnotationType maps a caller-supplied annotation type onto a
 // value safe to write. `type` is an open enum; the switch has a `default`
-// branch so an unknown value downgrades to the canonical 'comment' rather than
-// 400ing — an older server stays forward-compatible with a value a newer client
-// legitimately sends.
+// branch so a genuinely unknown value downgrades to the canonical 'comment'
+// rather than 400ing — an older server stays forward-compatible with a value a
+// newer client legitimately sends.
+//
+// 'question' is a first-class type (Drafts slice 2): it's Aye's primary
+// inquisitive verb — an anchored "I'm asking you something" thread, distinct
+// from a 'comment' so it can be filtered/styled separately. It must persist as
+// 'question', not silently collapse to 'comment'.
 func normalizeDraftAnnotationType(s string) string {
 	switch s {
-	case "comment", "suggestion", "approve", "block", "highlight":
+	case "comment", "question", "suggestion", "approve", "block", "highlight":
 		return s
 	default:
 		return draftAnnotationDefaultType

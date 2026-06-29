@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/core";
 import { posToDOMRect } from "@tiptap/core";
 import { computePosition, flip, offset, shift } from "@floating-ui/dom";
-import { MessageSquare, Lightbulb, Check, Ban, Highlighter } from "lucide-react";
+import { MessageSquare, HelpCircle, Lightbulb, Check, Ban, Highlighter } from "lucide-react";
 import type { DraftAnnotationType } from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
@@ -13,7 +13,8 @@ import { useT } from "../../i18n";
 /**
  * Floating toolbar shown when the user selects text in the draft body. Picking a
  * type (or pressing its shortcut) creates an annotation anchored to the
- * selection. Keys: c=comment, s=suggest, b=block, a=approve, h=highlight.
+ * selection. Keys: c=comment, q=question, s=suggest, b=block, a=approve,
+ * h=highlight.
  *
  * Portaled to body and positioned with Floating UI against the live selection
  * rect (mirrors the editor's EditorBubbleMenu approach) so it escapes overflow
@@ -21,7 +22,7 @@ import { useT } from "../../i18n";
  * annotation toolbar is the only selection affordance.
  */
 
-type LabelKey = "comment" | "suggest" | "approve" | "block" | "highlight";
+type LabelKey = "comment" | "question" | "suggest" | "approve" | "block" | "highlight";
 
 interface ToolbarItem {
   type: DraftAnnotationType;
@@ -32,6 +33,7 @@ interface ToolbarItem {
 
 const ITEMS: ToolbarItem[] = [
   { type: "comment", key: "c", icon: MessageSquare, labelKey: "comment" },
+  { type: "question", key: "q", icon: HelpCircle, labelKey: "question" },
   { type: "suggestion", key: "s", icon: Lightbulb, labelKey: "suggest" },
   { type: "block", key: "b", icon: Ban, labelKey: "block" },
   { type: "approve", key: "a", icon: Check, labelKey: "approve" },
@@ -51,6 +53,8 @@ export function AnnotationSelectToolbar({ editor, onPick }: AnnotationSelectTool
     switch (key) {
       case "comment":
         return t(($) => $.annotations.types.comment);
+      case "question":
+        return t(($) => $.annotations.types.question);
       case "suggest":
         return t(($) => $.annotations.types.suggest);
       case "approve":

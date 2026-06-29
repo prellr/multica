@@ -50,6 +50,7 @@
     "orphaned_title": "已失锚",
     "types": {
       "comment": "评论",
+      "question": "提问",
       "suggest": "建议",
       "approve": "批准",
       "block": "阻止",

@@ -14,3 +14,4 @@ export {
   type DraftYjsProviderOptions,
 } from "./provider";
 export { draftYjsWsUrl } from "./url";
+export { useDraftYjs } from "./use-draft-yjs";

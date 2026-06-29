@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { Trash2, X } from "lucide-react";
@@ -11,10 +11,11 @@ import {
   draftAnnotationListOptions,
   useCreateDraftAnnotation,
 } from "@multica/core/drafts";
+import { createDraftYContext, destroyDraftYContext, useDraftYjs } from "@multica/core/drafts/collab";
+import { useAuthStore } from "@multica/core/auth";
 import type { DraftAnnotationType } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { createEditorExtensions } from "../../editor/extensions";
-import { preprocessMarkdown } from "../../editor/utils/preprocess";
 import { PageHeader } from "../../layout/page-header";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -32,6 +33,8 @@ import {
   buildAnchorFromSelection,
 } from "./use-annotation-anchoring";
 import { buildDocTextIndex } from "./text-position";
+import { seedYDocFromMarkdown } from "./seed-y-doc";
+import { caretColorForId } from "./caret-color";
 import "../../editor/content-editor.css";
 import "./annotations.css";
 
@@ -93,16 +96,72 @@ export function AnnotationDraftEditor({ draftId, onClose, onDeleted }: Annotatio
   const recomputeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const lastSavedBodyRef = useRef<string>("");
 
+  // --- Yjs co-editing floor (slice 3a) -----------------------------------
+  // One Y.Doc + awareness channel per open draft. The editor mounts EMPTY and
+  // Collaboration hydrates it from the fragment; the body is seeded into the
+  // CRDT exactly once (seededRef guards against the double-apply that corrupts
+  // the doc). The networked provider (useDraftYjs) replays the server log on
+  // connect, so a fresh client converges and a reconnect re-syncs.
+  const yctx = useMemo(() => createDraftYContext(), [draftId]);
+  const seededRef = useRef(false);
+  const currentUser = useAuthStore((s) => s.user);
+
+  // The local peer's caret identity for CollaborationCaret. Memoized so the
+  // editor's extension config gets a stable reference.
+  const caretUser = useMemo(
+    () => ({
+      // The editor is always behind auth, so name/email are present in
+      // practice; the email local-part is the last-resort label.
+      name:
+        currentUser?.name?.trim() ||
+        currentUser?.email?.split("@")[0] ||
+        "Anonymous",
+      color: caretColorForId(currentUser?.id ?? draftId),
+    }),
+    [currentUser?.id, currentUser?.name, currentUser?.email, draftId],
+  );
+
+  // Destroy the previous draft's Y context when switching drafts / unmounting.
+  useEffect(() => {
+    seededRef.current = false;
+    return () => destroyDraftYContext(yctx);
+  }, [yctx]);
+
+  // Connect the doc + awareness to the relay. Headless; returns presence state.
+  useDraftYjs(draftId, yctx.doc, yctx.awareness);
+
   const draftBody = draft?.body ?? "";
+
+  // Seed the Y.Doc from the loaded body, ONCE. Runs after the draft query
+  // resolves (body known) — the idempotent guard inside seedYDocFromMarkdown
+  // additionally no-ops if the provider already hydrated the fragment from the
+  // server log, so seeding is safe to run after a reconnect too.
+  useEffect(() => {
+    if (seededRef.current || draft === undefined) return;
+    seededRef.current = true;
+    seedYDocFromMarkdown(yctx.doc, draftBody, {
+      placeholder: t(($) => $.detail.body_placeholder),
+    });
+    // The seeded content equals the body the server already holds, so prime the
+    // snapshot baseline to suppress a redundant initial PUT once Collaboration
+    // hydrates the editor from the freshly-seeded fragment.
+    lastSavedBodyRef.current = draftBody.trimEnd();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [yctx, draft?.id, draftBody]);
 
   const editor = useEditor(
     {
       immediatelyRender: false,
       shouldRerenderOnTransaction: false,
-      content: draftBody ? preprocessMarkdown(draftBody) : "",
-      contentType: draftBody ? "markdown" : undefined,
+      // NO `content`: under collaboration the editor MUST mount empty and let
+      // Collaboration hydrate from the seeded/replayed Y.Doc. Passing content
+      // here would double-apply and corrupt the CRDT.
       extensions: [
-        ...createEditorExtensions({ placeholder: t(($) => $.detail.body_placeholder), queryClient }),
+        ...createEditorExtensions({
+          placeholder: t(($) => $.detail.body_placeholder),
+          queryClient,
+          collaboration: { doc: yctx.doc, awareness: yctx.awareness, user: caretUser },
+        }),
         AnnotationDecorationExtension,
       ],
       editorProps: {
@@ -112,7 +171,12 @@ export function AnnotationDraftEditor({ draftId, onClose, onDeleted }: Annotatio
         lastSavedBodyRef.current = ed.getMarkdown().trimEnd();
       },
       onUpdate: ({ editor: ed }) => {
-        // Debounced autosave of the markdown body.
+        // Debounced markdown-snapshot writer. `body` is now DERIVED state: the
+        // Y.Doc is the live truth, and this serializes a markdown snapshot every
+        // other surface (graduation, list previews, Aye) reads. This fires for
+        // BOTH local keystrokes AND remote-origin transactions (y-tiptap applies
+        // a remote update as a local ProseMirror transaction), so any connected
+        // client keeps the snapshot fresh.
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(() => {
           const md = ed.getMarkdown().trimEnd();
@@ -124,14 +188,21 @@ export function AnnotationDraftEditor({ draftId, onClose, onDeleted }: Annotatio
           );
         }, SAVE_DEBOUNCE_MS);
 
-        // Debounced re-anchoring of annotations against the new text.
+        // Debounced re-anchor + decoration REPAINT. CRITICAL (slice 3a finding):
+        // a remote Yjs update arrives as one coarse doc-spanning ReplaceStep, so
+        // DecorationSet.map drops inline decorations. We therefore RECOMPUTE from
+        // re-anchor truth and repaint via setAnnotationDecorations — and we must
+        // run this for remote transactions too. onUpdate fires for them, so as
+        // long as the recompute isn't gated to local-only edits (it isn't), the
+        // repaint heals the dropped decorations after every remote edit.
         if (recomputeTimerRef.current) clearTimeout(recomputeTimerRef.current);
         recomputeTimerRef.current = setTimeout(() => {
           runRecompute(ed);
         }, RECOMPUTE_DEBOUNCE_MS);
       },
     },
-    // Recreate the editor only when switching drafts.
+    // Recreate the editor only when switching drafts (the Y context is keyed the
+    // same way, so the new editor binds to the new draft's doc).
     [draftId],
   );
 

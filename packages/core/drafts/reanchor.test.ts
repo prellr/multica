@@ -4,6 +4,7 @@ import {
   similarity,
   type Anchor,
   EXACT_POS_TOLERANCE,
+  CONTEXT_WINDOW,
   SHIFTED_SIMILARITY_THRESHOLD,
   CHANGED_SIMILARITY_THRESHOLD,
 } from "./reanchor";
@@ -202,5 +203,140 @@ describe("reanchor — threshold constants are sane", () => {
     expect(SHIFTED_SIMILARITY_THRESHOLD).toBeGreaterThan(CHANGED_SIMILARITY_THRESHOLD);
     expect(CHANGED_SIMILARITY_THRESHOLD).toBeGreaterThan(0);
     expect(SHIFTED_SIMILARITY_THRESHOLD).toBeLessThanOrEqual(1);
+  });
+});
+
+// Edge-case regression locks. These passed before but weren't covered; pin them
+// so a future engine change can't silently break boundary/Unicode behavior. The
+// engine works on JS string indices (UTF-16 code units), so a surrogate-pair
+// emoji occupies two units — the assertions verify the returned [from, to)
+// slices back out to the original quote regardless.
+
+describe("reanchor — quote at document boundaries", () => {
+  it("anchors a quote at the very start of the doc", () => {
+    const body = "Heading goes first then the rest of the paragraph follows.";
+    const anchor: Anchor = {
+      quote: "Heading goes first",
+      contextBefore: "", // nothing precedes a start-of-doc selection
+      contextAfter: " then the rest",
+      posHint: 0,
+    };
+    const result = reanchor(body, anchor);
+    expect(result.status).toBe("matched");
+    if (result.status !== "orphaned") {
+      expect(result.from).toBe(0);
+      expect(body.slice(result.from, result.to)).toBe("Heading goes first");
+    }
+  });
+
+  it("anchors a quote at the very end of the doc", () => {
+    const body = "Intro sentence, then the closing words.";
+    const quote = "the closing words.";
+    const pos = body.indexOf(quote);
+    const anchor: Anchor = {
+      quote,
+      contextBefore: body.slice(Math.max(0, pos - 12), pos),
+      contextAfter: "", // nothing follows an end-of-doc selection
+      posHint: pos,
+    };
+    const result = reanchor(body, anchor);
+    expect(result.status).toBe("matched");
+    if (result.status !== "orphaned") {
+      expect(result.to).toBe(body.length);
+      expect(body.slice(result.from, result.to)).toBe(quote);
+    }
+  });
+});
+
+describe("reanchor — unicode / multibyte", () => {
+  it("anchors a multibyte (accented / CJK) quote and round-trips the slice", () => {
+    const body = "Café déjà vu — 这是中文内容 — and back to ascii.";
+    const quote = "déjà vu — 这是中文内容";
+    const pos = body.indexOf(quote);
+    const anchor: Anchor = {
+      quote,
+      contextBefore: body.slice(Math.max(0, pos - 8), pos),
+      contextAfter: body.slice(pos + quote.length, pos + quote.length + 8),
+      posHint: pos,
+    };
+    const result = reanchor(body, anchor);
+    expect(result.status === "matched" || result.status === "shifted").toBe(true);
+    if (result.status !== "orphaned") {
+      expect(body.slice(result.from, result.to)).toBe(quote);
+    }
+  });
+
+  it("anchors a quote containing emoji (surrogate pairs) and round-trips the slice", () => {
+    const body = "Ship it 🚀🚀 today, celebrate 🎉 tomorrow.";
+    const quote = "Ship it 🚀🚀 today";
+    const pos = body.indexOf(quote);
+    const anchor: Anchor = {
+      quote,
+      contextBefore: "",
+      contextAfter: body.slice(pos + quote.length, pos + quote.length + 8),
+      posHint: pos,
+    };
+    const result = reanchor(body, anchor);
+    expect(result.status === "matched" || result.status === "shifted").toBe(true);
+    if (result.status !== "orphaned") {
+      // The slice must reproduce the emoji exactly — no surrogate splitting.
+      expect(body.slice(result.from, result.to)).toBe(quote);
+    }
+  });
+});
+
+describe("reanchor — adjacent identical duplicates", () => {
+  it("disambiguates back-to-back identical occurrences by posHint", () => {
+    // Two adjacent identical spans with identical context on both sides; only
+    // posHint can break the tie.
+    const body = "go go go";
+    const first = body.indexOf("go");
+    const second = body.indexOf("go", first + 1); // index 3
+    const anchorSecond: Anchor = {
+      quote: "go",
+      contextBefore: " ",
+      contextAfter: " ",
+      posHint: second,
+    };
+    const r2 = reanchor(body, anchorSecond);
+    expect(r2.status !== "orphaned").toBe(true);
+    if (r2.status !== "orphaned") expect(r2.from).toBe(second);
+
+    const anchorFirst: Anchor = { quote: "go", contextBefore: "", contextAfter: " ", posHint: first };
+    const r1 = reanchor(body, anchorFirst);
+    expect(r1.status !== "orphaned").toBe(true);
+    if (r1.status !== "orphaned") expect(r1.from).toBe(first);
+  });
+});
+
+describe("reanchor — body shorter than one context window", () => {
+  it("anchors correctly when the whole body is shorter than CONTEXT_WINDOW", () => {
+    const body = "short body";
+    expect(body.length).toBeLessThan(CONTEXT_WINDOW);
+    const anchor: Anchor = {
+      quote: "short",
+      contextBefore: "",
+      contextAfter: " body",
+      posHint: 0,
+    };
+    const result = reanchor(body, anchor);
+    expect(result.status).toBe("matched");
+    if (result.status !== "orphaned") {
+      expect(body.slice(result.from, result.to)).toBe("short");
+    }
+  });
+
+  it("fuzzy-matches a tiny edited body shorter than CONTEXT_WINDOW without out-of-range scans", () => {
+    // No exact match → fuzzy path; the windowed scan must clamp to the tiny body.
+    const body = "tiny edited body";
+    const anchor: Anchor = {
+      quote: "tiny exact body",
+      contextBefore: "",
+      contextAfter: "",
+      posHint: 0,
+    };
+    const result = reanchor(body, anchor);
+    // It either relocates (changed) or orphans — never throws on the clamp.
+    expect(["changed", "shifted", "orphaned"]).toContain(result.status);
   });
 });

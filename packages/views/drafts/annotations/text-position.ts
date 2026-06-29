@@ -26,6 +26,17 @@ export interface DocTextIndex {
    * end of the preceding block's text.
    */
   offsetToPos: (offset: number) => number;
+  /**
+   * Inverse of {@link offsetToPos}: map a ProseMirror position to a char offset
+   * in {@link text}. This is what capture time MUST use to slice the selected
+   * span out of the projection — deriving the selection via
+   * `doc.textBetween(from, to, sep)` uses a DIFFERENT block-separator
+   * convention (it inserts a separator at every block-leaf boundary, including
+   * list items) and so produces a string that does not exist verbatim in this
+   * projection. Going pos → offset → `text.slice` keeps capture and re-anchor on
+   * one projection.
+   */
+  posToOffset: (pos: number) => number;
 }
 
 interface Segment {
@@ -79,7 +90,26 @@ export function buildDocTextIndex(doc: PMNode): DocTextIndex {
     return last.pos + last.length;
   };
 
-  return { text, offsetToPos };
+  const posToOffset = (pos: number): number => {
+    if (segments.length === 0) return 0;
+    // A position inside a segment's PM range maps to that segment's text offset
+    // plus the intra-segment delta. A position before the first segment maps to
+    // 0; after the last, to text.length; in an inter-block gap, to the end of
+    // the preceding segment (so a selection boundary landing on a block edge
+    // snaps to the nearest character, never into the "\n" join).
+    for (const seg of segments) {
+      const segPosEnd = seg.pos + seg.length;
+      if (pos < seg.pos) {
+        return seg.textStart;
+      }
+      if (pos <= segPosEnd) {
+        return seg.textStart + (pos - seg.pos);
+      }
+    }
+    return text.length;
+  };
+
+  return { text, offsetToPos, posToOffset };
 }
 
 /**

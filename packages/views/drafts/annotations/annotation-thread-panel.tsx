@@ -168,7 +168,7 @@ function AnnotationCard({ wsId, draftId, anchored, active, onSelect }: Annotatio
             <p className="mt-0.5 line-clamp-2 text-sm">{annotation.messages[0].body}</p>
           )}
           {flaggedChanged && (
-            <span className="mt-1 inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
+            <span className="mt-1 inline-flex items-center gap-1 text-xs text-warning">
               <CircleAlert className="h-3 w-3" aria-hidden />
               {t(($) => $.annotations.text_changed)}
             </span>

@@ -274,50 +274,24 @@ export function AnnotationDraftEditor({ draftId, onClose, onDeleted }: Annotatio
 /**
  * Convert the editor's current PM selection [from, to) into flat-text offsets
  * for anchoring, returning the full doc text alongside.
+ *
+ * Both endpoints are mapped through the SAME projection that re-anchoring uses
+ * (buildDocTextIndex.posToOffset), and the quote is sliced out of that
+ * projection's `text`. This is the correctness contract: capture time and
+ * re-anchor time share one block-separator convention, so a selection spanning
+ * two list items (which buildDocTextIndex concatenates with no separator)
+ * captures the exact span — unlike `doc.textBetween(from, to, "\n")`, which
+ * would inject a separator at the list-item boundary and yield a string that
+ * doesn't exist verbatim in the projection.
  */
 function buildDocTextIndexForSelection(
   editor: NonNullable<ReturnType<typeof useEditor>>,
   from: number,
   to: number,
 ): { text: string; fromOffset: number; toOffset: number } {
-  const { text } = buildDocTextIndex(editor.state.doc);
-  // The selected slice's plain text, used to locate the offset within the
-  // flat projection. This is robust against block boundaries because we search
-  // for the exact selected text near the selection.
-  const selectedText = editor.state.doc.textBetween(from, to, "\n");
-  const approxOffset = approxOffsetForPos(editor, from);
-  const fromOffset = locateOffset(text, selectedText, approxOffset);
-  return { text, fromOffset, toOffset: fromOffset + selectedText.length };
-}
-
-/** Rough flat-text offset for a PM position: count text chars before it. */
-function approxOffsetForPos(editor: NonNullable<ReturnType<typeof useEditor>>, pos: number): number {
-  let offset = 0;
-  editor.state.doc.nodesBetween(0, pos, (node, nodePos) => {
-    if (node.isText && node.text) {
-      const end = Math.min(pos, nodePos + node.text.length);
-      offset += Math.max(0, end - nodePos);
-    }
-    return true;
-  });
-  return offset;
-}
-
-/** Find `needle` in `haystack` nearest to `approx`. */
-function locateOffset(haystack: string, needle: string, approx: number): number {
-  if (!needle) return Math.max(0, Math.min(approx, haystack.length));
-  let best = haystack.indexOf(needle);
-  if (best === -1) return Math.max(0, Math.min(approx, haystack.length));
-  let bestDist = Math.abs(best - approx);
-  let i = haystack.indexOf(needle, best + 1);
-  while (i !== -1) {
-    const dist = Math.abs(i - approx);
-    if (dist < bestDist) {
-      best = i;
-      bestDist = dist;
-    }
-    i = haystack.indexOf(needle, i + 1);
-  }
-  return best;
+  const { text, posToOffset } = buildDocTextIndex(editor.state.doc);
+  const fromOffset = posToOffset(from);
+  const toOffset = posToOffset(to);
+  return { text, fromOffset, toOffset };
 }
 

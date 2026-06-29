@@ -211,6 +211,46 @@ func (q *Queries) ListWorkspaces(ctx context.Context, userID pgtype.UUID) ([]Wor
 	return items, nil
 }
 
+const listWorkspacesWithOwner = `-- name: ListWorkspacesWithOwner :many
+SELECT DISTINCT ON (w.id)
+    w.id AS workspace_id,
+    m.user_id AS owner_id
+FROM workspace w
+JOIN member m ON m.workspace_id = w.id AND m.role = 'owner'
+ORDER BY w.id, m.created_at ASC
+`
+
+type ListWorkspacesWithOwnerRow struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
+}
+
+// One-shot boot helper for the Aye backfill: every workspace alongside its
+// owner user id. The owner is the earliest-created member with role 'owner'
+// (DISTINCT ON picks one deterministically even if a workspace somehow has
+// more than one owner row). Workspaces with no owner member are skipped — Aye's
+// skill created_by references "user", so there's nothing to attribute the seed
+// to without an owner.
+func (q *Queries) ListWorkspacesWithOwner(ctx context.Context) ([]ListWorkspacesWithOwnerRow, error) {
+	rows, err := q.db.Query(ctx, listWorkspacesWithOwner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListWorkspacesWithOwnerRow{}
+	for rows.Next() {
+		var i ListWorkspacesWithOwnerRow
+		if err := rows.Scan(&i.WorkspaceID, &i.OwnerID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspacesWithShipHubEnabled = `-- name: ListWorkspacesWithShipHubEnabled :many
 SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, channel_retention_days, channels_enabled, orchestrator_agent_id, ship_hub_enabled, ship_hub_webhook_secret, ship_hub_smoke_workflow, ship_hub_approval_low, ship_hub_approval_medium, ship_hub_approval_high, ship_hub_approval_critical, ship_hub_approver_can_be_author, ship_hub_deploy_workflow_staging, ship_hub_deploy_workflow_production FROM workspace
 WHERE ship_hub_enabled = TRUE

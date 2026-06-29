@@ -224,6 +224,115 @@ func TestBindBuiltinAgentRuntime_IdempotentAndScoped(t *testing.T) {
 	}
 }
 
+// A workspace created before Drafts shipped has no Aye row. BackfillAyeAgents
+// must seed her correctly (agent at AyeAgentID + the Drafts skill + the
+// agent_skill link), attributed to the workspace owner — and a second run must
+// be a no-op (no duplicate, no error).
+func TestBackfillAyeAgents_SeedsMissingAndIsIdempotent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	// A standalone owner user + workspace WITHOUT Aye — the pre-Drafts state.
+	var ownerID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id
+	`, "Backfill Owner", "aye-backfill-owner@multica.ai").Scan(&ownerID); err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, ownerID)
+	})
+
+	var wsID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO workspace (name, slug, issue_prefix)
+		VALUES ($1, $2, $3) RETURNING id
+	`, "Aye Backfill WS", "aye-backfill-ws", "ABF").Scan(&wsID); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	t.Cleanup(func() {
+		// agent + skill + agent_skill + member cascade on workspace delete.
+		testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, wsID)
+	})
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')
+	`, wsID, ownerID); err != nil {
+		t.Fatalf("add owner member: %v", err)
+	}
+
+	wsUUID := util.MustParseUUID(wsID)
+	ayeID := util.UUIDToString(AyeAgentID(wsUUID))
+
+	// Precondition: Aye must NOT exist yet.
+	var preCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent WHERE id = $1`, ayeID).Scan(&preCount); err != nil {
+		t.Fatalf("precondition probe: %v", err)
+	}
+	if preCount != 0 {
+		t.Fatalf("precondition: expected no Aye before backfill, found %d", preCount)
+	}
+
+	// First backfill run — seeds Aye.
+	BackfillAyeAgents(ctx, testHandler.Queries, testPool)
+
+	var name, visibility, instructions string
+	var seededOwner string
+	if err := testPool.QueryRow(ctx,
+		`SELECT name, visibility, instructions, owner_id::text FROM agent WHERE id = $1 AND workspace_id = $2`,
+		ayeID, wsID,
+	).Scan(&name, &visibility, &instructions, &seededOwner); err != nil {
+		t.Fatalf("Aye not seeded by backfill at %s: %v", ayeID, err)
+	}
+	if name != "Aye" {
+		t.Errorf("expected agent name Aye, got %q", name)
+	}
+	if visibility != "workspace" {
+		t.Errorf("expected workspace visibility, got %q", visibility)
+	}
+	if len(instructions) == 0 {
+		t.Error("expected Layer 1 instructions, got empty")
+	}
+	if seededOwner != ownerID {
+		t.Errorf("expected skill/agent attributed to owner %s, got owner_id %s", ownerID, seededOwner)
+	}
+
+	// The Drafts surface skill is attached via agent_skill and created_by the owner.
+	var skillContent, skillCreatedBy string
+	if err := testPool.QueryRow(ctx, `
+		SELECT s.content, s.created_by::text
+		FROM agent_skill ask
+		JOIN skill s ON s.id = ask.skill_id
+		WHERE ask.agent_id = $1
+	`, ayeID).Scan(&skillContent, &skillCreatedBy); err != nil {
+		t.Fatalf("Aye skill not attached by backfill: %v", err)
+	}
+	if len(skillContent) == 0 {
+		t.Error("expected Layer 2 skill content, got empty")
+	}
+	if skillCreatedBy != ownerID {
+		t.Errorf("expected skill created_by owner %s, got %s", ownerID, skillCreatedBy)
+	}
+
+	// Second run must be a no-op: still exactly one Aye, one skill, one link.
+	BackfillAyeAgents(ctx, testHandler.Queries, testPool)
+
+	var agentCount, skillLinkCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent WHERE id = $1`, ayeID).Scan(&agentCount); err != nil {
+		t.Fatalf("post-rerun agent count: %v", err)
+	}
+	if agentCount != 1 {
+		t.Errorf("expected exactly 1 Aye after re-run, got %d", agentCount)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_skill WHERE agent_id = $1`, ayeID).Scan(&skillLinkCount); err != nil {
+		t.Fatalf("post-rerun skill-link count: %v", err)
+	}
+	if skillLinkCount != 1 {
+		t.Errorf("expected exactly 1 agent_skill link after re-run, got %d", skillLinkCount)
+	}
+}
+
 func bindParams(agentID, runtimeID, workspaceID string) db.BindBuiltinAgentRuntimeParams {
 	return db.BindBuiltinAgentRuntimeParams{
 		ID:          util.MustParseUUID(agentID),

@@ -13,6 +13,11 @@ export type {
   AddDraftAnnotationMessageRequest,
 } from "./draft-annotation";
 export type {
+  DraftMessage,
+  ListDraftMessagesResponse,
+  AddDraftMessageRequest,
+} from "./draft-message";
+export type {
   Agent,
   AgentStatus,
   AgentRuntimeMode,

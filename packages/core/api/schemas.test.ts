@@ -7,6 +7,8 @@ import {
   ListDraftsResponseSchema,
   DraftAnnotationSchema,
   ListDraftAnnotationsResponseSchema,
+  DraftMessageSchema,
+  ListDraftMessagesResponseSchema,
   DraftTurnResponseSchema,
 } from "./schemas";
 
@@ -239,6 +241,57 @@ describe("DraftAnnotationSchema / ListDraftAnnotationsResponseSchema drift", () 
   it("rejects a non-array 'annotations' so parseWithFallback can return its fallback", () => {
     expect(
       ListDraftAnnotationsResponseSchema.safeParse({ annotations: "nope", total: 0 }).success,
+    ).toBe(false);
+  });
+});
+
+// Draft conversation rail (Rail-1 — the draft-level, un-anchored chat surface).
+// GET /api/drafts/:id/messages is consumed by the rail list. The schema must
+// survive backend drift: an unknown author_type downgrades, a malformed row /
+// non-array messages fails closed so parseWithFallback returns its EMPTY
+// fallback rather than white-screening.
+const baseMessage = {
+  id: "m-1",
+  draft_id: "d-1",
+  workspace_id: "ws-1",
+  author_type: "user",
+  author_user_id: "u-1",
+  body: "first thought",
+  created_at: "2026-01-01T00:00:00Z",
+};
+
+describe("DraftMessageSchema / ListDraftMessagesResponseSchema drift", () => {
+  it("accepts an unknown author_type value (open enum downgrades, not crash)", () => {
+    const parsed = DraftMessageSchema.parse({
+      ...baseMessage,
+      author_type: "agent", // Rail-2 value, must parse on a Rail-1 client
+    });
+    expect(parsed.author_type).toBe("agent");
+  });
+
+  it("defaults a missing author_user_id to '' instead of throwing", () => {
+    const { author_user_id: _omit, ...messageNoAuthor } = baseMessage;
+    const parsed = DraftMessageSchema.parse(messageNoAuthor);
+    expect(parsed.author_user_id).toBe("");
+  });
+
+  it("rejects a wrong-typed body (number) so the client returns its fallback", () => {
+    expect(DraftMessageSchema.safeParse({ ...baseMessage, body: 42 }).success).toBe(false);
+  });
+
+  it("rejects a message missing a required field so parseWithFallback falls back", () => {
+    const { id: _omit, ...messageMissingId } = baseMessage;
+    expect(DraftMessageSchema.safeParse(messageMissingId).success).toBe(false);
+  });
+
+  it("defaults a null/missing messages array to [] instead of throwing", () => {
+    const parsed = ListDraftMessagesResponseSchema.parse({ total: 0 });
+    expect(parsed.messages).toEqual([]);
+  });
+
+  it("rejects a non-array 'messages' so parseWithFallback can return its fallback", () => {
+    expect(
+      ListDraftMessagesResponseSchema.safeParse({ messages: "nope", total: 0 }).success,
     ).toBe(false);
   });
 });

@@ -15,6 +15,8 @@ import type {
   CreateDraftAnnotationRequest,
   UpdateDraftAnnotationRequest,
   DraftAnnotationMessage,
+  DraftMessage,
+  ListDraftMessagesResponse,
   DraftTurnResponse,
   CreateIssueRequest,
   UpdateIssueRequest,
@@ -315,6 +317,10 @@ import {
   EMPTY_LIST_DRAFT_ANNOTATIONS_RESPONSE,
   EMPTY_DRAFT_ANNOTATION,
   EMPTY_DRAFT_ANNOTATION_MESSAGE,
+  DraftMessageSchema,
+  ListDraftMessagesResponseSchema,
+  EMPTY_LIST_DRAFT_MESSAGES_RESPONSE,
+  EMPTY_DRAFT_MESSAGE,
   DraftTurnResponseSchema,
   EMPTY_DRAFT_TURN_RESPONSE,
 } from "./schemas";
@@ -924,6 +930,26 @@ export class ApiClient {
     });
     return parseWithFallback(raw, DraftAnnotationMessageSchema, EMPTY_DRAFT_ANNOTATION_MESSAGE, {
       endpoint: "POST /api/drafts/:id/annotations/:aid/messages",
+    });
+  }
+
+  // Draft conversation rail (Rail-1). A draft-level, un-anchored chat surface,
+  // distinct from the annotation threads. Both go through parseWithFallback so
+  // an older desktop build talking to a newer backend degrades gracefully.
+  async listDraftMessages(draftId: string): Promise<ListDraftMessagesResponse> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${draftId}/messages`);
+    return parseWithFallback(raw, ListDraftMessagesResponseSchema, EMPTY_LIST_DRAFT_MESSAGES_RESPONSE, {
+      endpoint: "GET /api/drafts/:id/messages",
+    });
+  }
+
+  async addDraftMessage(draftId: string, body: string): Promise<DraftMessage> {
+    const raw = await this.fetch<unknown>(`/api/drafts/${draftId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ body }),
+    });
+    return parseWithFallback(raw, DraftMessageSchema, EMPTY_DRAFT_MESSAGE, {
+      endpoint: "POST /api/drafts/:id/messages",
     });
   }
 

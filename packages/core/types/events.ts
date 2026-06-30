@@ -45,6 +45,10 @@ export type WSEventType =
   | "draft_annotation:updated"
   | "draft_annotation:deleted"
   | "draft_annotation:message_created"
+  // Draft conversation rail (Rail-1 — the draft-level, un-anchored chat surface,
+  // distinct from the anchored annotation threads). Carries `{ draft_id,
+  // message }`.
+  | "draft_message:created"
   // Draft turn lifecycle (slice 2 — the Send-turn). Fires when Aye's turn task
   // completes; carries `{ draft_id, task_id, agent_id, summary }`. The per-turn
   // replies/suggestions stream in live as draft_annotation:* during the run.

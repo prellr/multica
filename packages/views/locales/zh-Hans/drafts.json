@@ -33,6 +33,13 @@
     "tool": "正在使用 {{tool}}",
     "tool_generic": "处理中"
   },
+  "conversation": {
+    "tab_conversation": "对话",
+    "tab_annotations": "批注",
+    "empty": "还没有消息。围绕这个 draft 开始对话吧。",
+    "composer_placeholder": "输入消息…",
+    "send": "发送"
+  },
   "annotations": {
     "panel_title": "批注",
     "you": "你",

@@ -35,6 +35,7 @@
   },
   "annotations": {
     "panel_title": "批注",
+    "you": "你",
     "toolbar_label": "批注所选内容",
     "open_count": "未处理的批注",
     "empty": "在 draft 中选中文本即可添加评论、建议或高亮。",

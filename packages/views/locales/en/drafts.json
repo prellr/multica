@@ -35,6 +35,7 @@
   },
   "annotations": {
     "panel_title": "Annotations",
+    "you": "You",
     "toolbar_label": "Annotate selection",
     "open_count": "Open annotations",
     "empty": "Select text in the draft to add a comment, suggestion, or highlight.",

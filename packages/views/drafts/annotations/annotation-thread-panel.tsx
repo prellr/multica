@@ -10,9 +10,11 @@ import {
   Highlighter,
   CircleAlert,
   Trash2,
+  Bot,
 } from "lucide-react";
 import type {
   DraftAnnotation,
+  DraftAnnotationMessage,
   DraftAnnotationType,
   DraftAnnotationState,
 } from "@multica/core/types";
@@ -21,10 +23,13 @@ import {
   useUpdateDraftAnnotation,
   useDeleteDraftAnnotation,
 } from "@multica/core/drafts";
+import { useActorName } from "@multica/core/workspace/hooks";
 import { Button } from "@multica/ui/components/ui/button";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Textarea } from "@multica/ui/components/ui/textarea";
+import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { cn } from "@multica/ui/lib/utils";
+import { Markdown } from "../../common/markdown";
 import { useT, useTimeAgo } from "../../i18n";
 import type { AnchoredAnnotation } from "./use-annotation-anchoring";
 
@@ -74,7 +79,7 @@ export function AnnotationThreadPanel({
   const visible = anchored.filter((a) => a.status !== "orphaned");
 
   return (
-    <div className="flex h-full w-80 flex-col border-l">
+    <div className="flex h-full w-96 flex-col border-l">
       <div className="flex items-center justify-between border-b px-4 py-3">
         <span className="text-sm font-medium">{t(($) => $.annotations.panel_title)}</span>
         {openCount > 0 && (
@@ -129,7 +134,6 @@ interface AnnotationCardProps {
 
 function AnnotationCard({ wsId, draftId, anchored, active, onSelect }: AnnotationCardProps) {
   const { t } = useT("drafts");
-  const timeAgo = useTimeAgo();
   const { annotation, flaggedChanged } = anchored;
   const Icon = typeIcon(annotation.type);
 
@@ -166,7 +170,10 @@ function AnnotationCard({ wsId, draftId, anchored, active, onSelect }: Annotatio
           <p className="line-clamp-1 text-xs text-muted-foreground">
             “{annotation.quote || t(($) => $.annotations.no_quote)}”
           </p>
-          {annotation.messages[0] && (
+          {/* Collapsed preview: a single plain-text line so the card stays
+              compact. The full markdown body renders in the expanded thread
+              below. */}
+          {!active && annotation.messages[0] && (
             <p className="mt-0.5 line-clamp-2 text-sm">{annotation.messages[0].body}</p>
           )}
           {flaggedChanged && (
@@ -179,13 +186,17 @@ function AnnotationCard({ wsId, draftId, anchored, active, onSelect }: Annotatio
       </button>
 
       {active && (
-        <div className="mt-2 space-y-2 pl-6">
-          {annotation.messages.slice(1).map((m) => (
-            <div key={m.id} className="rounded bg-muted/50 px-2 py-1.5">
-              <p className="text-sm">{m.body}</p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">{timeAgo(m.created_at)}</p>
+        <div className="mt-3 space-y-3">
+          {/* The full thread: every message (including the opener) renders as a
+              conversation row — sender + relative timestamp + markdown body —
+              so a structured Aye reply reads as prose, not a cramped wall. */}
+          {annotation.messages.length > 0 && (
+            <div className="space-y-3">
+              {annotation.messages.map((m) => (
+                <ThreadMessage key={m.id} message={m} />
+              ))}
             </div>
-          ))}
+          )}
 
           {annotation.type !== "highlight" && (
             <div className="space-y-1.5">
@@ -246,6 +257,92 @@ function AnnotationCard({ wsId, draftId, anchored, active, onSelect }: Annotatio
       )}
     </div>
   );
+}
+
+/**
+ * One message in an expanded annotation thread. Renders the sender (Aye vs the
+ * authoring member), a relative timestamp, and the body as markdown — so a
+ * structured multi-point reply reads as prose rather than a raw wall of text.
+ *
+ * Aye (author_type "agent") is styled distinctly: a robot affordance and a
+ * primary-accent avatar/name, mirroring how agent assignees are set apart
+ * elsewhere. We avoid resolving the agent by id (draft-annotation agents carry
+ * no author_user_id) and label Aye from the shared `turn.agent_name` string.
+ */
+function ThreadMessage({ message }: { message: DraftAnnotationMessage }) {
+  const { t } = useT("drafts");
+  const timeAgo = useTimeAgo();
+  const { getActorName } = useActorName();
+
+  const isAgent = message.author_type === "agent";
+  // Members are resolved by id; "user" is the annotation author-type spelling
+  // of the workspace "member" actor. Fall back to a neutral "you" label when
+  // the member isn't in the cache (own message, just-invited author, drift).
+  const resolvedName = isAgent
+    ? t(($) => $.turn.agent_name)
+    : (() => {
+        const name = getActorName("member", message.author_user_id);
+        return name === "Unknown" ? t(($) => $.annotations.you) : name;
+      })();
+
+  return (
+    <div className="flex gap-2.5">
+      {isAgent ? (
+        <ActorAvatar
+          name={resolvedName}
+          initials="A"
+          isAgent
+          size={24}
+          className="mt-0.5 bg-primary/10 text-primary"
+        />
+      ) : (
+        <ActorAvatar
+          name={resolvedName}
+          initials={initialsOf(resolvedName)}
+          size={24}
+          className="mt-0.5"
+        />
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-1.5">
+          <span
+            className={cn(
+              "text-xs font-medium",
+              isAgent ? "text-primary" : "text-foreground",
+            )}
+          >
+            {resolvedName}
+          </span>
+          {isAgent && (
+            <Bot className="h-3 w-3 shrink-0 text-primary" aria-hidden />
+          )}
+          <span className="text-[11px] text-muted-foreground">
+            {timeAgo(message.created_at)}
+          </span>
+        </div>
+        {/* Reuse the app's shared markdown renderer in its chat-message mode so
+            bold/lists/headings/code render with tasteful, token-driven
+            typography — consistent with how channel + chat messages render. */}
+        <Markdown
+          mode="minimal"
+          className="mt-1 text-sm leading-relaxed text-foreground"
+        >
+          {message.body}
+        </Markdown>
+      </div>
+    </div>
+  );
+}
+
+/** Up-to-two-letter initials from a display name, for the member avatar. */
+function initialsOf(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
 }
 
 interface OrphanedTrayProps {

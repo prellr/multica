@@ -27,7 +27,7 @@ import {
   AnnotationDecorationExtension,
 } from "./decoration-extension";
 import { AnnotationSelectToolbar } from "./annotation-select-toolbar";
-import { AnnotationThreadPanel } from "./annotation-thread-panel";
+import { DraftSidePanel } from "../conversation/draft-side-panel";
 import { DraftSendControl, DraftTurnNarration } from "./draft-turn-narration";
 import { createDraftSendShortcutExtension } from "./send-shortcut";
 import {
@@ -422,7 +422,7 @@ export function AnnotationDraftEditor({ draftId, onClose, onDeleted }: Annotatio
         />
       </div>
 
-      <AnnotationThreadPanel
+      <DraftSidePanel
         wsId={wsId}
         draftId={draftId}
         anchored={anchoringResult.anchored}

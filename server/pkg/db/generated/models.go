@@ -834,6 +834,16 @@ type DraftAnnotationMessage struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
+type DraftMessage struct {
+	ID           pgtype.UUID        `json:"id"`
+	DraftID      pgtype.UUID        `json:"draft_id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	AuthorType   string             `json:"author_type"`
+	AuthorUserID pgtype.UUID        `json:"author_user_id"`
+	Body         string             `json:"body"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type DraftYjsUpdate struct {
 	ID        pgtype.UUID        `json:"id"`
 	DraftID   pgtype.UUID        `json:"draft_id"`

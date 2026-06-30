@@ -10,11 +10,9 @@ import {
   Highlighter,
   CircleAlert,
   Trash2,
-  Bot,
 } from "lucide-react";
 import type {
   DraftAnnotation,
-  DraftAnnotationMessage,
   DraftAnnotationType,
   DraftAnnotationState,
 } from "@multica/core/types";
@@ -23,14 +21,12 @@ import {
   useUpdateDraftAnnotation,
   useDeleteDraftAnnotation,
 } from "@multica/core/drafts";
-import { useActorName } from "@multica/core/workspace/hooks";
 import { Button } from "@multica/ui/components/ui/button";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Textarea } from "@multica/ui/components/ui/textarea";
-import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { cn } from "@multica/ui/lib/utils";
-import { Markdown } from "../../common/markdown";
-import { useT, useTimeAgo } from "../../i18n";
+import { useT } from "../../i18n";
+import { MessageRow } from "../common/message-row";
 import type { AnchoredAnnotation } from "./use-annotation-anchoring";
 
 const TYPE_ICON: Record<string, typeof MessageSquare> = {
@@ -47,6 +43,17 @@ function typeIcon(type: DraftAnnotationType): typeof MessageSquare {
   return TYPE_ICON[type] ?? MessageSquare;
 }
 
+/**
+ * Count of open (non-orphaned) annotations — the number the panel's own
+ * open-count badge shows. Exported so the two-tab {@link DraftSidePanel} can put
+ * the same count on the "Annotations" tab without re-deriving the filter.
+ */
+export function openAnnotationCount(anchored: AnchoredAnnotation[]): number {
+  return anchored.filter(
+    (a) => a.status !== "orphaned" && a.annotation.state === "open",
+  ).length;
+}
+
 interface AnnotationThreadPanelProps {
   wsId: string;
   draftId: string;
@@ -55,6 +62,14 @@ interface AnnotationThreadPanelProps {
   /** The currently expanded annotation id (pin → thread), or null. */
   activeId: string | null;
   onSelect: (id: string | null) => void;
+  /**
+   * When rendered inside the two-tab {@link DraftSidePanel}, the wrapper already
+   * supplies the `w-96` rail chrome (border, width) and a tab strip, so the
+   * panel drops its own outer width/border and the redundant title header. The
+   * default (standalone) keeps the full chrome — that's what this component's
+   * own tests render, so they stay behaviorally unchanged.
+   */
+  embedded?: boolean;
 }
 
 /**
@@ -69,25 +84,29 @@ export function AnnotationThreadPanel({
   orphaned,
   activeId,
   onSelect,
+  embedded = false,
 }: AnnotationThreadPanelProps) {
   const { t } = useT("drafts");
 
-  const openCount = anchored.filter(
-    (a) => a.status !== "orphaned" && a.annotation.state === "open",
-  ).length;
+  const openCount = openAnnotationCount(anchored);
 
   const visible = anchored.filter((a) => a.status !== "orphaned");
 
   return (
-    <div className="flex h-full w-96 flex-col border-l">
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <span className="text-sm font-medium">{t(($) => $.annotations.panel_title)}</span>
-        {openCount > 0 && (
-          <Badge variant="secondary" aria-label={t(($) => $.annotations.open_count)}>
-            {openCount}
-          </Badge>
-        )}
-      </div>
+    <div className={cn("flex h-full flex-col", !embedded && "w-96 border-l")}>
+      {/* Standalone keeps its own title header; embedded in the tab wrapper the
+          tab strip already names the surface (and carries the open-count badge),
+          so the header is redundant. */}
+      {!embedded && (
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <span className="text-sm font-medium">{t(($) => $.annotations.panel_title)}</span>
+          {openCount > 0 && (
+            <Badge variant="secondary" aria-label={t(($) => $.annotations.open_count)}>
+              {openCount}
+            </Badge>
+          )}
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto">
         {visible.length === 0 && orphaned.length === 0 ? (
@@ -193,7 +212,7 @@ function AnnotationCard({ wsId, draftId, anchored, active, onSelect }: Annotatio
           {annotation.messages.length > 0 && (
             <div className="space-y-3">
               {annotation.messages.map((m) => (
-                <ThreadMessage key={m.id} message={m} />
+                <MessageRow key={m.id} {...m} />
               ))}
             </div>
           )}
@@ -257,92 +276,6 @@ function AnnotationCard({ wsId, draftId, anchored, active, onSelect }: Annotatio
       )}
     </div>
   );
-}
-
-/**
- * One message in an expanded annotation thread. Renders the sender (Aye vs the
- * authoring member), a relative timestamp, and the body as markdown — so a
- * structured multi-point reply reads as prose rather than a raw wall of text.
- *
- * Aye (author_type "agent") is styled distinctly: a robot affordance and a
- * primary-accent avatar/name, mirroring how agent assignees are set apart
- * elsewhere. We avoid resolving the agent by id (draft-annotation agents carry
- * no author_user_id) and label Aye from the shared `turn.agent_name` string.
- */
-function ThreadMessage({ message }: { message: DraftAnnotationMessage }) {
-  const { t } = useT("drafts");
-  const timeAgo = useTimeAgo();
-  const { getActorName } = useActorName();
-
-  const isAgent = message.author_type === "agent";
-  // Members are resolved by id; "user" is the annotation author-type spelling
-  // of the workspace "member" actor. Fall back to a neutral "you" label when
-  // the member isn't in the cache (own message, just-invited author, drift).
-  const resolvedName = isAgent
-    ? t(($) => $.turn.agent_name)
-    : (() => {
-        const name = getActorName("member", message.author_user_id);
-        return name === "Unknown" ? t(($) => $.annotations.you) : name;
-      })();
-
-  return (
-    <div className="flex gap-2.5">
-      {isAgent ? (
-        <ActorAvatar
-          name={resolvedName}
-          initials="A"
-          isAgent
-          size={24}
-          className="mt-0.5 bg-primary/10 text-primary"
-        />
-      ) : (
-        <ActorAvatar
-          name={resolvedName}
-          initials={initialsOf(resolvedName)}
-          size={24}
-          className="mt-0.5"
-        />
-      )}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-1.5">
-          <span
-            className={cn(
-              "text-xs font-medium",
-              isAgent ? "text-primary" : "text-foreground",
-            )}
-          >
-            {resolvedName}
-          </span>
-          {isAgent && (
-            <Bot className="h-3 w-3 shrink-0 text-primary" aria-hidden />
-          )}
-          <span className="text-[11px] text-muted-foreground">
-            {timeAgo(message.created_at)}
-          </span>
-        </div>
-        {/* Reuse the app's shared markdown renderer in its chat-message mode so
-            bold/lists/headings/code render with tasteful, token-driven
-            typography — consistent with how channel + chat messages render. */}
-        <Markdown
-          mode="minimal"
-          className="mt-1 text-sm leading-relaxed text-foreground"
-        >
-          {message.body}
-        </Markdown>
-      </div>
-    </div>
-  );
-}
-
-/** Up-to-two-letter initials from a display name, for the member avatar. */
-function initialsOf(name: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
 }
 
 interface OrphanedTrayProps {

@@ -40,5 +40,11 @@ export {
   onDraftAnnotationMessageCreated,
 } from "./annotation-ws-updaters";
 
+// Conversation rail (Rail-1) — the draft-level, un-anchored chat surface,
+// distinct from the anchored annotation threads above.
+export { draftMessageKeys, draftMessageListOptions } from "./message-queries";
+export { useAddDraftMessage, isTempDraftMessageId } from "./message-mutations";
+export { onDraftMessageCreated } from "./message-ws-updaters";
+
 // Send-turn (slice 2).
 export { useStartDraftTurn, useDraftTurnMessages } from "./turn-mutations";

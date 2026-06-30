@@ -45,16 +45,18 @@ const (
 	draftAnnotationAuthorAgent = "agent"
 )
 
-// resolveDraftAnnotationAuthor decides how a draft annotation / thread message
-// write is attributed. It mirrors comment.go: an agent caller (validated
+// resolveDraftAuthor decides how a draft-scoped write (an annotation / thread
+// message, or a conversation-rail message) is attributed. It is
+// annotation-agnostic: it mirrors comment.go in that an agent caller (validated
 // X-Agent-ID + X-Task-ID via resolveActor) writes author_type='agent' with a
 // NULL author_user_id; everyone else writes author_type='user' with their own
 // id. The returned (actorType, actorID) pair is what the WS publish uses so the
-// frontend can render agent-authored annotations with agent styling.
+// frontend can render agent-authored rows with agent styling.
 //
-// Slice 2 keeps Aye's surface to replies + anchored suggestions; the body
-// endpoint stays human-only (full-replace, no CRDT yet).
-func (h *Handler) resolveDraftAnnotationAuthor(r *http.Request, userID, workspaceID string, fallbackUserID pgtype.UUID) (authorType string, authorUserID pgtype.UUID, actorType, actorID string) {
+// Slice 2 / Rail-2 keep Aye's surface to replies + anchored suggestions (and,
+// for the rail, `multica draft say`); the body endpoint stays human-only
+// (full-replace, no CRDT yet).
+func (h *Handler) resolveDraftAuthor(r *http.Request, userID, workspaceID string, fallbackUserID pgtype.UUID) (authorType string, authorUserID pgtype.UUID, actorType, actorID string) {
 	actorType, actorID = h.resolveActor(r, userID, workspaceID)
 	if actorType == "agent" {
 		// author_user_id is NULL for agent-authored rows (the column is
@@ -287,7 +289,7 @@ func (h *Handler) CreateDraftAnnotation(w http.ResponseWriter, r *http.Request) 
 	// Attribution: agent callers (Aye, slice 2) write author_type='agent' with
 	// a NULL author_user_id; human callers write 'user' with their own id.
 	workspaceID := uuidToString(draft.WorkspaceID)
-	authorType, authorUserID, actorType, actorID := h.resolveDraftAnnotationAuthor(r, userID, workspaceID, ownerUUID)
+	authorType, authorUserID, actorType, actorID := h.resolveDraftAuthor(r, userID, workspaceID, ownerUUID)
 
 	annType := draftAnnotationDefaultType
 	if req.Type != nil {
@@ -496,7 +498,7 @@ func (h *Handler) AddDraftAnnotationMessage(w http.ResponseWriter, r *http.Reque
 	// Attribution: agent replies (Aye draining a thread, slice 2) carry
 	// author_type='agent'; human replies carry 'user'.
 	workspaceID := uuidToString(draft.WorkspaceID)
-	authorType, authorUserID, actorType, actorID := h.resolveDraftAnnotationAuthor(r, userID, workspaceID, ownerUUID)
+	authorType, authorUserID, actorType, actorID := h.resolveDraftAuthor(r, userID, workspaceID, ownerUUID)
 
 	msg, err := h.Queries.CreateDraftAnnotationMessage(r.Context(), db.CreateDraftAnnotationMessageParams{
 		AnnotationID: annotation.ID,

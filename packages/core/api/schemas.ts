@@ -20,6 +20,8 @@ import type {
   ListDraftsResponse,
   DraftAnnotation,
   ListDraftAnnotationsResponse,
+  DraftMessage,
+  ListDraftMessagesResponse,
   DraftTurnResponse,
 } from "../types";
 
@@ -473,6 +475,45 @@ export const EMPTY_DRAFT_ANNOTATION: DraftAnnotation = {
   created_at: "",
   updated_at: "",
   messages: [],
+};
+
+// Draft conversation rail (Rail-1 — the draft-level, un-anchored chat surface).
+// A flat per-draft message log. `author_type` stays z.string() (open enum,
+// enum-drift rule); `.loose()` so a newer backend can add fields without the
+// client stripping them. Reads go through parseWithFallback at the client
+// boundary, so a drifted backend degrades to the EMPTY fallback rather than
+// white-screening.
+export const DraftMessageSchema = z.object({
+  id: z.string(),
+  draft_id: z.string(),
+  workspace_id: z.string(),
+  author_type: z.string(),
+  author_user_id: z.string().default(""),
+  body: z.string(),
+  created_at: z.string(),
+}).loose();
+
+export const ListDraftMessagesResponseSchema = z.object({
+  messages: z.array(DraftMessageSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_DRAFT_MESSAGES_RESPONSE: ListDraftMessagesResponse = {
+  messages: [],
+  total: 0,
+};
+
+// Fallback for the single-message POST endpoint. A validation failure here is
+// the rare worst case (badly-drifted backend); an empty message keeps the rail
+// rendering rather than throwing into the UI.
+export const EMPTY_DRAFT_MESSAGE: DraftMessage = {
+  id: "",
+  draft_id: "",
+  workspace_id: "",
+  author_type: "user",
+  author_user_id: "",
+  body: "",
+  created_at: "",
 };
 
 // Draft turn (slice 2 — the Send-turn). POST /api/drafts/:id/turn returns the

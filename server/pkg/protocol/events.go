@@ -80,6 +80,14 @@ const (
 	EventDraftAnnotationDeleted        = "draft_annotation:deleted"
 	EventDraftAnnotationMessageCreated = "draft_annotation:message_created"
 
+	// Draft conversation rail (Drafts "global germination rail", Rail-1 — the
+	// draft-level, un-anchored chat surface, distinct from the anchored
+	// annotation threads). Workspace-scoped like drafts. Carries `{ draft_id,
+	// message }` so the receiver appends to the right draft's conversation cache.
+	// Rail-1 is human-only; Rail-2 (Aye via `multica draft say`) reuses this
+	// event unchanged — an agent-authored message renders with agent styling.
+	EventDraftMessageCreated = "draft_message:created"
+
 	// Draft turn lifecycle (Drafts slice 2 — the Send-turn). Emitted when Aye's
 	// draft-turn task completes: carries `{ draft_id, task_id, agent_id,
 	// summary }`. The agent's per-turn replies + suggestions stream in live as

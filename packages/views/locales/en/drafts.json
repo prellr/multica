@@ -33,6 +33,13 @@
     "tool": "Using {{tool}}",
     "tool_generic": "Working"
   },
+  "conversation": {
+    "tab_conversation": "Conversation",
+    "tab_annotations": "Annotations",
+    "empty": "No messages yet. Start the conversation about this draft.",
+    "composer_placeholder": "Message…",
+    "send": "Send"
+  },
   "annotations": {
     "panel_title": "Annotations",
     "you": "You",

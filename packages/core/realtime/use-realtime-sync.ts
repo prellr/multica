@@ -37,6 +37,7 @@ import {
   onDraftAnnotationMessageCreated,
 } from "../drafts/annotation-ws-updaters";
 import { draftAnnotationKeys } from "../drafts/annotation-queries";
+import { onDraftMessageCreated } from "../drafts/message-ws-updaters";
 import { onInboxNew, onInboxInvalidate, onInboxIssueStatusChanged, onInboxIssueDeleted } from "../inbox/ws-updaters";
 import { inboxKeys } from "../inbox/queries";
 import { notificationPreferenceOptions } from "../notification-preferences/queries";
@@ -381,6 +382,8 @@ export function useRealtimeSync(
       // Draft annotation layer (slice 1). Explicit handlers below.
       "draft_annotation:created", "draft_annotation:updated",
       "draft_annotation:deleted", "draft_annotation:message_created",
+      // Draft conversation rail (Rail-1). Explicit handler below.
+      "draft_message:created",
       "comment:created", "comment:updated", "comment:deleted",
       "comment:resolved", "comment:unresolved",
       "activity:created",
@@ -590,6 +593,19 @@ export function useRealtimeSync(
       if (!draft_id || !annotation_id || !message?.id) return;
       const wsId = getCurrentWsId();
       if (wsId) onDraftAnnotationMessageCreated(qc, wsId, draft_id, annotation_id, message);
+    });
+
+    // Draft conversation rail (Rail-1). Carries `{ draft_id, message }`; the
+    // receiver appends to the right draft's conversation cache. See server
+    // draft_message.go h.publish call.
+    const unsubDraftMessageCreated = ws.on("draft_message:created", (p) => {
+      const { draft_id, message } = (p ?? {}) as {
+        draft_id?: string;
+        message?: import("../types").DraftMessage;
+      };
+      if (!draft_id || !message?.id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) onDraftMessageCreated(qc, wsId, draft_id, message);
     });
 
     // Drafts slice 2 — a Send-turn finished. The per-action replies/suggestions
@@ -1379,6 +1395,7 @@ export function useRealtimeSync(
       unsubDraftAnnotationUpdated();
       unsubDraftAnnotationDeleted();
       unsubDraftAnnotationMessageCreated();
+      unsubDraftMessageCreated();
       unsubDraftTurnCompleted();
       unsubIssueLabelsChanged();
       unsubIssueMetadataChanged();

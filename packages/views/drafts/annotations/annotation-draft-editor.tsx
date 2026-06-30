@@ -162,23 +162,45 @@ export function AnnotationDraftEditor({ draftId, onClose, onDeleted }: Annotatio
   useDraftYjs(draftId, yctx.doc, yctx.awareness);
 
   const draftBody = draft?.body ?? "";
+  // Whether the server already holds persisted Yjs state for this draft. When
+  // true, the provider's replay is authoritative and we MUST NOT seed (seeding
+  // on top of the replayed log duplicates the body — the slice-3a duplication
+  // bug). Defaults to false at the API boundary, so an older backend that omits
+  // the field is treated as "brand-new draft" and the seed still runs.
+  const hasYjsState = draft?.has_yjs_state === true;
 
-  // Seed the Y.Doc from the loaded body, ONCE. Runs after the draft query
-  // resolves (body known) — the idempotent guard inside seedYDocFromMarkdown
-  // additionally no-ops if the provider already hydrated the fragment from the
-  // server log, so seeding is safe to run after a reconnect too.
+  // Seed the Y.Doc from the loaded body, ONCE — and ONLY for a brand-new draft
+  // (no persisted Yjs state). Runs after the draft query resolves (body + state
+  // known).
+  //
+  // For a draft that ALREADY has persisted Yjs state we skip seeding entirely:
+  // the networked provider (useDraftYjs) replays the persisted update log on
+  // connect, and that replay is the authoritative content. Seeding the markdown
+  // body as a SECOND set of CRDT items (a different client id/clock) would not
+  // dedupe against the replayed items, so the body would exist twice and the
+  // provider would persist the duplication on next sync — compounding on every
+  // open. We still prime the snapshot baseline so the replayed content doesn't
+  // trigger a redundant initial PUT.
+  //
+  // seedYDocFromMarkdown keeps its own `fragment.length > 0` guard as
+  // defense-in-depth (e.g. a reconnect that hydrated the fragment before this
+  // effect runs), but that guard alone can't gate this bug: at first open the
+  // fragment is still empty when this effect fires, so the gate must be the
+  // persisted-state flag, not fragment length.
   useEffect(() => {
     if (seededRef.current || draft === undefined) return;
     seededRef.current = true;
-    seedYDocFromMarkdown(yctx.doc, draftBody, {
-      placeholder: t(($) => $.detail.body_placeholder),
-    });
-    // The seeded content equals the body the server already holds, so prime the
-    // snapshot baseline to suppress a redundant initial PUT once Collaboration
-    // hydrates the editor from the freshly-seeded fragment.
+    if (!hasYjsState) {
+      seedYDocFromMarkdown(yctx.doc, draftBody, {
+        placeholder: t(($) => $.detail.body_placeholder),
+      });
+    }
+    // The seeded content (or the body the server's replayed log holds) equals
+    // the body the server already has, so prime the snapshot baseline to
+    // suppress a redundant initial PUT once Collaboration hydrates the editor.
     lastSavedBodyRef.current = draftBody.trimEnd();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [yctx, draft?.id, draftBody]);
+  }, [yctx, draft?.id, draftBody, hasYjsState]);
 
   const editor = useEditor(
     {

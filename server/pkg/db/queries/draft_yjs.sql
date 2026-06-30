@@ -25,3 +25,12 @@ ORDER BY seq ASC;
 -- uncompacted log per the deferred-compaction note); not on any hot path.
 SELECT COUNT(*) FROM draft_yjs_update
 WHERE draft_id = $1;
+
+-- name: DraftHasYjsState :one
+-- Whether a draft has ANY persisted Yjs co-editing state. The draft GET handler
+-- returns this so the editor seeds the Y.Doc from markdown ONLY for a brand-new
+-- draft — seeding on top of a replayed persisted log duplicates the body. EXISTS
+-- short-circuits on the first row, so this is cheaper than COUNT on a long log.
+SELECT EXISTS (
+  SELECT 1 FROM draft_yjs_update WHERE draft_id = $1
+);

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -195,6 +196,58 @@ func TestDraftYjsReplayOnConnect(t *testing.T) {
 	got := readBinaryWithin(t, conn, 2*time.Second)
 	if string(got) != string(seeded) {
 		t.Fatalf("replay frame = %v, want %v", got, seeded)
+	}
+}
+
+// TestDraftGetHasYjsState pins the seed-duplication fix's backend contract: the
+// draft GET response carries `has_yjs_state`, which is false for a brand-new
+// draft (no persisted Yjs log) and true once ≥1 update row exists. The editor
+// uses this flag to seed the Y.Doc from markdown ONLY for a brand-new draft —
+// seeding on top of a replayed persisted log duplicates the body.
+func TestDraftGetHasYjsState(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture unavailable")
+	}
+	draftID := createDraftForTest(t, "yjs state probe", "# hello")
+
+	// A brand-new draft has no persisted Yjs state.
+	w := httptest.NewRecorder()
+	req := newRequest("GET", "/api/drafts/"+draftID, nil)
+	req = withURLParam(req, "id", draftID)
+	testHandler.GetDraft(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetDraft: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var fresh DraftResponse
+	if err := json.NewDecoder(w.Body).Decode(&fresh); err != nil {
+		t.Fatalf("decode fresh: %v", err)
+	}
+	if fresh.HasYjsState {
+		t.Fatalf("GetDraft fresh draft: expected has_yjs_state=false, got true")
+	}
+
+	// Append one Yjs update frame, simulating a prior co-editing session.
+	if _, err := testHandler.Queries.AppendDraftYjsUpdate(context.Background(), db.AppendDraftYjsUpdateParams{
+		DraftID: util.MustParseUUID(draftID),
+		Update:  []byte{draftyjs.MessageSync, 0x01, 0x02},
+	}); err != nil {
+		t.Fatalf("append update: %v", err)
+	}
+
+	// Now the draft reports persisted Yjs state.
+	w = httptest.NewRecorder()
+	req = newRequest("GET", "/api/drafts/"+draftID, nil)
+	req = withURLParam(req, "id", draftID)
+	testHandler.GetDraft(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetDraft after append: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var seeded DraftResponse
+	if err := json.NewDecoder(w.Body).Decode(&seeded); err != nil {
+		t.Fatalf("decode seeded: %v", err)
+	}
+	if !seeded.HasYjsState {
+		t.Fatalf("GetDraft draft with ≥1 update: expected has_yjs_state=true, got false")
 	}
 }
 

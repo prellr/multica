@@ -20,6 +20,20 @@ vi.mock("@multica/core/drafts", () => ({
   useDeleteDraftAnnotation: () => ({ mutate: deleteMutate }),
 }));
 
+// The expanded thread resolves human senders by member id via useActorName.
+// Mock it so the panel renders without a QueryClient/workspace provider — same
+// pattern issue-detail and friends use.
+vi.mock("@multica/core/workspace/hooks", () => ({
+  useActorName: () => ({
+    getMemberName: (id: string) => (id === "u-1" ? "Ada Lovelace" : "Unknown"),
+    getAgentName: () => "Unknown Agent",
+    getActorName: (type: string, id: string) =>
+      type === "member" && id === "u-1" ? "Ada Lovelace" : "Unknown",
+    getActorInitials: () => "AL",
+    getActorAvatarUrl: () => null,
+  }),
+}));
+
 import { AnnotationThreadPanel } from "./annotation-thread-panel";
 
 function makeAnnotation(over: Partial<DraftAnnotation> = {}): DraftAnnotation {
@@ -65,7 +79,7 @@ function anchored(annotation: DraftAnnotation, over: Partial<AnchoredAnnotation>
 
 function renderPanel(props: Partial<React.ComponentProps<typeof AnnotationThreadPanel>> = {}) {
   const onSelect = props.onSelect ?? vi.fn();
-  render(
+  const utils = render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
       <AnnotationThreadPanel
         wsId="ws-1"
@@ -77,7 +91,7 @@ function renderPanel(props: Partial<React.ComponentProps<typeof AnnotationThread
       />
     </I18nProvider>,
   );
-  return { onSelect };
+  return { onSelect, container: utils.container };
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -127,6 +141,57 @@ describe("AnnotationThreadPanel", () => {
     renderPanel({ anchored: [anchored(ann)], activeId: "a-1" });
     fireEvent.click(screen.getByRole("button", { name: enDrafts.annotations.resolve }));
     expect(updateMutate).toHaveBeenCalledWith({ id: "a-1", patch: { state: "resolved" } });
+  });
+
+  it("renders the expanded thread message body as markdown (not raw text)", () => {
+    // Aye's replies are markdown: bold + a list must render as real elements so
+    // a structured answer reads as prose, not an undifferentiated wall.
+    const ann = makeAnnotation({
+      author_type: "agent",
+      author_user_id: "",
+      messages: [
+        {
+          id: "m-1",
+          annotation_id: "a-1",
+          author_type: "agent",
+          author_user_id: "",
+          body: "**Key risk:** rollback.\n\n1. First point\n2. Second point",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+    const { container } = renderPanel({ anchored: [anchored(ann)], activeId: "a-1" });
+    // Bold renders as <strong>, the list as <li> — proof the markdown renderer
+    // ran instead of dumping the raw string.
+    expect(container.querySelector("strong")).toHaveTextContent("Key risk:");
+    expect(container.querySelectorAll("li").length).toBe(2);
+  });
+
+  it("labels the agent sender as Aye on an agent-authored thread message", () => {
+    const ann = makeAnnotation({
+      author_type: "agent",
+      author_user_id: "",
+      messages: [
+        {
+          id: "m-1",
+          annotation_id: "a-1",
+          author_type: "agent",
+          author_user_id: "",
+          body: "Consider rollback.",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+    renderPanel({ anchored: [anchored(ann)], activeId: "a-1" });
+    expect(screen.getByText(enDrafts.turn.agent_name)).toBeInTheDocument();
+  });
+
+  it("labels a human sender by their resolved member name", () => {
+    // makeAnnotation's default message is authored by member u-1 → "Ada
+    // Lovelace" per the useActorName mock.
+    const ann = makeAnnotation();
+    renderPanel({ anchored: [anchored(ann)], activeId: "a-1" });
+    expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
   });
 
   it("adds a reply from the expanded thread", () => {

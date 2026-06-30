@@ -60,6 +60,8 @@ export function useCreateDraft() {
         status: input.status ?? "draft",
         created_at: now,
         updated_at: now,
+        // A just-created draft has no persisted Yjs state yet.
+        has_yjs_state: false,
       };
       prependDraftToLists(qc, wsId, optimistic);
       return { tempId };

@@ -27,6 +27,18 @@ export interface Draft {
   status: DraftStatus;
   created_at: string;
   updated_at: string;
+  /**
+   * Whether the draft already has persisted Yjs co-editing state (≥1 update in
+   * the server's draft_yjs_update log). The editor seeds the Y.Doc from the
+   * markdown body ONLY when this is false (a brand-new draft); for a draft with
+   * persisted state the networked provider replays the log on connect and
+   * seeding on top of it would duplicate the body.
+   *
+   * Defaults to `false` at the API boundary (the schema supplies the default),
+   * so an older backend that omits the field is treated as "no persisted state"
+   * — the same as a brand-new draft.
+   */
+  has_yjs_state: boolean;
 }
 
 export interface ListDraftsParams {

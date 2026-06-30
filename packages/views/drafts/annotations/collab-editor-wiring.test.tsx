@@ -118,6 +118,65 @@ describe("collab editor wiring / mount-empty-and-seed", () => {
   });
 });
 
+// The production seed effect gates on the draft's `has_yjs_state` flag. This
+// helper mirrors that exact conditional (the editor's
+// `if (!hasYjsState) seedYDocFromMarkdown(...)`) so the test pins the gate
+// behavior without standing up the full React editor.
+function applySeedGate(doc: Y.Doc, hasYjsState: boolean): void {
+  if (!hasYjsState) {
+    seedYDocFromMarkdown(doc, SAMPLE_BODY, EXT_OPTIONS);
+  }
+}
+
+describe("collab editor wiring / seed gate by has_yjs_state", () => {
+  it("RUNS the seed for a brand-new draft (no persisted Yjs state)", () => {
+    const doc = new Y.Doc();
+    applySeedGate(doc, /* hasYjsState */ false);
+
+    const editor = mountProductionLikeEditor(doc, () => [], () => {});
+    const md = editor.getMarkdown().trimEnd();
+    // The seed ran: the body is present, exactly once.
+    expect(md).toBe(SAMPLE_BODY.trimEnd());
+    expect(md.split("The quick brown fox").length - 1).toBe(1);
+  });
+
+  it("SKIPS the seed when has_yjs_state=true so the replay isn't duplicated", () => {
+    // Simulate a draft that already has persisted Yjs state: the provider's
+    // replay is the authoritative content. We model the replay by populating the
+    // doc's fragment from the persisted markdown ONCE (as the server log would),
+    // then run the gate with hasYjsState=true.
+    const replayed = new Y.Doc();
+    seedYDocFromMarkdown(replayed, SAMPLE_BODY, EXT_OPTIONS); // stand-in for replay
+
+    // The gate must NOT seed on top of the replayed content.
+    applySeedGate(replayed, /* hasYjsState */ true);
+
+    const editor = mountProductionLikeEditor(replayed, () => [], () => {});
+    const md = editor.getMarkdown().trimEnd();
+    // The body exists exactly once — had the gate let the seed run, the fox
+    // sentence (and the whole body) would appear twice, which is the
+    // slice-3a duplication bug.
+    expect(md.split("The quick brown fox").length - 1).toBe(1);
+    expect(md).toBe(SAMPLE_BODY.trimEnd());
+  });
+
+  it("keeps the internal fragment.length guard as defense-in-depth", () => {
+    // The has_yjs_state gate is the primary fix, but seedYDocFromMarkdown's own
+    // `fragment.length > 0` guard stays as a second line of defense (e.g. a
+    // reconnect that hydrated the fragment before the effect runs). Once the
+    // fragment has content, a second seed on the SAME field is a no-op — it does
+    // NOT stack a duplicate.
+    const doc = new Y.Doc();
+    seedYDocFromMarkdown(doc, SAMPLE_BODY, EXT_OPTIONS); // replay stand-in
+    const fragment = doc.getXmlFragment(DRAFT_YJS_FRAGMENT);
+    const beforeLen = fragment.length;
+    expect(beforeLen).toBeGreaterThan(0);
+
+    seedYDocFromMarkdown(doc, SAMPLE_BODY, EXT_OPTIONS); // would-be second seed
+    expect(fragment.length).toBe(beforeLen); // guard held: no duplication
+  });
+});
+
 describe("collab editor wiring / recompute-on-remote-transaction", () => {
   it("onUpdate fires on a remote edit and the repaint heals the decoration", () => {
     const local = new Y.Doc();

@@ -54,6 +54,14 @@ type DraftResponse struct {
 	Status      string `json:"status"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
+	// HasYjsState reports whether the draft already has persisted Yjs co-editing
+	// state (≥1 draft_yjs_update row). The editor uses this to decide whether to
+	// seed the Y.Doc from the markdown body: it MUST only seed a brand-new draft,
+	// because the networked provider replays the persisted log on connect and a
+	// seed on top of that replay duplicates the body (slice-3a duplication bug).
+	// Only the single-draft GET populates it; list/create/update leave it false
+	// (a freshly created draft has no Yjs state, and the list view doesn't seed).
+	HasYjsState bool `json:"has_yjs_state"`
 }
 
 func draftToResponse(d db.Draft) DraftResponse {
@@ -167,7 +175,22 @@ func (h *Handler) GetDraft(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, draftToResponse(draft))
+	resp := draftToResponse(draft)
+	// Whether the draft already carries persisted Yjs co-editing state. The
+	// editor seeds the Y.Doc from the markdown body ONLY for a brand-new draft;
+	// for a draft with persisted state the networked provider replays the log and
+	// seeding on top of it duplicates the body. draft.ID is the loader-resolved
+	// UUID (UUID-parsing convention), never a raw URL string. A query failure is
+	// non-fatal: default to false (no seed-suppression), which is the safe-side
+	// behavior — the editor's internal fragment.length guard still prevents a
+	// double-apply.
+	hasYjs, err := h.Queries.DraftHasYjsState(r.Context(), draft.ID)
+	if err != nil {
+		slog.Warn("get draft: failed to check yjs state",
+			append(logger.RequestAttrs(r), "error", err, "draft_id", uuidToString(draft.ID))...)
+	}
+	resp.HasYjsState = hasYjs
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) CreateDraft(w http.ResponseWriter, r *http.Request) {

@@ -129,6 +129,7 @@ const baseDraft = {
   status: "draft",
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
+  has_yjs_state: false,
 };
 
 describe("DraftSchema / ListDraftsResponseSchema drift", () => {
@@ -147,6 +148,20 @@ describe("DraftSchema / ListDraftsResponseSchema drift", () => {
 
   it("rejects a wrong-typed body (number) so the client returns EMPTY_DRAFT", () => {
     expect(DraftSchema.safeParse({ ...baseDraft, body: 123 }).success).toBe(false);
+  });
+
+  it("defaults a missing has_yjs_state to false (older backend omits it)", () => {
+    // An older server that predates the seed-duplication fix omits the field.
+    // The editor reads it as "no persisted Yjs state" — the same as a brand-new
+    // draft — rather than failing the parse.
+    const { has_yjs_state: _omit, ...draftMissingFlag } = baseDraft;
+    const parsed = DraftSchema.parse(draftMissingFlag);
+    expect(parsed.has_yjs_state).toBe(false);
+  });
+
+  it("preserves has_yjs_state=true so the editor suppresses the seed", () => {
+    const parsed = DraftSchema.parse({ ...baseDraft, has_yjs_state: true });
+    expect(parsed.has_yjs_state).toBe(true);
   });
 
   it("defaults a null/missing drafts array to [] instead of throwing", () => {

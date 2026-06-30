@@ -78,6 +78,7 @@ function makeDraft(over: Partial<Draft> = {}): Draft {
     status: "draft",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
+    has_yjs_state: false,
     ...over,
   };
 }

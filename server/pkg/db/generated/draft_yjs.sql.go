@@ -58,6 +58,23 @@ func (q *Queries) CountDraftYjsUpdates(ctx context.Context, draftID pgtype.UUID)
 	return count, err
 }
 
+const draftHasYjsState = `-- name: DraftHasYjsState :one
+SELECT EXISTS (
+  SELECT 1 FROM draft_yjs_update WHERE draft_id = $1
+)
+`
+
+// Whether a draft has ANY persisted Yjs co-editing state. The draft GET handler
+// returns this so the editor seeds the Y.Doc from markdown ONLY for a brand-new
+// draft — seeding on top of a replayed persisted log duplicates the body. EXISTS
+// short-circuits on the first row, so this is cheaper than COUNT on a long log.
+func (q *Queries) DraftHasYjsState(ctx context.Context, draftID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, draftHasYjsState, draftID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listDraftYjsUpdates = `-- name: ListDraftYjsUpdates :many
 SELECT id, draft_id, seq, update, created_at FROM draft_yjs_update
 WHERE draft_id = $1

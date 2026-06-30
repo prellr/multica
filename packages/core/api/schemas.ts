@@ -364,6 +364,12 @@ export const DraftSchema = z.object({
   status: z.string(),
   created_at: z.string(),
   updated_at: z.string(),
+  // Whether the draft already has persisted Yjs co-editing state. Optional with
+  // a `false` default for API-compat: an older backend that predates this field
+  // omits it, and the editor must read it as "no persisted state" — the same as
+  // a brand-new draft — rather than failing the parse. Only the single-draft GET
+  // populates it; list responses leave it false.
+  has_yjs_state: z.boolean().default(false),
 }).loose();
 
 export const ListDraftsResponseSchema = z.object({
@@ -388,6 +394,7 @@ export const EMPTY_DRAFT: Draft = {
   status: "draft",
   created_at: "",
   updated_at: "",
+  has_yjs_state: false,
 };
 
 // Draft annotation layer (slice 1). Same leniency rules as the draft schemas:

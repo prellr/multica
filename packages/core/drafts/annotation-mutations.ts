@@ -23,6 +23,7 @@ import { draftAnnotationKeys } from "./annotation-queries";
  */
 
 const TEMP_ID_PREFIX = "temp-annotation-";
+const TEMP_MESSAGE_ID_PREFIX = "temp-message-";
 
 function makeTempId(prefix: string): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -33,6 +34,10 @@ function makeTempId(prefix: string): string {
 
 export function isTempAnnotationId(id: string): boolean {
   return id.startsWith(TEMP_ID_PREFIX);
+}
+
+export function isTempMessageId(id: string): boolean {
+  return id.startsWith(TEMP_MESSAGE_ID_PREFIX);
 }
 
 // --- Cache helpers (operate on the list-response shape) ---------------------
@@ -111,7 +116,7 @@ export function useCreateDraftAnnotation(wsId: string, draftId: string) {
         input.message && input.message !== ""
           ? [
               {
-                id: makeTempId("temp-message-"),
+                id: makeTempId(TEMP_MESSAGE_ID_PREFIX),
                 annotation_id: tempId,
                 author_type: "user",
                 author_user_id: user?.id ?? "",
@@ -226,8 +231,9 @@ export function useAddDraftAnnotationMessage(wsId: string, draftId: string) {
         queryKey: draftAnnotationKeys.lists(wsId, draftId),
       });
       const now = new Date().toISOString();
+      const tempMessageId = makeTempId(TEMP_MESSAGE_ID_PREFIX);
       const optimistic: DraftAnnotationMessage = {
-        id: makeTempId("temp-message-"),
+        id: tempMessageId,
         annotation_id: annotationId,
         author_type: "user",
         author_user_id: user?.id ?? "",
@@ -239,12 +245,32 @@ export function useAddDraftAnnotationMessage(wsId: string, draftId: string) {
           a.id === annotationId ? { ...a, messages: [...a.messages, optimistic] } : a,
         ),
       );
-      return { previous };
+      return { previous, annotationId, tempMessageId };
+    },
+    onSuccess: (message, { annotationId }, ctx) => {
+      // Swap the optimistic temp message for the real server row immediately, so
+      // the real id is in the cache before any concurrent WS event (e.g. an
+      // agent turn triggered by an @-mention) rewrites the annotation. Without
+      // this, the temp message has no real id to survive a wholesale rewrite and
+      // the reply flickers out until the next refetch echoes it back.
+      if (!ctx?.tempMessageId) return;
+      patchList(qc, wsId, draftId, (annotations) =>
+        annotations.map((a) =>
+          a.id === annotationId
+            ? {
+                ...a,
+                messages: a.messages.map((m) => (m.id === ctx.tempMessageId ? message : m)),
+              }
+            : a,
+        ),
+      );
     },
     onError: (_err, _vars, ctx) => {
       ctx?.previous.forEach(([key, data]) => qc.setQueryData(key, data));
     },
     onSettled: () => {
+      // Safety-net reconcile. With the temp→real swap done in onSuccess, the
+      // refetch returns the same committed message, so this no longer flickers.
       qc.invalidateQueries({ queryKey: draftAnnotationKeys.lists(wsId, draftId) });
     },
   });

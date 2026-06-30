@@ -31,6 +31,7 @@ export {
   useDeleteDraftAnnotation,
   useAddDraftAnnotationMessage,
   isTempAnnotationId,
+  isTempMessageId,
 } from "./annotation-mutations";
 export {
   onDraftAnnotationCreated,

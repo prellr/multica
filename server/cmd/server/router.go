@@ -529,6 +529,16 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 							r.Post("/messages", h.AddDraftAnnotationMessage)
 						})
 					})
+
+					// Draft conversation rail (Rail-1): a draft-level,
+					// un-anchored chat surface, distinct from the anchored
+					// annotations above. Same loadDraftForUser resolution +
+					// draft.ID scoping. A flat per-draft log with no message-id
+					// path param, so GET (list) + POST (send) only.
+					r.Route("/messages", func(r chi.Router) {
+						r.Get("/", h.ListDraftMessages)
+						r.Post("/", h.CreateDraftMessage)
+					})
 				})
 			})
 

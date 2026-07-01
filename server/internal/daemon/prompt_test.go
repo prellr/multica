@@ -324,9 +324,10 @@ func TestBuildPromptNonSquadLeaderNoRule(t *testing.T) {
 	}
 }
 
-// Drafts slice 2 — the Send-turn prompt. Locks in the slice-2 scope guards:
-// Aye reads the doc + open queue, responds via `multica draft *`, and is
-// explicitly forbidden from rewriting the body or creating issues mid-turn.
+// Drafts Send-turn prompt. Locks in the turn scope guards: Aye reads the doc +
+// conversation rail + open queue, responds via `multica draft *` (routing
+// general talk to the rail and structure to the doc), and is explicitly
+// forbidden from rewriting the body or creating issues mid-turn.
 func TestBuildDraftTurnPrompt(t *testing.T) {
 	task := Task{
 		TaskKind:                 "draft_turn",
@@ -340,13 +341,17 @@ func TestBuildDraftTurnPrompt(t *testing.T) {
 	out := BuildPrompt(task, "claude")
 
 	mustContain := []string{
-		// reads the live doc + queue
+		// reads the live doc + rail + queue
 		"multica draft get draft-123",
+		"multica draft messages draft-123",
 		"multica draft annotations draft-123 --state open",
-		// the four moves
+		// the moves — rail talk + anchored structure
+		"multica draft say draft-123",
 		"multica draft reply draft-123",
 		"multica draft resolve|ack|dismiss draft-123",
 		"multica draft annotate draft-123",
+		// the routing principle
+		"Talk lands in the rail; structure lands in the doc",
 		// hard scope guards
 		"Do NOT rewrite the document body",
 		"Do NOT create issues",

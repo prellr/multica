@@ -185,8 +185,10 @@ func buildDraftTurnPrompt(task Task) string {
 
 	b.WriteString("Run your turn:\n\n")
 	fmt.Fprintf(&b, "1. Read the current document: `multica draft get %s --output json`.\n", task.DraftID)
-	fmt.Fprintf(&b, "2. Read the open-annotation queue (your work board): `multica draft annotations %s --state open --output json`.\n", task.DraftID)
-	b.WriteString("3. Respond — ONE small, conservative turn. Drain a bounded set of the threads open on you; don't try to settle everything. Your moves:\n")
+	fmt.Fprintf(&b, "2. Read the conversation rail (the germination conversation — what the human is telling you in general, un-anchored talk): `multica draft messages %s --output json`.\n", task.DraftID)
+	fmt.Fprintf(&b, "3. Read the open-annotation queue (your work board): `multica draft annotations %s --state open --output json`.\n", task.DraftID)
+	b.WriteString("4. Respond — ONE small, conservative turn. Drain a bounded set of the threads open on you; don't try to settle everything. Your moves:\n")
+	fmt.Fprintf(&b, "   - **Say** something in the rail — your GENERAL response: `multica draft say %s --body \"…\"`. Use this for anything not anchored to a specific text span: narration, alignment, questions about direction, acknowledgements, \"here's my thinking\".\n", task.DraftID)
 	fmt.Fprintf(&b, "   - **Reply** to a thread: `multica draft reply %s <annotationId> --body \"…\"`.\n", task.DraftID)
 	fmt.Fprintf(&b, "   - **Resolve / ack / dismiss** a thread you've handled: `multica draft resolve|ack|dismiss %s <annotationId>`.\n", task.DraftID)
 	fmt.Fprintf(&b, "   - **Plant an anchored question** on a load-bearing or surprising part: `multica draft annotate %s --quote \"<exact text>\" --type question --body \"…\"`.\n", task.DraftID)
@@ -194,6 +196,7 @@ func buildDraftTurnPrompt(task Task) string {
 	b.WriteString("\n")
 
 	b.WriteString("Hard rules for this turn:\n\n")
+	b.WriteString("- **Talk lands in the rail; structure lands in the doc (annotations/suggestions).** Route your GENERAL response — narration, alignment, direction questions, acknowledgements — to the rail with `multica draft say`. Reserve annotations (`reply`/`annotate`) for points anchored to exact text. Don't dump long structured answers into the rail or into an annotation thread — converse in the rail, and put concrete proposals where they belong (a `suggestion` for a text change, an anchored `question` for a point about a specific span).\n")
 	b.WriteString("- **Do NOT rewrite the document body.** There is no body-edit command. When you want the text changed, propose it as a `suggestion` annotation — the human accepts it. Live co-editing is a later slice.\n")
 	b.WriteString("- **Do NOT create issues** during a draft turn. Keep your moves in-doc (replies + suggestions). Proposing graduation (\"this looks ready to fan out\") in a reply is fine; doing the fan-out is not.\n")
 	b.WriteString("- **Keep the turn small.** Feedback is continuous; your consumption is quantized. Conservative beats thorough — a tight, coherent set of moves the human can follow beats a sprawling rewrite of the board.\n")

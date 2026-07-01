@@ -2515,6 +2515,30 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 	return i, err
 }
 
+const updateAgentInstructions = `-- name: UpdateAgentInstructions :execrows
+UPDATE agent SET instructions = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND instructions <> $3
+`
+
+type UpdateAgentInstructionsParams struct {
+	ID           pgtype.UUID `json:"id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	Instructions string      `json:"instructions"`
+}
+
+// Targeted instructions-only update, scoped to (id, workspace_id). Used by the
+// Aye backfill to refresh the seeded lead agent's soul in place when the
+// constant drifts. workspace_id is a defense-in-depth tenant guard; the caller
+// passes Aye's deterministic id so no user-created agent is ever touched.
+// :execrows so the caller can log a no-op (0 rows) vs an actual write.
+func (q *Queries) UpdateAgentInstructions(ctx context.Context, arg UpdateAgentInstructionsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateAgentInstructions, arg.ID, arg.WorkspaceID, arg.Instructions)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateAgentStatus = `-- name: UpdateAgentStatus :one
 UPDATE agent SET status = $2, updated_at = now()
 WHERE id = $1

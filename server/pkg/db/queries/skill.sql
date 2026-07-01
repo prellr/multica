@@ -50,6 +50,21 @@ RETURNING *;
 -- Defense-in-depth: workspace_id is a SQL-layer tenant guard. See DeleteIssue.
 DELETE FROM skill WHERE id = $1 AND workspace_id = $2;
 
+-- name: UpdateAgentSkillContent :execrows
+-- Refreshes the content of the skill attached to a given agent, matched by
+-- skill name so only that one skill is touched. Used by the Aye backfill to
+-- update her seeded Drafts-surface skill in place when the constant drifts.
+-- The agent_skill join scopes the write to skills the agent actually owns; the
+-- name predicate pins it to exactly Aye's skill. Only writes on a real change
+-- (content <> $3) so a matching skill is a no-op. :execrows lets the caller log
+-- write-vs-no-op.
+UPDATE skill SET content = $3, updated_at = now()
+FROM agent_skill ask
+WHERE skill.id = ask.skill_id
+  AND ask.agent_id = $1
+  AND skill.name = $2
+  AND skill.content <> $3;
+
 -- Skill File CRUD
 
 -- name: ListSkillFiles :many

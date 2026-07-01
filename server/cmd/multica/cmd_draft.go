@@ -13,21 +13,27 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Draft commands — the agent-capability surface over the Drafts REST API
-// (slice 2). Each subcommand wraps an existing slice-0/slice-1 handler; there
-// is NO new business logic here. This is what lets Aye (the lead agent) read a
-// draft + its open-annotation queue and respond: reply to threads, set
-// annotation state, and plant anchored question-threads / suggestions.
+// Draft commands — the agent-capability surface over the Drafts REST API.
+// Each subcommand wraps an existing Drafts handler; there is NO new business
+// logic here. This is what lets Aye (the lead agent) read a draft + its
+// conversation rail + its open-annotation queue and respond: converse in the
+// rail, reply to threads, set annotation state, and plant anchored
+// question-threads / suggestions.
 //
 // When the CLI runs inside a daemon task the API client carries X-Agent-ID +
 // X-Task-ID (set from MULTICA_AGENT_ID / MULTICA_TASK_ID by newAPIClient), so
-// the server attributes every annotation write as author_type='agent'. No flag
-// is needed — the attribution is derived from the trusted task headers.
+// the server attributes every rail/annotation write as author_type='agent'. No
+// flag is needed — the attribution is derived from the trusted task headers.
 //
-// Slice-2 scope: Aye writes annotation replies + anchored suggestions ONLY.
+// Two write channels, one principle — talk lands in the rail; structure lands
+// in the doc:
+//   - `say` / `messages` — the conversation rail: general talk (narration,
+//     alignment, direction questions, acknowledgements), UN-anchored.
+//   - `reply` / `annotate` — anchored annotations: points tied to exact text.
+//
 // There is deliberately no `draft set-body` command — the body endpoint is a
-// full-replace with no CRDT, so wholesale rewriting is out of scope until
-// slice 3 (co-editing).
+// full-replace with no CRDT, so wholesale rewriting is out of scope until the
+// co-editing slice.
 // ---------------------------------------------------------------------------
 
 var draftCmd = &cobra.Command{
@@ -35,14 +41,15 @@ var draftCmd = &cobra.Command{
 	Short: "Read and annotate Drafts (agent co-authoring surface)",
 	Long: `Drafts are living markdown documents a human co-authors with the lead
 agent. This command group is the agent's read/write surface over a draft:
-fetch the body + metadata, list the open-annotation queue with its threads,
-reply to a thread, transition an annotation's state, and plant new anchored
-annotations (questions / suggestions).
+fetch the body + metadata, read + post to the conversation rail, list the
+open-annotation queue with its threads, reply to a thread, transition an
+annotation's state, and plant new anchored annotations (questions / suggestions).
 
-It wraps the existing Drafts REST API — there is no separate business logic.
-When invoked inside a draft-turn task the writes are attributed to the agent
-(author_type='agent'); the body itself is never rewritten here (suggest via
-annotations instead).`,
+Talk lands in the rail (say / messages); structure lands in the doc (reply /
+annotate). It wraps the existing Drafts REST API — there is no separate business
+logic. When invoked inside a draft-turn task the writes are attributed to the
+agent (author_type='agent'); the body itself is never rewritten here (suggest
+via annotations instead).`,
 }
 
 var draftGetCmd = &cobra.Command{
@@ -68,6 +75,33 @@ var draftReplyCmd = &cobra.Command{
 	Short: "Add a message to an annotation thread",
 	Args:  exactArgs(2),
 	RunE:  runDraftReply,
+}
+
+var draftMessagesCmd = &cobra.Command{
+	Use:   "messages <id>",
+	Short: "List the draft's conversation rail (the germination conversation)",
+	Long: `Lists every message on a draft's conversation rail, oldest-first. The
+rail is the draft-level, UN-anchored back-and-forth alongside the document —
+narration, alignment, and direction talk — distinct from the anchored
+annotation threads (see ` + "`annotations`" + `). Read it at turn start to
+understand what the human wants.`,
+	Args: exactArgs(1),
+	RunE: runDraftMessages,
+}
+
+var draftSayCmd = &cobra.Command{
+	Use:   "say <id>",
+	Short: "Post a message to the draft's conversation rail",
+	Long: `Posts a conversation message to a draft's rail. This is where GENERAL
+talk lands — narration, alignment, questions about direction, acknowledgements,
+"here's my thinking" — anything not anchored to a specific text span. For points
+anchored to exact text, reserve annotations (` + "`reply`" + ` / ` + "`annotate`" + `)
+instead. Talk lands in the rail; structure lands in the doc.
+
+When invoked inside a draft-turn task the message is attributed to the agent
+(author_type='agent') via the trusted task headers — no flag is needed.`,
+	Args: exactArgs(1),
+	RunE: runDraftSay,
 }
 
 var draftResolveCmd = &cobra.Command{
@@ -111,6 +145,8 @@ message).`,
 func init() {
 	draftCmd.AddCommand(draftGetCmd)
 	draftCmd.AddCommand(draftAnnotationsCmd)
+	draftCmd.AddCommand(draftMessagesCmd)
+	draftCmd.AddCommand(draftSayCmd)
 	draftCmd.AddCommand(draftReplyCmd)
 	draftCmd.AddCommand(draftResolveCmd)
 	draftCmd.AddCommand(draftAckCmd)
@@ -121,6 +157,11 @@ func init() {
 
 	draftAnnotationsCmd.Flags().String("state", "", "Filter by state: open | acknowledged | resolved | dismissed (default: all)")
 	draftAnnotationsCmd.Flags().String("output", "json", "Output format: table or json")
+
+	draftMessagesCmd.Flags().String("output", "json", "Output format: table or json")
+
+	draftSayCmd.Flags().String("body", "", "Message body (required)")
+	draftSayCmd.Flags().String("output", "json", "Output format: table or json")
 
 	draftReplyCmd.Flags().String("body", "", "Reply body (required)")
 	draftReplyCmd.Flags().String("output", "json", "Output format: table or json")
@@ -161,6 +202,24 @@ func summarizeAnnotationRow(m map[string]any) []string {
 		strVal(m, "author_type"),
 		quote,
 		fmt.Sprintf("%d", threadLen),
+	}
+}
+
+// summarizeMessageRow renders one table row for the conversation-rail list.
+func summarizeMessageRow(m map[string]any) []string {
+	body := strVal(m, "body")
+	if len(body) > 60 {
+		body = body[:57] + "..."
+	}
+	created := strVal(m, "created_at")
+	if len(created) >= 19 {
+		created = created[:19]
+	}
+	return []string{
+		truncateID(strVal(m, "id")),
+		strVal(m, "author_type"),
+		body,
+		created,
 	}
 }
 
@@ -248,6 +307,56 @@ func runDraftReply(cmd *cobra.Command, args []string) error {
 	var msg map[string]any
 	if err := client.PostJSON(ctx, path, map[string]any{"body": body}, &msg); err != nil {
 		return fmt.Errorf("reply to annotation: %w", err)
+	}
+	return cli.PrintJSON(os.Stdout, msg)
+}
+
+func runDraftMessages(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var result map[string]any
+	if err := client.GetJSON(ctx, "/api/drafts/"+args[0]+"/messages", &result); err != nil {
+		return fmt.Errorf("list draft messages: %w", err)
+	}
+
+	output, _ := cmd.Flags().GetString("output")
+	if output != "table" {
+		return cli.PrintJSON(os.Stdout, result)
+	}
+	listRaw, _ := result["messages"].([]any)
+	headers := []string{"ID", "AUTHOR", "BODY", "CREATED"}
+	rows := make([][]string, 0, len(listRaw))
+	for _, raw := range listRaw {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		rows = append(rows, summarizeMessageRow(m))
+	}
+	cli.PrintTable(os.Stdout, headers, rows)
+	return nil
+}
+
+func runDraftSay(cmd *cobra.Command, args []string) error {
+	body, _ := cmd.Flags().GetString("body")
+	if body == "" {
+		return fmt.Errorf("--body is required")
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var msg map[string]any
+	if err := client.PostJSON(ctx, "/api/drafts/"+args[0]+"/messages", map[string]any{"body": body}, &msg); err != nil {
+		return fmt.Errorf("post draft message: %w", err)
 	}
 	return cli.PrintJSON(os.Stdout, msg)
 }

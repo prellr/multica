@@ -76,6 +76,15 @@ UPDATE agent SET
 WHERE id = $1
 RETURNING *;
 
+-- name: UpdateAgentInstructions :execrows
+-- Targeted instructions-only update, scoped to (id, workspace_id). Used by the
+-- Aye backfill to refresh the seeded lead agent's soul in place when the
+-- constant drifts. workspace_id is a defense-in-depth tenant guard; the caller
+-- passes Aye's deterministic id so no user-created agent is ever touched.
+-- :execrows so the caller can log a no-op (0 rows) vs an actual write.
+UPDATE agent SET instructions = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND instructions <> $3;
+
 -- name: ClearAgentThinkingLevel :one
 -- Explicit NULL-clear for thinking_level. COALESCE-based UpdateAgent cannot
 -- set the column back to NULL, so the API layer routes "user picked Default"

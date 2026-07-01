@@ -475,6 +475,36 @@ func (q *Queries) RemoveAllAgentSkills(ctx context.Context, agentID pgtype.UUID)
 	return err
 }
 
+const updateAgentSkillContent = `-- name: UpdateAgentSkillContent :execrows
+UPDATE skill SET content = $3, updated_at = now()
+FROM agent_skill ask
+WHERE skill.id = ask.skill_id
+  AND ask.agent_id = $1
+  AND skill.name = $2
+  AND skill.content <> $3
+`
+
+type UpdateAgentSkillContentParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	Name    string      `json:"name"`
+	Content string      `json:"content"`
+}
+
+// Refreshes the content of the skill attached to a given agent, matched by
+// skill name so only that one skill is touched. Used by the Aye backfill to
+// update her seeded Drafts-surface skill in place when the constant drifts.
+// The agent_skill join scopes the write to skills the agent actually owns; the
+// name predicate pins it to exactly Aye's skill. Only writes on a real change
+// (content <> $3) so a matching skill is a no-op. :execrows lets the caller log
+// write-vs-no-op.
+func (q *Queries) UpdateAgentSkillContent(ctx context.Context, arg UpdateAgentSkillContentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateAgentSkillContent, arg.AgentID, arg.Name, arg.Content)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateSkill = `-- name: UpdateSkill :one
 UPDATE skill SET
     name = COALESCE($2, name),

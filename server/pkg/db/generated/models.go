@@ -1082,7 +1082,6 @@ type MemoryArtifact struct {
 	AuthorID              pgtype.UUID        `json:"author_id"`
 	Tags                  []string           `json:"tags"`
 	Metadata              []byte             `json:"metadata"`
-	ContentTsv            interface{}        `json:"content_tsv"`
 	ArchivedAt            pgtype.Timestamptz `json:"archived_at"`
 	ArchivedBy            pgtype.UUID        `json:"archived_by"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
@@ -1091,6 +1090,7 @@ type MemoryArtifact struct {
 	VerifiedAt            pgtype.Timestamptz `json:"verified_at"`
 	Embedding             *pgvector.Vector   `json:"embedding"`
 	EmbeddedAt            pgtype.Timestamptz `json:"embedded_at"`
+	ContentTsv            interface{}        `json:"content_tsv"`
 }
 
 type MemoryArtifactLink struct {

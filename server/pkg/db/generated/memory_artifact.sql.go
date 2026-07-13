@@ -18,7 +18,7 @@ SET archived_at = now(),
     archived_by = $3,
     updated_at  = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at
+RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at, content_tsv
 `
 
 type ArchiveMemoryArtifactParams struct {
@@ -46,7 +46,6 @@ func (q *Queries) ArchiveMemoryArtifact(ctx context.Context, arg ArchiveMemoryAr
 		&i.AuthorID,
 		&i.Tags,
 		&i.Metadata,
-		&i.ContentTsv,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
 		&i.CreatedAt,
@@ -55,6 +54,7 @@ func (q *Queries) ArchiveMemoryArtifact(ctx context.Context, arg ArchiveMemoryAr
 		&i.VerifiedAt,
 		&i.Embedding,
 		&i.EmbeddedAt,
+		&i.ContentTsv,
 	)
 	return i, err
 }
@@ -215,7 +215,7 @@ INSERT INTO memory_artifact (
     $5, $6,
     $7, $8,
     COALESCE($13::bool, false)
-) RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at
+) RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at, content_tsv
 `
 
 type CreateMemoryArtifactParams struct {
@@ -268,7 +268,6 @@ func (q *Queries) CreateMemoryArtifact(ctx context.Context, arg CreateMemoryArti
 		&i.AuthorID,
 		&i.Tags,
 		&i.Metadata,
-		&i.ContentTsv,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
 		&i.CreatedAt,
@@ -277,6 +276,7 @@ func (q *Queries) CreateMemoryArtifact(ctx context.Context, arg CreateMemoryArti
 		&i.VerifiedAt,
 		&i.Embedding,
 		&i.EmbeddedAt,
+		&i.ContentTsv,
 	)
 	return i, err
 }
@@ -299,7 +299,7 @@ func (q *Queries) DeleteMemoryArtifact(ctx context.Context, arg DeleteMemoryArti
 }
 
 const getMemoryArtifact = `-- name: GetMemoryArtifact :one
-SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at FROM memory_artifact
+SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at, content_tsv FROM memory_artifact
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -325,7 +325,6 @@ func (q *Queries) GetMemoryArtifact(ctx context.Context, arg GetMemoryArtifactPa
 		&i.AuthorID,
 		&i.Tags,
 		&i.Metadata,
-		&i.ContentTsv,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
 		&i.CreatedAt,
@@ -334,12 +333,13 @@ func (q *Queries) GetMemoryArtifact(ctx context.Context, arg GetMemoryArtifactPa
 		&i.VerifiedAt,
 		&i.Embedding,
 		&i.EmbeddedAt,
+		&i.ContentTsv,
 	)
 	return i, err
 }
 
 const getMemoryArtifactBySlug = `-- name: GetMemoryArtifactBySlug :one
-SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at FROM memory_artifact
+SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at, content_tsv FROM memory_artifact
 WHERE workspace_id = $1 AND kind = $2 AND slug = $3
 `
 
@@ -368,7 +368,6 @@ func (q *Queries) GetMemoryArtifactBySlug(ctx context.Context, arg GetMemoryArti
 		&i.AuthorID,
 		&i.Tags,
 		&i.Metadata,
-		&i.ContentTsv,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
 		&i.CreatedAt,
@@ -377,12 +376,13 @@ func (q *Queries) GetMemoryArtifactBySlug(ctx context.Context, arg GetMemoryArti
 		&i.VerifiedAt,
 		&i.Embedding,
 		&i.EmbeddedAt,
+		&i.ContentTsv,
 	)
 	return i, err
 }
 
 const listAlwaysInjectArtifacts = `-- name: ListAlwaysInjectArtifacts :many
-SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at FROM memory_artifact
+SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at, content_tsv FROM memory_artifact
 WHERE workspace_id              = $1
   AND always_inject_at_runtime  = true
   AND archived_at              IS NULL
@@ -423,7 +423,6 @@ func (q *Queries) ListAlwaysInjectArtifacts(ctx context.Context, arg ListAlwaysI
 			&i.AuthorID,
 			&i.Tags,
 			&i.Metadata,
-			&i.ContentTsv,
 			&i.ArchivedAt,
 			&i.ArchivedBy,
 			&i.CreatedAt,
@@ -432,6 +431,7 @@ func (q *Queries) ListAlwaysInjectArtifacts(ctx context.Context, arg ListAlwaysI
 			&i.VerifiedAt,
 			&i.Embedding,
 			&i.EmbeddedAt,
+			&i.ContentTsv,
 		); err != nil {
 			return nil, err
 		}
@@ -444,7 +444,7 @@ func (q *Queries) ListAlwaysInjectArtifacts(ctx context.Context, arg ListAlwaysI
 }
 
 const listMemoryArtifacts = `-- name: ListMemoryArtifacts :many
-SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at FROM memory_artifact
+SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at, content_tsv FROM memory_artifact
 WHERE workspace_id = $1
   AND ($2::text IS NULL OR kind = $2)
   AND ($3::uuid IS NULL OR parent_id = $3)
@@ -534,7 +534,6 @@ func (q *Queries) ListMemoryArtifacts(ctx context.Context, arg ListMemoryArtifac
 			&i.AuthorID,
 			&i.Tags,
 			&i.Metadata,
-			&i.ContentTsv,
 			&i.ArchivedAt,
 			&i.ArchivedBy,
 			&i.CreatedAt,
@@ -543,6 +542,7 @@ func (q *Queries) ListMemoryArtifacts(ctx context.Context, arg ListMemoryArtifac
 			&i.VerifiedAt,
 			&i.Embedding,
 			&i.EmbeddedAt,
+			&i.ContentTsv,
 		); err != nil {
 			return nil, err
 		}
@@ -555,7 +555,7 @@ func (q *Queries) ListMemoryArtifacts(ctx context.Context, arg ListMemoryArtifac
 }
 
 const listMemoryArtifactsByAnchor = `-- name: ListMemoryArtifactsByAnchor :many
-SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at FROM memory_artifact
+SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at, content_tsv FROM memory_artifact
 WHERE workspace_id  = $1
   AND anchor_type   = $2
   AND anchor_id     = $3
@@ -602,7 +602,6 @@ func (q *Queries) ListMemoryArtifactsByAnchor(ctx context.Context, arg ListMemor
 			&i.AuthorID,
 			&i.Tags,
 			&i.Metadata,
-			&i.ContentTsv,
 			&i.ArchivedAt,
 			&i.ArchivedBy,
 			&i.CreatedAt,
@@ -611,6 +610,7 @@ func (q *Queries) ListMemoryArtifactsByAnchor(ctx context.Context, arg ListMemor
 			&i.VerifiedAt,
 			&i.Embedding,
 			&i.EmbeddedAt,
+			&i.ContentTsv,
 		); err != nil {
 			return nil, err
 		}
@@ -717,7 +717,7 @@ SET archived_at = NULL,
     archived_by = NULL,
     updated_at  = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at
+RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at, content_tsv
 `
 
 type RestoreMemoryArtifactParams struct {
@@ -742,7 +742,6 @@ func (q *Queries) RestoreMemoryArtifact(ctx context.Context, arg RestoreMemoryAr
 		&i.AuthorID,
 		&i.Tags,
 		&i.Metadata,
-		&i.ContentTsv,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
 		&i.CreatedAt,
@@ -751,12 +750,13 @@ func (q *Queries) RestoreMemoryArtifact(ctx context.Context, arg RestoreMemoryAr
 		&i.VerifiedAt,
 		&i.Embedding,
 		&i.EmbeddedAt,
+		&i.ContentTsv,
 	)
 	return i, err
 }
 
 const searchMemoryArtifacts = `-- name: SearchMemoryArtifacts :many
-SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at,
+SELECT id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at, content_tsv,
        ts_rank_cd(content_tsv, websearch_to_tsquery('english', $2)) AS rank
 FROM memory_artifact
 WHERE workspace_id = $1
@@ -798,7 +798,6 @@ type SearchMemoryArtifactsRow struct {
 	AuthorID              pgtype.UUID        `json:"author_id"`
 	Tags                  []string           `json:"tags"`
 	Metadata              []byte             `json:"metadata"`
-	ContentTsv            interface{}        `json:"content_tsv"`
 	ArchivedAt            pgtype.Timestamptz `json:"archived_at"`
 	ArchivedBy            pgtype.UUID        `json:"archived_by"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
@@ -807,6 +806,7 @@ type SearchMemoryArtifactsRow struct {
 	VerifiedAt            pgtype.Timestamptz `json:"verified_at"`
 	Embedding             *pgvector.Vector   `json:"embedding"`
 	EmbeddedAt            pgtype.Timestamptz `json:"embedded_at"`
+	ContentTsv            interface{}        `json:"content_tsv"`
 	Rank                  float32            `json:"rank"`
 }
 
@@ -846,7 +846,6 @@ func (q *Queries) SearchMemoryArtifacts(ctx context.Context, arg SearchMemoryArt
 			&i.AuthorID,
 			&i.Tags,
 			&i.Metadata,
-			&i.ContentTsv,
 			&i.ArchivedAt,
 			&i.ArchivedBy,
 			&i.CreatedAt,
@@ -855,6 +854,7 @@ func (q *Queries) SearchMemoryArtifacts(ctx context.Context, arg SearchMemoryArt
 			&i.VerifiedAt,
 			&i.Embedding,
 			&i.EmbeddedAt,
+			&i.ContentTsv,
 			&i.Rank,
 		); err != nil {
 			return nil, err
@@ -906,7 +906,7 @@ vec AS (
     ORDER BY m.embedding <=> $3
     LIMIT 200
 )
-SELECT m.id, m.workspace_id, m.kind, m.parent_id, m.title, m.content, m.slug, m.anchor_type, m.anchor_id, m.author_type, m.author_id, m.tags, m.metadata, m.content_tsv, m.archived_at, m.archived_by, m.created_at, m.updated_at, m.always_inject_at_runtime, m.verified_at, m.embedding, m.embedded_at,
+SELECT m.id, m.workspace_id, m.kind, m.parent_id, m.title, m.content, m.slug, m.anchor_type, m.anchor_id, m.author_type, m.author_id, m.tags, m.metadata, m.archived_at, m.archived_by, m.created_at, m.updated_at, m.always_inject_at_runtime, m.verified_at, m.embedding, m.embedded_at, m.content_tsv,
        -- Cast the RRF score to double precision so sqlc infers float64
        -- for the Rank field instead of guessing integer (which would
        -- then panic at Scan time when Postgres returns a NUMERIC).
@@ -948,7 +948,6 @@ type SearchMemoryArtifactsHybridRow struct {
 	AuthorID              pgtype.UUID        `json:"author_id"`
 	Tags                  []string           `json:"tags"`
 	Metadata              []byte             `json:"metadata"`
-	ContentTsv            interface{}        `json:"content_tsv"`
 	ArchivedAt            pgtype.Timestamptz `json:"archived_at"`
 	ArchivedBy            pgtype.UUID        `json:"archived_by"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
@@ -957,6 +956,7 @@ type SearchMemoryArtifactsHybridRow struct {
 	VerifiedAt            pgtype.Timestamptz `json:"verified_at"`
 	Embedding             *pgvector.Vector   `json:"embedding"`
 	EmbeddedAt            pgtype.Timestamptz `json:"embedded_at"`
+	ContentTsv            interface{}        `json:"content_tsv"`
 	Rank                  float64            `json:"rank"`
 }
 
@@ -1006,7 +1006,6 @@ func (q *Queries) SearchMemoryArtifactsHybrid(ctx context.Context, arg SearchMem
 			&i.AuthorID,
 			&i.Tags,
 			&i.Metadata,
-			&i.ContentTsv,
 			&i.ArchivedAt,
 			&i.ArchivedBy,
 			&i.CreatedAt,
@@ -1015,6 +1014,7 @@ func (q *Queries) SearchMemoryArtifactsHybrid(ctx context.Context, arg SearchMem
 			&i.VerifiedAt,
 			&i.Embedding,
 			&i.EmbeddedAt,
+			&i.ContentTsv,
 			&i.Rank,
 		); err != nil {
 			return nil, err
@@ -1040,7 +1040,7 @@ UPDATE memory_artifact SET
     always_inject_at_runtime = COALESCE($11::bool, always_inject_at_runtime),
     updated_at               = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at
+RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at, content_tsv
 `
 
 type UpdateMemoryArtifactParams struct {
@@ -1089,7 +1089,6 @@ func (q *Queries) UpdateMemoryArtifact(ctx context.Context, arg UpdateMemoryArti
 		&i.AuthorID,
 		&i.Tags,
 		&i.Metadata,
-		&i.ContentTsv,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
 		&i.CreatedAt,
@@ -1098,6 +1097,7 @@ func (q *Queries) UpdateMemoryArtifact(ctx context.Context, arg UpdateMemoryArti
 		&i.VerifiedAt,
 		&i.Embedding,
 		&i.EmbeddedAt,
+		&i.ContentTsv,
 	)
 	return i, err
 }
@@ -1125,7 +1125,7 @@ const verifyMemoryArtifact = `-- name: VerifyMemoryArtifact :one
 UPDATE memory_artifact
 SET verified_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, content_tsv, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at
+RETURNING id, workspace_id, kind, parent_id, title, content, slug, anchor_type, anchor_id, author_type, author_id, tags, metadata, archived_at, archived_by, created_at, updated_at, always_inject_at_runtime, verified_at, embedding, embedded_at, content_tsv
 `
 
 type VerifyMemoryArtifactParams struct {
@@ -1152,7 +1152,6 @@ func (q *Queries) VerifyMemoryArtifact(ctx context.Context, arg VerifyMemoryArti
 		&i.AuthorID,
 		&i.Tags,
 		&i.Metadata,
-		&i.ContentTsv,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
 		&i.CreatedAt,
@@ -1161,6 +1160,7 @@ func (q *Queries) VerifyMemoryArtifact(ctx context.Context, arg VerifyMemoryArti
 		&i.VerifiedAt,
 		&i.Embedding,
 		&i.EmbeddedAt,
+		&i.ContentTsv,
 	)
 	return i, err
 }
